@@ -59,8 +59,6 @@ github.com/klauspost/reedsolomon v1.14.0 h1:5YSZeclzSYg5nl349+GDG/agDtQ6MZiwUYXv
 github.com/klauspost/reedsolomon v1.14.0/go.mod h1:yjqqjgMTQkBUHSG97/rm4zipffCNbCiZcB3kTqr++sQ=
 github.com/kopia/htmluibuild v0.0.1-0.20260608231842-7bf9fcc0831d h1:2nHZuoDenhCDeIdDnQXLaaMziiHfIjf+INorIIUVNk8=
 github.com/kopia/htmluibuild v0.0.1-0.20260608231842-7bf9fcc0831d/go.mod h1:h53A5JM3t2qiwxqxusBe+PFgGcgZdS+DWCQvG5PTlto=
-github.com/kopia/kopia v0.23.1 h1:0+V5Au8fD+190vQbklG0DaWD6I4clmbwlmJTqtI0y0Q=
-github.com/kopia/kopia v0.23.1/go.mod h1:iXcxxMES+wBh3cEDMli2gIO10Rkj3bMRrJGK4bQ7hsg=
 github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
@@ -85,6 +83,8 @@ github.com/prometheus/common v0.68.1 h1:omjRRl4QP4komogpXuhfeOiisQg7xdy8VM1UY+pS
 github.com/prometheus/common v0.68.1/go.mod h1:ZzL3f6u94qUxh9p+tJTrF+FvBS1XXbbRAZCQkytAL0Y=
 github.com/prometheus/procfs v0.16.1 h1:hZ15bTNuirocR6u0JZ6BAHHmwS1p8B4P6MRqxtzMyRg=
 github.com/prometheus/procfs v0.16.1/go.mod h1:teAbpZRB1iIAJYREa1LsoWUXykVXA1KlTmWl8x/U+Is=
+github.com/redthing1/kopia v0.23.1-lode.1 h1:bFkzdQ3A+AfF2vPyHz0xTjztS15UNlq5sG1XLK9cwt8=
+github.com/redthing1/kopia v0.23.1-lode.1/go.mod h1:iXcxxMES+wBh3cEDMli2gIO10Rkj3bMRrJGK4bQ7hsg=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/tg123/go-htpasswd v1.2.4 h1:HgH8KKCjdmo7jjXWN9k1nefPBd7Be3tFCTjc2jPraPU=

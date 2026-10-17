@@ -2,7 +2,11 @@ module github.com/redthing1/lode
 
 go 1.27.2
 
-require github.com/kopia/kopia v0.23.1
+require (
+	github.com/kopia/kopia v0.23.1
+	google.golang.org/grpc v1.81.1
+	google.golang.org/protobuf v1.36.11
+)
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.22.0 // indirect
@@ -45,6 +49,6 @@ require (
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/grpc v1.81.1 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+replace github.com/kopia/kopia => github.com/redthing1/kopia v0.23.1-lode.1
