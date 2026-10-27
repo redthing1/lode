@@ -11,22 +11,37 @@ import (
 	"strings"
 
 	"github.com/redthing1/lode/internal/model"
+	"github.com/redthing1/lode/internal/project"
 )
 
 func (w *Workspace) Update(ctx context.Context, choices []model.Choice) error {
+	return w.Switch(ctx, w.state.Branch, choices)
+}
+
+func (w *Workspace) Switch(ctx context.Context, branch string, choices []model.Choice) error {
 	if err := w.pending(); err != nil {
 		return err
+	}
+	if !model.ValidName(branch) {
+		return project.ErrInvalid
 	}
 	client, err := w.client()
 	if err != nil {
 		return err
 	}
 	target := w.state
+	target.Branch = branch
 	target.Base, err = client.Head(ctx, target.Branch)
 	if err != nil {
 		return err
 	}
 	if target.Base == w.state.Base && len(choices) == 0 {
+		if target.Branch != w.state.Branch {
+			if err := w.store("state.json", target); err != nil {
+				return err
+			}
+			w.state = target
+		}
 		return nil
 	}
 	target.Baseline, err = client.Entries(ctx, target.Base, target.Selection)
@@ -82,14 +97,70 @@ func (w *Workspace) transitionTo(ctx context.Context, target State, choices []mo
 	if err != nil {
 		return err
 	}
-	inScope := func(p string) bool { return w.state.Selection.Includes(p) || target.Selection.Includes(p) }
+	return w.applyView(ctx, target, local, merged, "", w.state.Selection, target.Selection)
+}
+
+// Restore changes selected files while keeping the current branch baseline.
+// Its source version is persisted with the same local transition used by update.
+func (w *Workspace) Restore(ctx context.Context, version string, requested model.Selection, force bool) error {
+	if err := w.pending(); err != nil {
+		return err
+	}
+	if !project.ValidID(version) {
+		return project.ErrInvalid
+	}
+	for _, rule := range requested {
+		if rule.Include && !w.state.Selection.Descends(rule.Path) {
+			return fmt.Errorf("restore path %s is outside the workspace selection", rule.Path)
+		}
+	}
+	if requested == nil {
+		requested = model.Selection{{Include: true}}
+	}
+	if err := requested.Validate(); err != nil {
+		return err
+	}
+	scope := w.state.Selection.Intersect(requested)
+	client, err := w.client()
+	if err != nil {
+		return err
+	}
+	desired, err := client.Entries(ctx, version, scope)
+	if err != nil {
+		return err
+	}
+	local, err := w.observe(scope)
+	if err != nil {
+		return err
+	}
+	var baseline []model.Entry
+	for _, e := range w.state.Baseline {
+		if scope.Includes(e.Path) {
+			baseline = append(baseline, e)
+		}
+	}
+	if !force && len(model.Diff(baseline, local)) > 0 {
+		return errors.New("restore would discard local changes; save them first or use -force")
+	}
+	return w.applyView(ctx, w.state, local, desired, version, scope)
+}
+
+func (w *Workspace) applyView(ctx context.Context, target State, local, merged []model.Entry, source string, scopes ...model.Selection) error {
+	inScope := func(p string) bool {
+		for _, s := range scopes {
+			if s.Includes(p) {
+				return true
+			}
+		}
+		return false
+	}
 	var desired []model.Entry
 	for _, e := range merged {
 		if inScope(e.Path) {
 			desired = append(desired, e)
 		}
 	}
-	desired, err = model.Apply(nil, desired)
+	desired, err := model.Apply(nil, desired)
 	if err != nil {
 		return err
 	}
@@ -207,7 +278,7 @@ func (w *Workspace) transitionTo(ctx context.Context, target State, choices []mo
 	if err := syncDirectory(w.root, ".lode"); err != nil {
 		return err
 	}
-	plan := transition{Target: target, Changes: changes}
+	plan := transition{Target: target, Changes: changes, Source: source}
 	if err := w.store("transition.json", plan); err != nil {
 		return err
 	}

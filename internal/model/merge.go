@@ -15,8 +15,19 @@ type Change struct {
 // Choice takes one side for a path and its descendants. The nearest choice
 // wins, so structural file/directory conflicts have the same whole-entry rule.
 type Choice struct {
-	Path string
-	Ours bool
+	Path string `json:"path"`
+	Ours bool   `json:"ours"`
+}
+
+func ValidateChoices(choices []Choice) error {
+	seen := map[string]bool{}
+	for _, choice := range choices {
+		if (choice.Path != "" && !ValidPath(choice.Path)) || seen[choice.Path] {
+			return fmt.Errorf("invalid or duplicate choice %q", choice.Path)
+		}
+		seen[choice.Path] = true
+	}
+	return nil
 }
 
 type Conflicts struct{ Paths []string }
@@ -76,12 +87,8 @@ func Merge(base, ours, theirs []Entry, choices []Choice) ([]Entry, error) {
 			names[p] = true
 		}
 	}
-	seen := map[string]bool{}
-	for _, choice := range choices {
-		if (choice.Path != "" && !ValidPath(choice.Path)) || seen[choice.Path] {
-			return nil, fmt.Errorf("invalid or duplicate choice %q", choice.Path)
-		}
-		seen[choice.Path] = true
+	if err := ValidateChoices(choices); err != nil {
+		return nil, err
 	}
 	merged := map[string]Entry{}
 	conflicts := map[string]bool{}

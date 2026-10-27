@@ -326,3 +326,36 @@ func TestCheckpointBoundaryHistoriesReopen(t *testing.T) {
 		}
 	}
 }
+
+func TestBranchMetadataCRUD(t *testing.T) {
+	tp := newTestProject(t)
+	ctx := tp.ctx
+	if err := tp.p.CreateBranch(ctx, "zeta", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := tp.p.CreateBranch(ctx, "alpha", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := tp.p.CreateBranch(ctx, "alpha", ""); err != nil {
+		t.Fatalf("idempotent create: %v", err)
+	}
+	branches, err := tp.p.Branches(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(branches) != 3 || branches[0].Name != "alpha" || branches[1].Name != "main" || branches[2].Name != "zeta" {
+		t.Fatalf("branches: %#v", branches)
+	}
+	if err := tp.p.DeleteBranch(ctx, "alpha", "nonempty"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid expected tip: %v", err)
+	}
+	if err := tp.p.DeleteBranch(ctx, "alpha", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := tp.p.DeleteBranch(ctx, "alpha", ""); err != nil {
+		t.Fatalf("idempotent delete: %v", err)
+	}
+	if err := tp.p.DeleteBranch(ctx, "main", ""); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("delete main: %v", err)
+	}
+}

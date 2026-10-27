@@ -32,6 +32,13 @@ Usage: lode [-C workspace] COMMAND [options]
   update [-ours PATH | -theirs PATH]  Update while preserving local edits
   select [-include PATH] [-exclude PATH] [-none]  Inspect or replace selection
   log [-n COUNT]               List versions on the workspace branch
+  branch                       List branches
+  branch NAME [COMMIT]         Create a branch at COMMIT or the workspace base
+  branch -delete NAME          Delete a branch
+  switch [-ours PATH | -theirs PATH] BRANCH  Change workspace branch
+  merge [-m MESSAGE] [-author NAME] [-base COMMIT] BRANCH
+                               Merge saved versions from another branch
+  restore [-force] COMMIT [PATH...]  Restore selected paths from a version
   resume                       Finish an interrupted operation
   cancel                       Cancel a save or roll back a local transition
 
@@ -70,8 +77,8 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 	flags.SetOutput(diagnostics)
 	var selection model.Selection
 	var choices []model.Choice
-	var emptySelection bool
-	var message, author, listen string
+	var emptySelection, force, deleteBranch bool
+	var message, author, listen, base string
 	limit := 20
 	switch command {
 	case "attach", "clone", "select":
@@ -89,7 +96,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		if command == "select" {
 			flags.BoolVar(&emptySelection, "none", false, "unload all selected paths")
 		}
-	case "update":
+	case "update", "switch", "merge":
 		addChoice := func(ours bool) func(string) error {
 			return func(p string) error {
 				if p == "." {
@@ -102,8 +109,13 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 				return nil
 			}
 		}
-		flags.Func("ours", "keep the local entry/subtree (repeatable)", addChoice(true))
-		flags.Func("theirs", "take the remote entry/subtree (repeatable)", addChoice(false))
+		flags.Func("ours", "choose the destination entry/subtree (repeatable)", addChoice(true))
+		flags.Func("theirs", "choose the source entry/subtree (repeatable)", addChoice(false))
+		if command == "merge" {
+			flags.StringVar(&message, "m", "", "merge message")
+			flags.StringVar(&author, "author", os.Getenv("LODE_AUTHOR"), "author name")
+			flags.StringVar(&base, "base", "", "explicit merge base")
+		}
 	case "save":
 		flags.StringVar(&message, "m", "", "version message")
 		flags.StringVar(&author, "author", os.Getenv("LODE_AUTHOR"), "author name")
@@ -111,6 +123,10 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		flags.StringVar(&listen, "listen", "127.0.0.1:8473", "loopback listen address")
 	case "log":
 		flags.IntVar(&limit, "n", 20, "maximum versions")
+	case "branch":
+		flags.BoolVar(&deleteBranch, "delete", false, "delete a branch")
+	case "restore":
+		flags.BoolVar(&force, "force", false, "discard local changes in restored paths")
 	case "init", "status", "resume", "cancel":
 	default:
 		return fmt.Errorf("unknown command %q; use lode help", command)
@@ -174,8 +190,12 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		fmt.Fprintf(out, "Workspace: %s\n", target)
 		return w.Close()
 	}
-	if len(args) != 0 {
-		return fmt.Errorf("unexpected arguments for %s", command)
+	switch command {
+	case "branch", "switch", "merge", "restore":
+	default:
+		if len(args) != 0 {
+			return fmt.Errorf("unexpected arguments for %s", command)
+		}
 	}
 	if command == "save" && message == "" {
 		return errors.New("save requires -m MESSAGE")
@@ -263,6 +283,94 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		for _, c := range commits {
 			fmt.Fprintf(out, "%s  %s  %s\n", c.ID, c.Created.Format(time.RFC3339), c.Message)
 		}
+	case "branch":
+		state := w.State()
+		client, err := remote.New(state.URL, state.Token, state.Project)
+		if err != nil {
+			return err
+		}
+		if deleteBranch {
+			if len(args) != 1 {
+				return errors.New("usage: lode branch -delete NAME")
+			}
+			if args[0] == state.Branch {
+				return errors.New("cannot delete the current workspace branch")
+			}
+			tip, err := client.Head(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			if err := client.DeleteBranch(ctx, args[0], tip); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Deleted branch %s.\n", args[0])
+			return nil
+		}
+		if len(args) == 0 {
+			branches, err := client.Branches(ctx)
+			if err != nil {
+				return err
+			}
+			for _, b := range branches {
+				marker := " "
+				if b.Name == state.Branch {
+					marker = "*"
+				}
+				fmt.Fprintf(out, "%s %s %s\n", marker, b.Name, b.Tip)
+			}
+			return nil
+		}
+		if len(args) > 2 {
+			return errors.New("usage: lode branch NAME [COMMIT]")
+		}
+		tip := state.Base
+		if len(args) == 2 {
+			tip = args[1]
+		}
+		if err := client.CreateBranch(ctx, args[0], tip); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Created branch %s at %s.\n", args[0], tip)
+	case "switch":
+		if len(args) != 1 {
+			return errors.New("usage: lode switch [-ours PATH | -theirs PATH] BRANCH")
+		}
+		if err := w.Switch(ctx, args[0], choices); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Switched to branch %s.\n", args[0])
+	case "merge":
+		if len(args) != 1 {
+			return errors.New("usage: lode merge [-m MESSAGE] [-author NAME] [-base COMMIT] [-ours PATH | -theirs PATH] BRANCH")
+		}
+		commit, err := w.Merge(ctx, args[0], author, message, base, choices)
+		if errors.Is(err, project.ErrAlreadyMerged) {
+			fmt.Fprintln(out, "Already merged.")
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(out, commit.ID)
+		fmt.Fprintln(out, "Run lode update to materialize the merged version in this workspace.")
+	case "restore":
+		if len(args) < 1 {
+			return errors.New("usage: lode restore [-force] COMMIT [PATH...]")
+		}
+		var requested model.Selection
+		for _, p := range args[1:] {
+			if p == "." {
+				p = ""
+			}
+			if p != "" && !model.ValidPath(p) {
+				return errors.New("invalid restore path")
+			}
+			requested = append(requested, model.Rule{Path: p, Include: true})
+		}
+		if err := w.Restore(ctx, args[0], requested, force); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "Workspace restored.")
 	}
 	return nil
 }

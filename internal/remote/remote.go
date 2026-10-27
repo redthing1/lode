@@ -33,14 +33,28 @@ func Handler(p *project.Project) http.Handler { return &handler{p: p} }
 type handler struct{ p *project.Project }
 
 type wireError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string   `json:"code"`
+	Message string   `json:"message"`
+	Paths   []string `json:"paths,omitempty"`
+	Bases   []string `json:"bases,omitempty"`
 }
 
 func codeOf(err error) string {
+	var conflicts *model.Conflicts
+	var mergeBases *project.MergeBaseConflict
+	switch {
+	case errors.As(err, &conflicts):
+		return "conflicts"
+	case errors.As(err, &mergeBases):
+		return "merge_base"
+	case errors.Is(err, project.ErrAlreadyMerged):
+		return "unchanged"
+	}
 	switch {
 	case errors.Is(err, project.ErrNotFound):
 		return "not_found"
+	case errors.Is(err, project.ErrExists):
+		return "exists"
 	case errors.Is(err, project.ErrStale):
 		return "stale"
 	case errors.Is(err, project.ErrCancelled):
@@ -60,6 +74,8 @@ func (h *handler) fail(w http.ResponseWriter, err error) {
 	switch codeOf(err) {
 	case "not_found":
 		status = http.StatusNotFound
+	case "exists":
+		status = http.StatusConflict
 	case "stale":
 		status = http.StatusConflict
 	case "cancelled":
@@ -68,10 +84,21 @@ func (h *handler) fail(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case "invalid":
 		status = http.StatusBadRequest
+	case "conflicts", "merge_base", "unchanged":
+		status = http.StatusConflict
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(wireError{Code: codeOf(err), Message: err.Error()})
+	we := wireError{Code: codeOf(err), Message: err.Error()}
+	var conflicts *model.Conflicts
+	var mergeBases *project.MergeBaseConflict
+	if errors.As(err, &conflicts) {
+		we.Paths = append([]string(nil), conflicts.Paths...)
+	}
+	if errors.As(err, &mergeBases) {
+		we.Bases = append([]string(nil), mergeBases.Bases...)
+	}
+	_ = json.NewEncoder(w).Encode(we)
 }
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions || r.URL.Path == "/v1" || !strings.HasPrefix(r.URL.Path, "/v1/") {
@@ -112,6 +139,39 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		h.json(w, id)
 		return
+	}
+	if len(parts) == 1 && parts[0] == "branches" {
+		switch r.Method {
+		case http.MethodGet:
+			items, err := h.p.Branches(ctx)
+			if err != nil {
+				h.fail(w, err)
+				return
+			}
+			h.json(w, items)
+			return
+		case http.MethodPost:
+			var req project.Branch
+			if !h.decode(w, r, &req) {
+				return
+			}
+			if err := h.p.CreateBranch(ctx, req.Name, req.Tip); err != nil {
+				h.fail(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		case http.MethodDelete:
+			if !h.decodeEmpty(w, r) {
+				return
+			}
+			if err := h.p.DeleteBranch(ctx, r.URL.Query().Get("name"), r.URL.Query().Get("expected")); err != nil {
+				h.fail(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 	}
 	if len(parts) == 1 && parts[0] == "entries" && r.Method == http.MethodPost {
 		var req struct {
@@ -365,6 +425,8 @@ func parseError(resp *http.Response) error {
 	switch w.Code {
 	case "not_found":
 		return fmt.Errorf("%s: %w", w.Message, project.ErrNotFound)
+	case "exists":
+		return fmt.Errorf("%s: %w", w.Message, project.ErrExists)
 	case "stale":
 		return fmt.Errorf("%s: %w", w.Message, project.ErrStale)
 	case "cancelled":
@@ -375,6 +437,12 @@ func parseError(resp *http.Response) error {
 		return fmt.Errorf("%s: %w", w.Message, project.ErrAlreadyAccepted)
 	case "invalid":
 		return fmt.Errorf("%s: %w", w.Message, project.ErrInvalid)
+	case "conflicts":
+		return &model.Conflicts{Paths: append([]string(nil), w.Paths...)}
+	case "merge_base":
+		return &project.MergeBaseConflict{Bases: append([]string(nil), w.Bases...)}
+	case "unchanged":
+		return fmt.Errorf("%s: %w", w.Message, project.ErrAlreadyMerged)
 	default:
 		return errors.New(w.Message)
 	}
@@ -393,6 +461,31 @@ func (c *Client) Info(ctx context.Context) (Info, error) {
 		return Info{}, errors.New("remote project identity mismatch")
 	}
 	return x, nil
+}
+func (c *Client) Branches(ctx context.Context) ([]project.Branch, error) {
+	resp, err := c.request(ctx, "GET", "branches", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	var out []project.Branch
+	err = c.result(resp, &out)
+	return out, err
+}
+func (c *Client) CreateBranch(ctx context.Context, name, tip string) error {
+	body, _ := json.Marshal(project.Branch{Name: name, Tip: tip})
+	resp, err := c.request(ctx, "POST", "branches", bytes.NewReader(body), "application/json")
+	if err != nil {
+		return err
+	}
+	return c.result(resp, nil)
+}
+func (c *Client) DeleteBranch(ctx context.Context, name, expected string) error {
+	query := url.Values{"name": {name}, "expected": {expected}}
+	resp, err := c.request(ctx, "DELETE", "branches?"+query.Encode(), bytes.NewReader([]byte("{}")), "application/json")
+	if err != nil {
+		return err
+	}
+	return c.result(resp, nil)
 }
 func (c *Client) Head(ctx context.Context, branch string) (string, error) {
 	resp, e := c.request(ctx, "GET", "head?branch="+url.QueryEscape(branch), nil, "")

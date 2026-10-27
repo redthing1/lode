@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -31,6 +32,8 @@ var (
 	ErrOperationConflict = errors.New("operation ID is bound to a different request")
 	ErrInvalid           = errors.New("invalid request")
 	ErrAlreadyAccepted   = errors.New("operation was already accepted; resume it")
+	ErrExists            = errors.New("name already exists")
+	ErrAlreadyMerged     = errors.New("source version is already merged")
 )
 
 type Commit struct {
@@ -42,12 +45,21 @@ type Commit struct {
 }
 
 type Request struct {
-	ID      string        `json:"id"`
-	Branch  string        `json:"branch"`
-	Base    string        `json:"base"`
-	Author  string        `json:"author"`
-	Message string        `json:"message"`
-	Changes []model.Entry `json:"changes"`
+	ID           string         `json:"id"`
+	Branch       string         `json:"branch"`
+	Base         string         `json:"base"`
+	Author       string         `json:"author"`
+	Message      string         `json:"message"`
+	Changes      []model.Entry  `json:"changes"`
+	SecondParent string         `json:"second_parent,omitempty"`
+	MergeBase    string         `json:"merge_base,omitempty"`
+	Choices      []model.Choice `json:"choices,omitempty"`
+}
+
+type MergeBaseConflict struct{ Bases []string }
+
+func (e *MergeBaseConflict) Error() string {
+	return "multiple best merge bases: " + strings.Join(e.Bases, ", ")
 }
 
 // Source supplies only changed files. Finish validates the end of a streamed
@@ -253,9 +265,24 @@ func (p *Project) head(ctx context.Context, branch string) (string, error) {
 }
 
 func canonical(request Request) (Request, string, error) {
-	if !ValidID(request.ID) || request.Branch == "" || strings.TrimSpace(request.Message) == "" || len(request.Changes) == 0 {
+	if !ValidID(request.ID) || !model.ValidName(request.Branch) || strings.TrimSpace(request.Message) == "" {
 		return request, "", ErrInvalid
 	}
+	if request.SecondParent == "" {
+		if len(request.Changes) == 0 || request.MergeBase != "" || len(request.Choices) > 0 {
+			return request, "", ErrInvalid
+		}
+	} else if !ValidID(request.SecondParent) || len(request.Changes) > 0 {
+		return request, "", ErrInvalid
+	}
+	if request.MergeBase != "" && !ValidID(request.MergeBase) {
+		return request, "", ErrInvalid
+	}
+	if err := model.ValidateChoices(request.Choices); err != nil {
+		return request, "", fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	request.Choices = append([]model.Choice(nil), request.Choices...)
+	sort.Slice(request.Choices, func(i, j int) bool { return request.Choices[i].Path < request.Choices[j].Path })
 	if request.Base != "" && !ValidID(request.Base) {
 		return request, "", ErrInvalid
 	}
@@ -302,6 +329,8 @@ func (p *Project) Save(ctx context.Context, request Request, source Source) (Com
 			return p.commit(ctx, r.ID)
 		case "stale":
 			return Commit{}, ErrStale
+		case "unchanged":
+			return Commit{}, ErrAlreadyMerged
 		}
 	} else if _, err := p.db.ExecContext(ctx, "INSERT INTO operations VALUES(?,?,'pending')", r.ID, fingerprint); err != nil {
 		return Commit{}, err
@@ -325,26 +354,21 @@ func (p *Project) Save(ctx context.Context, request Request, source Source) (Com
 			}
 		}
 	}
-	base, err := p.inventory(ctx, r.Base, nil)
+	var base, entries []content.Entry
+	if r.SecondParent != "" {
+		base, entries, err = p.mergeEntries(ctx, r)
+		if errors.Is(err, ErrAlreadyMerged) {
+			_, recordErr := p.db.ExecContext(ctx, "UPDATE operations SET outcome='unchanged' WHERE id=?", r.ID)
+			return Commit{}, errors.Join(err, recordErr)
+		}
+	} else {
+		base, err = p.inventory(ctx, r.Base, nil)
+		if err == nil {
+			entries, err = changedEntries(base, r.Changes)
+		}
+	}
 	if err != nil {
 		return Commit{}, err
-	}
-	logical := make([]model.Entry, 0, len(base))
-	objects := make(map[string]string, len(base))
-	for _, e := range base {
-		logical = append(logical, e.Entry)
-		objects[e.Path] = e.Object
-	}
-	logical, err = model.Apply(logical, r.Changes)
-	if err != nil {
-		return Commit{}, fmt.Errorf("%w: %v", ErrInvalid, err)
-	}
-	for _, e := range r.Changes {
-		delete(objects, e.Path)
-	}
-	entries := make([]content.Entry, 0, len(logical))
-	for _, e := range logical {
-		entries = append(entries, content.Entry{Entry: e, Object: objects[e.Path]})
 	}
 	root, captured, err := p.contents.Capture(ctx, r.ID, entries, source.Open)
 	if err != nil {
@@ -356,6 +380,26 @@ func (p *Project) Save(ctx context.Context, request Request, source Source) (Com
 		}
 	}
 	return p.accept(ctx, r, root, base, captured)
+}
+
+func changedEntries(base []content.Entry, changes []model.Entry) ([]content.Entry, error) {
+	logical := logicalEntries(base)
+	objects := make(map[string]string, len(base))
+	for _, e := range base {
+		objects[e.Path] = e.Object
+	}
+	logical, err := model.Apply(logical, changes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	for _, e := range changes {
+		delete(objects, e.Path)
+	}
+	entries := make([]content.Entry, 0, len(logical))
+	for _, e := range logical {
+		entries = append(entries, content.Entry{Entry: e, Object: objects[e.Path]})
+	}
+	return entries, nil
 }
 
 func (p *Project) Cancel(ctx context.Context, id string) error {

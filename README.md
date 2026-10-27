@@ -2,7 +2,7 @@
 
 Lode is a self-hosted version-control application for large binary files and folders. A server stores complete versions; clients work with ordinary files and can download only selected paths.
 
-The current implementation supports connected saves, partial checkout, workspace updates, changing selection, status, history, and recovery. It is experimental and currently provides one branch, `main`. Merges, retention, collection, and backup commands are not available. All accepted versions currently retain their contents.
+The current implementation supports connected saves, branches, whole-file merges, partial checkout, workspace updates, historical restore, status, history, and recovery. It is experimental. Retention, collection, and backup commands are not available; all accepted versions currently retain their contents.
 
 ## Build
 
@@ -55,13 +55,35 @@ Conflicting changes stop an update before files change. Resolve them with `updat
 
 `select` without options shows the current rules. With rules, it replaces the selection at the current version; `select -none` unloads selected content. Directories needed by unselected local contents remain. Unloading locally modified, deleted, or untracked selected entries fails until those changes are resolved.
 
+## Branches and restore
+
+Create a branch at the workspace's current version, then switch to it:
+
+```sh
+bin/lode -C ./work branch experiment
+bin/lode -C ./work switch experiment
+# Edit files, then save.
+bin/lode -C ./work save -m 'Try a different layout'
+bin/lode -C ./work switch main
+bin/lode -C ./work merge experiment
+bin/lode -C ./work update
+```
+
+`switch` preserves independent local edits and accepts the same whole-entry choices as `update`. `branch` lists branches; `branch NAME COMMIT` chooses a starting version. `branch -delete NAME` deletes a reference, retaining its versions. The current workspace branch and `main` cannot be deleted through this command.
+
+`merge` combines saved versions on the server, including unloaded paths. It leaves local files and the workspace baseline unchanged; run `update` to materialize the result. The destination branch must still be at the workspace base. Unsaved local edits are excluded from the merge and remain available for the subsequent update.
+
+Conflicts require `merge -ours PATH BRANCH` or `merge -theirs PATH BRANCH`, choosing the destination or source version respectively. A directory choice replaces that entire subtree, including independent changes within it; use individual file paths for narrower choices. Merges record both parents. An already merged source creates no version. If history has multiple best common ancestors, choose one of the reported versions with `-base COMMIT`. `log` follows first-parent history.
+
+`restore COMMIT [PATH...]` places historical contents into currently selected paths as local changes, keeping the branch and baseline. Omit paths to restore the whole selection. It refuses to overwrite local changes unless `-force` is supplied. Save the restored changes to publish a new version.
+
 ## Recovery and limits
 
 Use `lode resume` in a workspace after an interrupted operation. A save retry resolves the original request and preserves subsequent local edits. If an unaccepted save's intended files have changed, use `lode cancel` before saving again. Cancelling a save leaves local files intact; an already accepted save must be resumed. A confirmed stale rejection clears its save intent so an update can proceed.
 
-Checkout, update and selection changes share a recovery plan in `.lode`. They preserve replaced files until completion. Resume finishes the planned transition; cancel rolls back an unfinished transition. If files acquired newer edits, recovery preserves them and reports the conflicting path. Move it aside before retrying. After a transition commits, resume completes any remaining cleanup. Cancelled initial checkout leaves an empty-selection workspace that can be populated with `select`.
+Checkout, update, switch, selection changes and restore share a recovery plan in `.lode`. They preserve replaced files until completion. Resume finishes the planned transition; cancel rolls back an unfinished transition. If files acquired newer edits, recovery preserves them and reports the conflicting path. Move it aside before retrying. After a transition commits, resume completes any remaining cleanup. Cancelled initial checkout leaves an empty-selection workspace that can be populated with `select`. An interrupted merge resumes its original saved source and destination versions; update remains a separate local operation.
 
-Checkout creates a new directory; attach requires an existing folder and an empty server project. Stop applications writing selected files before updating or changing selection. Recovery detects many intervening changes, but does not provide a simultaneous snapshot of other processes' writes.
+Checkout creates a new directory; attach requires an existing folder and an empty server project. Stop applications writing affected files before any local transition. Recovery detects many intervening changes, but does not provide a simultaneous snapshot of other processes' writes.
 
 Lode versions file contents and directories. Symlinks and special files are unsupported; permissions and timestamps are not versioned. `.lode` is reserved for workspace state and credentials. Other selected files are included. Keep files still while saving: status hashes selected files, and upload validates changed contents again.
 

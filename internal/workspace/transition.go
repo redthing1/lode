@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/redthing1/lode/internal/model"
+	"github.com/redthing1/lode/internal/project"
 )
 
 // Next counts completed actions. Reaching the end durably decides to commit;
@@ -18,6 +19,7 @@ type transition struct {
 	Changes   []model.Change `json:"changes"`
 	Next      int            `json:"next"`
 	Cancelled bool           `json:"cancelled"`
+	Source    string         `json:"source,omitempty"`
 }
 
 func recoveryName(i int, suffix string) string {
@@ -30,6 +32,13 @@ func (w *Workspace) runTransition(ctx context.Context, p *transition) error {
 	}
 	if p.Target.Project != w.state.Project || p.Next < 0 || p.Next > len(p.Changes) {
 		return errors.New("invalid transition state")
+	}
+	if p.Source != "" && !project.ValidID(p.Source) {
+		return errors.New("invalid transition content source")
+	}
+	version := p.Source
+	if version == "" {
+		version = p.Target.Base
 	}
 	for _, c := range p.Changes {
 		if err := c.Before.Validate(); err != nil {
@@ -62,7 +71,7 @@ func (w *Workspace) runTransition(ctx context.Context, p *transition) error {
 				return err
 			}
 			i := p.Next
-			if err := w.applyChange(ctx, p.Target.Base, p.Changes[i], i); err != nil {
+			if err := w.applyChange(ctx, version, p.Changes[i], i); err != nil {
 				return err
 			}
 			p.Next++

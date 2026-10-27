@@ -214,7 +214,10 @@ func (w *Workspace) finishSave(ctx context.Context, r project.Request) (project.
 	}
 	commit, err := client.Save(ctx, r, project.Source{Open: func(name string) (io.ReadCloser, error) { return w.openFile(name) }})
 	if err != nil {
-		if errors.Is(err, project.ErrStale) {
+		var conflicts *model.Conflicts
+		var bases *project.MergeBaseConflict
+		resolvedMerge := r.SecondParent != "" && (errors.Is(err, project.ErrAlreadyMerged) || errors.Is(err, project.ErrInvalid) || errors.Is(err, project.ErrNotFound) || errors.As(err, &conflicts) || errors.As(err, &bases))
+		if errors.Is(err, project.ErrStale) || resolvedMerge {
 			// The server's stable rejection permits forgetting this intent once
 			// its unaccepted native candidates have also been released.
 			if cancelErr := client.Cancel(ctx, r.ID); cancelErr != nil {
@@ -223,6 +226,9 @@ func (w *Workspace) finishSave(ctx context.Context, r project.Request) (project.
 			err = errors.Join(err, w.remove("save.json"))
 		}
 		return project.Commit{}, err
+	}
+	if r.SecondParent != "" {
+		return commit, w.remove("save.json")
 	}
 	if w.state.Base != commit.ID {
 		if w.state.Base != r.Base {
@@ -252,6 +258,39 @@ func (w *Workspace) finishSave(ctx context.Context, r project.Request) (project.
 		w.state = next
 	}
 	return commit, w.remove("save.json")
+}
+
+// Merge publishes saved versions on the shared branch. Local files and their
+// baseline remain unchanged; Update materializes the accepted result separately.
+func (w *Workspace) Merge(ctx context.Context, branch, author, message, base string, choices []model.Choice) (project.Commit, error) {
+	if err := w.pending(); err != nil {
+		return project.Commit{}, err
+	}
+	if !model.ValidName(branch) || (base != "" && !project.ValidID(base)) {
+		return project.Commit{}, project.ErrInvalid
+	}
+	if err := model.ValidateChoices(choices); err != nil {
+		return project.Commit{}, err
+	}
+	client, err := w.client()
+	if err != nil {
+		return project.Commit{}, err
+	}
+	source, err := client.Head(ctx, branch)
+	if err != nil {
+		return project.Commit{}, err
+	}
+	if source == "" {
+		return project.Commit{}, errors.New("source branch has no saved version")
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "Merge " + branch
+	}
+	r := project.Request{ID: project.NewID(), Branch: w.state.Branch, Base: w.state.Base, Author: author, Message: message, SecondParent: source, MergeBase: base, Choices: choices}
+	if err := w.store("save.json", r); err != nil {
+		return project.Commit{}, err
+	}
+	return w.finishSave(ctx, r)
 }
 
 func (w *Workspace) Resume(ctx context.Context) error {

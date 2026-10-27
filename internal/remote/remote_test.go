@@ -7,11 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"reflect"
 	"testing"
 	"time"
 
@@ -43,6 +45,12 @@ func TestStreamSaveAndRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := c.CreateBranch(ctx, "topic", ""); err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+	if branches, err := c.Branches(ctx); err != nil || len(branches) != 2 || branches[0].Name != "main" || branches[1].Name != "topic" {
+		t.Fatalf("branches %#v: %v", branches, err)
+	}
 	data := []byte("opaque file bytes")
 	hash := sha256.Sum256(data)
 	e := model.Entry{Path: "nested/é%data.bin", Kind: model.File, Size: int64(len(data)), SHA256: hex.EncodeToString(hash[:])}
@@ -50,6 +58,24 @@ func TestStreamSaveAndRead(t *testing.T) {
 	commit, err := c.Save(ctx, req, project.Source{Open: func(string) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := c.DeleteBranch(ctx, "topic", ""); err != nil {
+		t.Fatalf("delete empty branch: %v", err)
+	}
+	if err := c.CreateBranch(ctx, "topic", commit.ID); err != nil {
+		t.Fatalf("create branch at commit: %v", err)
+	}
+	if err := c.CreateBranch(ctx, "topic", commit.ID); err != nil {
+		t.Fatalf("same-tip create retry: %v", err)
+	}
+	if err := c.CreateBranch(ctx, "topic", ""); !errors.Is(err, project.ErrExists) {
+		t.Fatalf("branch collision: %v", err)
+	}
+	if err := c.DeleteBranch(ctx, "topic", project.NewID()); !errors.Is(err, project.ErrStale) {
+		t.Fatalf("stale branch delete: %v", err)
+	}
+	if err := c.DeleteBranch(ctx, "topic", commit.ID); err != nil {
+		t.Fatalf("delete branch: %v", err)
 	}
 	entries, err := c.Entries(ctx, commit.ID, model.Selection{{Include: true}})
 	if err != nil {
@@ -297,4 +323,46 @@ func postMultipart(baseURL, token, projectID, contentType string, body []byte) (
 	req.Header.Set(projectHeader, projectID)
 	req.Header.Set("Content-Type", contentType)
 	return http.DefaultClient.Do(req)
+}
+
+func TestTypedErrorWireRoundTrips(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		code string
+	}{
+		{"conflicts", fmt.Errorf("wrapped: %w", &model.Conflicts{Paths: []string{"a.bin", "dir/b.bin"}}), "conflicts"},
+		{"merge bases", fmt.Errorf("wrapped: %w", &project.MergeBaseConflict{Bases: []string{"abc", "def"}}), "merge_base"},
+		{"already merged", fmt.Errorf("wrapped: %w", project.ErrAlreadyMerged), "unchanged"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			(&handler{}).fail(recorder, tc.err)
+			var payload wireError
+			if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Code != tc.code {
+				t.Fatalf("code %q, want %q", payload.Code, tc.code)
+			}
+			got := parseError(recorder.Result())
+			switch tc.code {
+			case "conflicts":
+				var conflicts *model.Conflicts
+				if !errors.As(got, &conflicts) || !reflect.DeepEqual(conflicts.Paths, []string{"a.bin", "dir/b.bin"}) {
+					t.Fatalf("round-trip conflicts: %#v (%v)", conflicts, got)
+				}
+			case "merge_base":
+				var mergeBases *project.MergeBaseConflict
+				if !errors.As(got, &mergeBases) || !reflect.DeepEqual(mergeBases.Bases, []string{"abc", "def"}) {
+					t.Fatalf("round-trip bases: %#v (%v)", mergeBases, got)
+				}
+			case "unchanged":
+				if !errors.Is(got, project.ErrAlreadyMerged) {
+					t.Fatalf("round-trip already merged: %v", got)
+				}
+			}
+		})
+	}
 }

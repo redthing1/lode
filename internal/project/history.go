@@ -68,6 +68,9 @@ func (p *Project) inventory(ctx context.Context, id string, selection model.Sele
 		}
 	}
 	if len(clauses) == 0 {
+		if _, err := p.commit(ctx, id); err != nil {
+			return nil, err
+		}
 		return []content.Entry{}, nil
 	}
 	query := "SELECT path,kind,size,sha256,object FROM entries WHERE commit_id=? AND (" + strings.Join(clauses, " OR ") + ")"
@@ -117,26 +120,41 @@ func (p *Project) inventory(ctx context.Context, id string, selection model.Sele
 }
 
 func (p *Project) accept(ctx context.Context, r Request, root string, before, after []content.Entry) (Commit, error) {
+	first, second := r.Base, r.SecondParent
+	// The conceptual empty root is not a commit. A merge into an empty branch
+	// records the source as its sole parent and deltas against that inventory.
+	if first == "" && second != "" {
+		first, second = second, ""
+	}
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Commit{}, err
 	}
 	defer tx.Rollback()
 	depth := 0
-	var parent any
+	var parent, secondParent, expected any
 	if r.Base != "" {
-		if err := tx.QueryRowContext(ctx, "SELECT depth FROM commits WHERE id=?", r.Base).Scan(&depth); err != nil {
+		expected = r.Base
+	}
+	if second != "" {
+		secondParent = second
+	}
+	if first != "" {
+		if err := tx.QueryRowContext(ctx, "SELECT depth FROM commits WHERE id=?", first).Scan(&depth); err != nil {
 			return Commit{}, err
 		}
 		depth++
-		parent = r.Base
+		parent = first
 	}
 	checkpoint := depth%64 == 0
 	c := Commit{ID: r.ID, Author: r.Author, Message: r.Message, Created: time.Now().UTC()}
-	if r.Base != "" {
-		c.Parents = []string{r.Base}
+	if first != "" {
+		c.Parents = []string{first}
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO commits VALUES(?,?,NULL,?,?,?,?,?,?)", r.ID, parent, r.Author, r.Message, c.Created.Format(time.RFC3339Nano), root, depth, checkpoint)
+	if second != "" {
+		c.Parents = append(c.Parents, second)
+	}
+	_, err = tx.ExecContext(ctx, "INSERT INTO commits VALUES(?,?,?,?,?,?,?,?,?)", r.ID, parent, secondParent, r.Author, r.Message, c.Created.Format(time.RFC3339Nano), root, depth, checkpoint)
 	if err != nil {
 		return Commit{}, err
 	}
@@ -170,7 +188,7 @@ func (p *Project) accept(ctx context.Context, r Request, root string, before, af
 	if err := statement.Close(); err != nil {
 		return Commit{}, err
 	}
-	result, err := tx.ExecContext(ctx, "UPDATE branches SET tip=? WHERE name=? AND tip IS ?", r.ID, r.Branch, parent)
+	result, err := tx.ExecContext(ctx, "UPDATE branches SET tip=? WHERE name=? AND tip IS ?", r.ID, r.Branch, expected)
 	if err != nil {
 		return Commit{}, err
 	}
