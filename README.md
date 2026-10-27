@@ -114,6 +114,8 @@ The server listens on loopback HTTP. Remote access can use an SSH tunnel or an H
 
 This implementation tracks regular-file bytes and directories. Symlinks and special files are unsupported; permissions and timestamps are not versioned. Commit a coherent application save: Lode does not coordinate writes by other applications. Place options before positional arguments; use `lode COMMAND --help` for command options.
 
+Files are limited to 1 TiB; `lode commit` accepts at most 4,096 changed entries, including directories and deletions. Status hashes every selected file; committing reads changed files again for transfer. Workspace transitions stage incoming files before replacing old copies, so allow additional local disk space for those replacements.
+
 ## Development
 
 ```sh
