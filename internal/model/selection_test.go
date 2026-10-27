@@ -1,89 +1,95 @@
-package model_test
+package model
 
-import (
-	"slices"
-	"testing"
+import "testing"
 
-	"github.com/redthing1/lode/internal/model"
-)
+func TestSelectionSubtreePoliciesAndIntersections(t *testing.T) {
+	root := Path{}
+	assets := mustPath(t, "assets")
+	scene := mustPath(t, "assets/scene")
+	texture := mustPath(t, "assets/textures")
+	neighbor := mustPath(t, "assets-old")
 
-func TestSelectionSupportsPartialTraversal(t *testing.T) {
-	hero := mustPath(t, "assets/hero")
-	s := (model.Selection{}).Include(hero)
-	for _, tc := range []struct {
-		path                 string
-		included, intersects bool
-	}{
-		{".", false, true},
-		{"assets", false, true},
-		{"assets/hero", true, true},
-		{"assets/hero/mesh", true, true},
-		{"assets/heroine", false, false},
-		{"assets/shared", false, false},
-	} {
-		p := mustPath(t, tc.path)
-		if got := s.Includes(p); got != tc.included {
-			t.Errorf("Includes(%q): got %t, want %t", tc.path, got, tc.included)
-		}
-		if got := s.Intersects(p); got != tc.intersects {
-			t.Errorf("Intersects(%q): got %t, want %t", tc.path, got, tc.intersects)
-		}
+	selection := Selection{}.Exclude(assets).Include(scene)
+	if selection.Includes(assets) || selection.Includes(texture) || !selection.Includes(scene) {
+		t.Fatal("specific subtree policies did not override the root policy")
+	}
+	if !selection.Intersects(assets) || !selection.Intersects(root) {
+		t.Fatal("excluded ancestor should intersect an included descendant")
+	}
+	if selection.Intersects(texture) || selection.Includes(neighbor) {
+		t.Fatal("selection leaked into an excluded or adjacent subtree")
+	}
+
+	altered := selection.Exclude(scene).Include(mustPath(t, "elsewhere"))
+	if selection.Includes(root) || !selection.Includes(scene) || altered.Includes(scene) || !altered.Includes(mustPath(t, "elsewhere")) {
+		t.Fatal("returned selection should be independent of its source")
 	}
 }
 
-func TestSelectionResetsNarrowerOverrides(t *testing.T) {
-	root, assets := model.Path{}, mustPath(t, "assets")
-	hero, cache := mustPath(t, "assets/hero"), mustPath(t, "assets/hero/cache")
-	s := (model.Selection{}).Include(root).Exclude(assets).Include(hero).Exclude(cache)
-	if !s.Includes(hero) || s.Includes(cache) || s.Includes(mustPath(t, "assets/shared")) {
-		t.Fatal("most specific overrides were not honored")
+func TestSelectionReplacesSubtreeAndNormalizes(t *testing.T) {
+	assets := mustPath(t, "assets")
+	scene := mustPath(t, "assets/scene")
+	texture := mustPath(t, "assets/textures")
+
+	s := Selection{}.Include(assets).Exclude(scene).Include(texture).Include(mustPath(t, "z"))
+	if got := s.Rules(); len(got) != 3 {
+		t.Fatalf("Rules() = %#v, want three effective rules", got)
+	}
+	replaced := s.Include(assets)
+	if got := replaced.Rules(); len(got) != 2 || got[0].Path != assets || !got[0].Included || got[1].Path.String() != "z" {
+		t.Fatalf("including subtree did not clear narrower policies: %#v", got)
+	}
+	if !replaced.Includes(scene) || !replaced.Includes(texture) {
+		t.Fatal("replacement policy should cover the whole subtree")
 	}
 
-	loaded := s.Include(assets)
-	if !loaded.Includes(cache) || !loaded.Includes(mustPath(t, "assets/shared")) {
-		t.Fatal("loading a parent must clear narrower exclusions")
+	first := Selection{}.Include(assets).Include(scene)
+	second := Selection{}.Include(assets)
+	if !sameRules(first.Rules(), second.Rules()) {
+		t.Fatalf("redundant rule was retained: %#v", first.Rules())
 	}
-	if want := []model.Rule{{Path: root, Include: true}}; !slices.Equal(loaded.Rules(), want) {
-		t.Fatalf("redundant include survived: %v", loaded.Rules())
+	if !sameRules(second.Include(assets).Rules(), second.Rules()) {
+		t.Fatal("repeating the same policy should be idempotent")
 	}
-
-	unloaded := s.Exclude(assets)
-	if unloaded.Intersects(assets) || unloaded.Includes(hero) {
-		t.Fatal("unloading a parent must clear narrower includes")
-	}
-	if want := []model.Rule{{Path: root, Include: true}, {Path: assets, Include: false}}; !slices.Equal(unloaded.Rules(), want) {
-		t.Fatalf("unexpected exclusions: %v", unloaded.Rules())
-	}
-	if empty := s.Exclude(root); empty.Intersects(root) || len(empty.Rules()) != 0 {
-		t.Fatal("excluding the root must select nothing")
+	if got := (Selection{}).Exclude(assets).Rules(); len(got) != 0 {
+		t.Fatalf("default exclusion should normalize away: %#v", got)
 	}
 }
 
-func TestSelectionValuesAreIndependent(t *testing.T) {
-	root, assets := model.Path{}, mustPath(t, "assets")
-	full := (model.Selection{}).Include(root)
-	partial := full.Exclude(assets)
-	if !full.Includes(assets) || partial.Includes(assets) {
-		t.Fatal("changing a copied selection changed its source")
+func TestSelectionRulesAreSortedCopies(t *testing.T) {
+	s := Selection{}.Include(Path{}).Exclude(mustPath(t, "a")).Include(mustPath(t, "a/b"))
+	rules := s.Rules()
+	if len(rules) != 3 || !rules[0].Path.IsRoot() || rules[1].Path.String() != "a" || rules[2].Path.String() != "a/b" {
+		t.Fatalf("Rules() is not root-first lexical: %#v", rules)
 	}
-	rules := full.Rules()
-	rules[0].Include = false
-	if !full.Includes(assets) {
-		t.Fatal("changing returned rules changed the selection")
-	}
-	var empty model.Selection
-	if empty.Includes(root) || empty.Intersects(root) || len(empty.Exclude(assets).Rules()) != 0 {
-		t.Fatal("the zero selection must select nothing without redundant exclusions")
+	rules[0].Included = false
+	rules[0].Path = mustPath(t, "changed")
+	rules = append(rules, Rule{Path: Path{}, Included: true})
+	if got := s.Rules(); !got[0].Path.IsRoot() || !got[0].Included {
+		t.Fatalf("mutating Rules() result changed selection: %#v", got)
 	}
 }
 
-func TestSelectionRulesAreDeterministic(t *testing.T) {
-	a, b := mustPath(t, "assets/hero"), mustPath(t, "assets/shared")
-	first := (model.Selection{}).Include(b).Include(a)
-	second := (model.Selection{}).Include(a).Include(b)
-	want := []model.Rule{{Path: a, Include: true}, {Path: b, Include: true}}
-	if !slices.Equal(first.Rules(), want) || !slices.Equal(second.Rules(), want) {
-		t.Fatalf("equivalent selections have different rules: %v and %v", first.Rules(), second.Rules())
+func TestSelectionNestedOverridesAndRootReset(t *testing.T) {
+	root := Path{}
+	a := mustPath(t, "a")
+	child := mustPath(t, "a/b")
+	deep := mustPath(t, "a/b/deeper")
+
+	s := Selection{}.Include(root).Exclude(a).Include(child).Exclude(deep).Include(deep)
+	if s.Includes(a) || !s.Includes(child) || !s.Includes(deep) {
+		t.Fatal("nested exclude and reinclude rules were not applied")
+	}
+	reset := s.Include(root)
+	if len(reset.Rules()) != 1 || !reset.Includes(a) || !reset.Includes(deep) {
+		t.Fatalf("including root should clear every narrower override: %#v", reset.Rules())
+	}
+	if len(s.Rules()) != 3 || s.Includes(a) {
+		t.Fatal("prior selection changed or retained a redundant reinclude rule")
+	}
+	empty := s.Exclude(root)
+	if len(empty.Rules()) != 0 || empty.Includes(root) || empty.Intersects(root) {
+		t.Fatalf("excluding root must restore the empty selection: %#v", empty.Rules())
 	}
 }
 
@@ -95,48 +101,91 @@ func FuzzSelectionOperations(f *testing.F) {
 		if len(operations) > 128 {
 			return
 		}
-		names := []string{".", "assets", "assets/hero", "assets/hero/mesh", "assets/heroine", "assets/shared", "assets/shared/cache", "other", "asset", "assets/hero/future"}
-		paths := make([]model.Path, len(names))
-		for i, name := range names {
-			paths[i] = mustPath(t, name)
+		paths := []Path{
+			{},
+			mustPath(t, "a"),
+			mustPath(t, "a-b"),
+			mustPath(t, "a/b"),
+			mustPath(t, "a/b/deeper"),
 		}
-		var s model.Selection
-		expected := make([]bool, len(paths))
+		// An explicit small tree supplies an oracle independent of Path.Contains
+		// and selection's representation of inherited rules.
+		parents := []int{-1, 0, 0, 1, 3}
+		contains := func(parent, child int) bool {
+			for child >= 0 {
+				if parent == child {
+					return true
+				}
+				child = parents[child]
+			}
+			return false
+		}
+		var selection Selection
+		want := make([]bool, len(paths))
 		for step, operation := range operations {
-			index, include := int(operation>>1)%len(paths), operation&1 != 0
-			previous, previousRules := s, s.Rules()
-			if include {
-				s = s.Include(paths[index])
-				if !slices.Equal(s.Include(paths[index]).Rules(), s.Rules()) {
-					t.Fatal("include is not idempotent")
-				}
+			index := int(operation>>1) % len(paths)
+			included := operation&1 != 0
+			previous := selection
+			beforeWant := append([]bool(nil), want...)
+			if included {
+				selection = selection.Include(paths[index])
 			} else {
-				s = s.Exclude(paths[index])
-				if !slices.Equal(s.Exclude(paths[index]).Rules(), s.Rules()) {
-					t.Fatal("exclude is not idempotent")
+				selection = selection.Exclude(paths[index])
+			}
+			for i := range paths {
+				if contains(index, i) {
+					want[i] = included
 				}
 			}
-			if !slices.Equal(previous.Rules(), previousRules) {
-				t.Fatal("an operation mutated the previous selection")
-			}
-			// Replay subtree assignments over explicit paths, without interpreting rules.
-			for i, name := range names {
-				if referenceContains(names[index], name) {
-					expected[i] = include
+			wantRules := make(map[Path]bool)
+			for i, path := range paths {
+				inherited := false
+				if parents[i] >= 0 {
+					inherited = want[parents[i]]
+				}
+				if want[i] != inherited {
+					wantRules[path] = want[i]
 				}
 			}
-			for i, p := range paths {
-				if got := s.Includes(p); got != expected[i] {
-					t.Fatalf("step %d, Includes(%q): got %t, want %t", step, names[i], got, expected[i])
+			rules := selection.Rules()
+			if len(rules) != len(wantRules) {
+				t.Fatalf("step %d rules = %#v, want %#v", step, rules, wantRules)
+			}
+			for _, rule := range rules {
+				if included, ok := wantRules[rule.Path]; !ok || included != rule.Included {
+					t.Fatalf("step %d unexpected rule: %#v", step, rule)
+				}
+			}
+			for i, path := range paths {
+				if got := selection.Includes(path); got != want[i] {
+					t.Fatalf("step %d Includes(%q) = %t, want %t", step, path.String(), got, want[i])
 				}
 				intersects := false
-				for j, name := range names {
-					intersects = intersects || (expected[j] && referenceContains(names[i], name))
+				for j := range paths {
+					if contains(i, j) && want[j] {
+						intersects = true
+						break
+					}
 				}
-				if got := s.Intersects(p); got != intersects {
-					t.Fatalf("step %d, Intersects(%q): got %t, want %t", step, names[i], got, intersects)
+				if got := selection.Intersects(path); got != intersects {
+					t.Fatalf("step %d Intersects(%q) = %t, want %t", step, path.String(), got, intersects)
+				}
+				if got := previous.Includes(path); got != beforeWant[i] {
+					t.Fatalf("step %d prior selection changed at %q", step, path.String())
 				}
 			}
 		}
 	})
+}
+
+func sameRules(a, b []Rule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

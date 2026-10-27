@@ -7,9 +7,10 @@ import (
 
 var (
 	ErrInvalidEntry = errors.New("invalid entry")
-	ErrConflict     = errors.New("conflicting entry changes")
+	ErrConflict     = errors.New("entry conflict")
 )
 
+// EntryKind identifies the explicit state of a path in a project snapshot.
 type EntryKind uint8
 
 const (
@@ -18,54 +19,53 @@ const (
 	Directory
 )
 
-// Entry contains confirmed semantic facts about one path. The zero value is
-// invalid: absence must be explicit, and failed observations must remain errors.
-// Directory children are compared separately from their parent entry.
+// Entry describes one whole path entry. ContentID is an opaque, non-empty
+// comparison identity for files within the same identity namespace. It does
+// not describe file bytes or provide an identity derivation mechanism.
 type Entry struct {
-	Kind EntryKind
-	// ContentID is a verified equality witness for file bytes in a consistent
-	// namespace. An empty ID is not an unknown file; it is an invalid entry.
-	ContentID  string
-	Executable bool
+	Kind      EntryKind
+	ContentID string
 }
 
+// Validate checks the entry's explicit kind and content identity shape.
 func (e Entry) Validate() error {
 	switch e.Kind {
+	case Absent, Directory:
+		if e.ContentID != "" {
+			return ErrInvalidEntry
+		}
 	case File:
 		if e.ContentID == "" {
-			return fmt.Errorf("%w: file content identity is required", ErrInvalidEntry)
-		}
-	case Absent, Directory:
-		if e.ContentID != "" || e.Executable {
-			return fmt.Errorf("%w: only files have content and executable attributes", ErrInvalidEntry)
+			return ErrInvalidEntry
 		}
 	default:
-		return fmt.Errorf("%w: unknown kind %d", ErrInvalidEntry, e.Kind)
+		return ErrInvalidEntry
 	}
 	return nil
 }
 
-// Reconcile returns the desired local entry when updating from base to target.
-// Compatible local edits remain edits against target. Divergent changes conflict.
-// Callers must also validate ancestor and descendant relationships before applying
-// a transition; this function compares only the entry at a single path.
+// Reconcile compares complete entries against a common base. A clean local
+// side takes the target; identical outcomes agree; a target-clean side keeps
+// the local edit; divergent edits conflict. Structural tree validation,
+// scanning, identity derivation, and persistence are outside this model.
 func Reconcile(base, local, target Entry) (Entry, error) {
 	for _, input := range []struct {
 		name  string
 		entry Entry
 	}{
-		{"base", base},
-		{"local", local},
-		{"target", target},
+		{name: "base", entry: base},
+		{name: "local", entry: local},
+		{name: "target", entry: target},
 	} {
 		if err := input.entry.Validate(); err != nil {
 			return Entry{}, fmt.Errorf("%s: %w", input.name, err)
 		}
 	}
-
 	switch {
-	case local == base, local == target:
+	case local == base:
 		return target, nil
+	case local == target:
+		return local, nil
 	case target == base:
 		return local, nil
 	default:

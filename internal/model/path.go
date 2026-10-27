@@ -1,49 +1,59 @@
-// Package model defines project paths, local selection, and entry transitions.
+// Package model contains pure values and rules for project paths and entries.
+// It does not perform filesystem discovery, persistence, or content storage.
 package model
 
 import (
 	"errors"
-	"fmt"
-	"io/fs"
 	"strings"
+	"unicode/utf8"
 )
 
 var ErrInvalidPath = errors.New("invalid project path")
 
-// Path is a canonical, slash-separated project path. Its zero value is the root.
-// Host filesystem names and platform restrictions are handled at the IO boundary.
+// Path is a canonical, slash-separated project path. Its zero value is root.
+// Paths compare exact UTF-8 bytes; this type does not normalize Unicode or
+// claim that names are portable across filesystems.
 type Path struct {
-	name string
+	value string
 }
 
-// ParsePath accepts relative paths and "." for the root. It rejects ambiguous
-// separators and traversal rather than cleaning them into a different path.
-func ParsePath(name string) (Path, error) {
-	if !fs.ValidPath(name) || strings.ContainsAny(name, "\x00\\") {
-		return Path{}, fmt.Errorf("%w: %q", ErrInvalidPath, name)
-	}
-	if name == "." {
+// ParsePath constructs a canonical project path. The empty string denotes
+// root. Invalid paths are rejected rather than cleaned or rewritten.
+func ParsePath(value string) (Path, error) {
+	if value == "" {
 		return Path{}, nil
 	}
-	return Path{name: name}, nil
-}
-
-func (p Path) String() string {
-	if p.name == "" {
-		return "."
+	if !utf8.ValidString(value) || strings.ContainsAny(value, "\x00\\") ||
+		strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") {
+		return Path{}, ErrInvalidPath
 	}
-	return p.name
+	for _, component := range strings.Split(value, "/") {
+		if component == "" || component == "." || component == ".." {
+			return Path{}, ErrInvalidPath
+		}
+	}
+	return Path{value: value}, nil
 }
 
-// Parent returns the containing directory. The root is its own parent.
+// String returns the canonical path, or the empty string for root.
+func (p Path) String() string { return p.value }
+
+// IsRoot reports whether p denotes the project root.
+func (p Path) IsRoot() bool { return p.value == "" }
+
+// Parent returns p's parent. Root is its own parent.
 func (p Path) Parent() Path {
-	if i := strings.LastIndexByte(p.name, '/'); i >= 0 {
-		return Path{name: p.name[:i]}
+	if i := strings.LastIndexByte(p.value, '/'); i >= 0 {
+		return Path{value: p.value[:i]}
 	}
 	return Path{}
 }
 
-// Contains reports whether other is p or one of its descendants.
+// Contains reports whether p is equal to other or is one of its ancestors.
+// Component boundaries matter, so "assets" does not contain "assets-old".
 func (p Path) Contains(other Path) bool {
-	return p.name == "" || p == other || strings.HasPrefix(other.name, p.name+"/")
+	if p.value == "" {
+		return true
+	}
+	return other.value == p.value || strings.HasPrefix(other.value, p.value+"/")
 }

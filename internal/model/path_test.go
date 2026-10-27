@@ -1,113 +1,79 @@
-package model_test
+package model
 
 import (
 	"errors"
-	"strings"
 	"testing"
-
-	"github.com/redthing1/lode/internal/model"
 )
 
-func mustPath(t testing.TB, name string) model.Path {
-	t.Helper()
-	p, err := model.ParsePath(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
-func TestPathPreservesCanonicalNames(t *testing.T) {
-	for _, name := range []string{".", "assets", "assets/hero.blend", "asset set/hero.blend", "資料/模型", "sample:variant", "a/..b"} {
-		t.Run(name, func(t *testing.T) {
-			if got := mustPath(t, name).String(); got != name {
-				t.Fatalf("path changed: got %q, want %q", got, name)
-			}
-		})
-	}
-	if (model.Path{}).String() != "." {
-		t.Fatal("zero path must be the project root")
-	}
-	if mustPath(t, "Hero") == mustPath(t, "hero") {
-		t.Fatal("project paths must preserve case")
-	}
-}
-
-func TestPathRejectsTraversalAndAmbiguousNames(t *testing.T) {
-	for _, name := range []string{"", "/", "/assets", "./assets", "..", "../assets", "assets/..", "assets/../other", "assets/.", "assets//hero", "assets/", "assets\\hero", "a\x00b", string([]byte{0xff})} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := model.ParsePath(name); !errors.Is(err, model.ErrInvalidPath) {
-				t.Fatalf("ParsePath(%q): got %v, want ErrInvalidPath", name, err)
-			}
-		})
-	}
-}
-
-func TestPathHierarchy(t *testing.T) {
-	for _, tc := range []struct {
-		parent string
-		child  string
-		want   bool
-	}{
-		{".", ".", true},
-		{".", "assets/hero", true},
-		{"assets", ".", false},
-		{"assets/hero", "assets/hero", true},
-		{"assets/hero", "assets/hero/mesh", true},
-		{"assets/hero", "assets/heroine", false},
-		{"assets/hero", "assets/Hero/mesh", false},
-	} {
-		if got := mustPath(t, tc.parent).Contains(mustPath(t, tc.child)); got != tc.want {
-			t.Errorf("%q contains %q: got %t, want %t", tc.parent, tc.child, got, tc.want)
-		}
-	}
-	for _, tc := range []struct{ child, parent string }{
-		{".", "."}, {"assets", "."}, {"assets/hero/mesh", "assets/hero"},
-	} {
-		if got := mustPath(t, tc.child).Parent().String(); got != tc.parent {
-			t.Errorf("parent of %q: got %q, want %q", tc.child, got, tc.parent)
-		}
-	}
-}
-
-// Use component lists as an independent reference for subtree membership.
-func referenceContains(parent, child string) bool {
-	if parent == "." {
-		return true
-	}
-	a, b := strings.Split(parent, "/"), strings.Split(child, "/")
-	if len(a) > len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func FuzzPathHierarchy(f *testing.F) {
-	f.Add("assets/hero", "assets/heroine")
-	f.Add(".", "assets/hero")
-	f.Add("資料", "資料/模型")
-	f.Fuzz(func(t *testing.T, parent, child string) {
-		p, err := model.ParsePath(parent)
+func TestParsePathCanonicalPaths(t *testing.T) {
+	valid := []string{"", "assets", "assets/scene.blend", "Hero", "hero", "café/mesh", "cafe\u0301/mesh", "資料/模型"}
+	for _, value := range valid {
+		path, err := ParsePath(value)
 		if err != nil {
-			return
+			t.Errorf("ParsePath(%q): %v", value, err)
+			continue
 		}
-		q, err := model.ParsePath(child)
-		if err != nil {
-			return
+		if path.String() != value {
+			t.Errorf("ParsePath(%q).String() = %q", value, path.String())
 		}
-		if got, want := p.Contains(q), referenceContains(parent, child); got != want {
-			t.Fatalf("%q contains %q: got %t, want %t", parent, child, got, want)
+	}
+	if got := (Path{}).String(); got != "" || !(Path{}).IsRoot() {
+		t.Fatalf("zero Path should be root, got %q", got)
+	}
+	if mustPath(t, "Hero") == mustPath(t, "hero") || mustPath(t, "café/mesh") == mustPath(t, "cafe\u0301/mesh") {
+		t.Fatal("path comparison or storage changed case or Unicode text")
+	}
+
+	invalid := []string{
+		"/assets", "assets/", "assets//mesh", ".", "..", "assets/./mesh",
+		"assets/../mesh", "bad\\name", "bad\x00name", string([]byte{0xff}),
+	}
+	for _, value := range invalid {
+		if _, err := ParsePath(value); !errors.Is(err, ErrInvalidPath) {
+			t.Errorf("ParsePath(%q) error = %v, want ErrInvalidPath", value, err)
 		}
-		if !q.Parent().Contains(q) {
-			t.Fatalf("parent of %q does not contain it", child)
-		}
-		if parsed := mustPath(t, q.String()); parsed != q {
-			t.Fatal("path did not round trip")
+	}
+}
+
+func TestPathParentAndComponentAncestry(t *testing.T) {
+	root := mustPath(t, "")
+	assets := mustPath(t, "assets")
+	child := mustPath(t, "assets/scene.blend")
+	neighbor := mustPath(t, "assets-old/scene.blend")
+	if root.Parent() != root || assets.Parent() != root || child.Parent() != assets {
+		t.Fatal("Parent did not return the component parent")
+	}
+	if !assets.Contains(assets) || !assets.Contains(child) || assets.Contains(neighbor) || child.Contains(assets) {
+		t.Fatal("Contains did not respect equality and component boundaries")
+	}
+	if !root.Contains(neighbor) {
+		t.Fatal("root should contain every path")
+	}
+}
+
+func FuzzParsePathRoundTrip(f *testing.F) {
+	for _, seed := range []string{"", "a", "a/b", "assets-old", "café/mesh"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, value string) {
+		path, err := ParsePath(value)
+		if err == nil {
+			if path.String() != value {
+				t.Fatalf("round trip changed %q to %q", value, path.String())
+			}
+			parent := path.Parent()
+			if !parent.Contains(path) {
+				t.Fatalf("parent %q does not contain %q", parent.String(), value)
+			}
 		}
 	})
+}
+
+func mustPath(t *testing.T, value string) Path {
+	t.Helper()
+	path, err := ParsePath(value)
+	if err != nil {
+		t.Fatalf("ParsePath(%q): %v", value, err)
+	}
+	return path
 }

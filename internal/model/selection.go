@@ -1,81 +1,107 @@
 package model
 
-import (
-	"slices"
-	"strings"
-)
+import "sort"
 
-// Rule includes or excludes a path and its descendants.
+// Rule records an effective inclusion policy for a path and its subtree.
 type Rule struct {
-	Path    Path
-	Include bool
+	Path     Path
+	Included bool
 }
 
-// Selection describes which project paths belong in a workspace. Its zero value
-// selects nothing. Selection values can be copied and used without shared mutation.
+// Selection is an immutable set of subtree policies. The zero value selects
+// nothing. More specific rules override their ancestors.
 type Selection struct {
 	rules map[Path]bool
 }
 
-// Includes reports the most specific rule for p, defaulting to exclusion.
-func (s Selection) Includes(p Path) bool {
-	for {
-		if include, ok := s.rules[p]; ok {
-			return include
+// Include selects path and its entire subtree, replacing any narrower rules.
+func (s Selection) Include(path Path) Selection {
+	return s.set(path, true)
+}
+
+// Exclude excludes path and its entire subtree, replacing any narrower rules.
+func (s Selection) Exclude(path Path) Selection {
+	return s.set(path, false)
+}
+
+func (s Selection) set(path Path, included bool) Selection {
+	out := Selection{rules: make(map[Path]bool, len(s.rules)+1)}
+	for rulePath, value := range s.rules {
+		if !path.Contains(rulePath) {
+			out.rules[rulePath] = value
 		}
-		if p == (Path{}) {
+	}
+	if out.Includes(path) != included {
+		out.rules[path] = included
+	}
+	return out
+}
+
+// Includes reports the effective policy at path.
+func (s Selection) Includes(path Path) bool {
+	for {
+		if included, ok := s.rules[path]; ok {
+			return included
+		}
+		if path.IsRoot() {
 			return false
 		}
-		p = p.Parent()
+		path = path.Parent()
 	}
 }
 
-// Intersects reports whether p or any descendant is selected. A directory can
-// require traversal even when the directory itself is excluded.
-func (s Selection) Intersects(p Path) bool {
-	if s.Includes(p) {
+// Rules returns a root-first, lexical snapshot of the effective rules.
+func (s Selection) Rules() []Rule {
+	rules := make([]Rule, 0, len(s.rules))
+	for path, included := range s.rules {
+		rules = append(rules, Rule{Path: path, Included: included})
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		return rules[i].Path.String() < rules[j].Path.String()
+	})
+	return rules
+}
+
+// Intersects reports whether path or any descendant is included. It lets a
+// tree walker descend through an excluded ancestor to reach an included child.
+func (s Selection) Intersects(path Path) bool {
+	if s.Includes(path) {
 		return true
 	}
-	for rule, include := range s.rules {
-		if include && p.Contains(rule) {
+	for rulePath, included := range s.rules {
+		if included && path.Contains(rulePath) {
 			return true
 		}
 	}
 	return false
 }
 
-// Include returns a selection including p and clears narrower rules beneath it.
-func (s Selection) Include(p Path) Selection {
-	return s.with(p, true)
+// Union selects every path included by either selection.
+func (s Selection) Union(other Selection) Selection {
+	return combineSelections(s, other, func(a, b bool) bool { return a || b })
 }
 
-// Exclude returns a selection excluding p and clears narrower rules beneath it.
-func (s Selection) Exclude(p Path) Selection {
-	return s.with(p, false)
+// Intersection selects only paths included by both selections.
+func (s Selection) Intersection(other Selection) Selection {
+	return combineSelections(s, other, func(a, b bool) bool { return a && b })
 }
 
-func (s Selection) with(p Path, include bool) Selection {
-	next := Selection{rules: make(map[Path]bool, len(s.rules)+1)}
-	for rule, value := range s.rules {
-		if !p.Contains(rule) {
-			next.rules[rule] = value
-		}
+func combineSelections(a, b Selection, included func(bool, bool) bool) Selection {
+	boundaries := map[Path]bool{{}: true}
+	for p := range a.rules {
+		boundaries[p] = true
 	}
-	if next.Includes(p) != include {
-		next.rules[p] = include
+	for p := range b.rules {
+		boundaries[p] = true
 	}
-	return next
-}
-
-// Rules returns normalized overrides, root first and then in lexical path order.
-// Root exclusion is implicit; rules equal to their inherited state are omitted.
-func (s Selection) Rules() []Rule {
-	rules := make([]Rule, 0, len(s.rules))
-	for p, include := range s.rules {
-		rules = append(rules, Rule{Path: p, Include: include})
+	ordered := make([]Path, 0, len(boundaries))
+	for p := range boundaries {
+		ordered = append(ordered, p)
 	}
-	slices.SortFunc(rules, func(a, b Rule) int {
-		return strings.Compare(a.Path.name, b.Path.name)
-	})
-	return rules
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].String() < ordered[j].String() })
+	var result Selection
+	for _, p := range ordered {
+		result = result.set(p, included(a.Includes(p), b.Includes(p)))
+	}
+	return result
 }
