@@ -342,6 +342,18 @@ func (s *server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.serveChanges(w, r)
+	case ChangesPreparePath:
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		s.servePrepareChanges(w, r)
+	case ChangesSignaturePath:
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		s.serveChangeSignature(w, r)
 	default:
 		if s.collectionRoutes(w, r) {
 			return
@@ -457,7 +469,7 @@ func (s *server) serveChanges(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	opened := 0
-	openFile := func(path model.Path) (io.ReadCloser, error) {
+	openFile := func(path model.Path, openBasis project.BasisOpener) (io.ReadCloser, error) {
 		if opened >= len(filePaths) || filePaths[opened] != path {
 			return nil, fmt.Errorf("%w: unexpected service file request", errInvalidUpload)
 		}
@@ -472,9 +484,32 @@ func (s *server) serveChanges(w http.ResponseWriter, r *http.Request) {
 		_, digest, size := changesFileFacts(request.Changes, path.String())
 		opened++
 		last := opened == len(filePaths)
-		return &uploadPart{Part: part, size: size, sha256: digest, hasher: sha256.New(), last: last, nextPart: reader.NextPart}, nil
+		mediaType, err := uploadMediaType(part)
+		if err != nil {
+			return nil, err
+		}
+		switch mediaType {
+		case "", "application/octet-stream":
+			return &uploadPart{Part: part, size: size, sha256: digest, hasher: sha256.New(), last: last, nextPart: reader.NextPart}, nil
+		case DeltaMediaType:
+			basis, basisNode, err := openBasis()
+			if err != nil {
+				return nil, errors.Join(errInvalidUpload, err)
+			}
+			if basisNode.Kind != model.File {
+				return nil, fmt.Errorf("%w: delta basis is not a file", errInvalidUpload)
+			}
+			encoded := &deltaUploadPart{Part: part, last: last, nextPart: reader.NextPart}
+			decoded, err := newDeltaUploadPart(r.Context(), basis, basisNode.Size, size, digest, encoded)
+			if err != nil {
+				return nil, errors.Join(errInvalidUpload, err)
+			}
+			return decoded, nil
+		default:
+			return nil, fmt.Errorf("%w: unsupported file encoding %q", errInvalidUpload, mediaType)
+		}
 	}
-	commit, err := s.service.Apply(r.Context(), request, openFile)
+	commit, err := s.service.ApplyWithBasis(r.Context(), request, openFile)
 	if err != nil {
 		writeServiceError(w, err)
 		return

@@ -15,7 +15,7 @@ import (
 // OpenArchivedFile loads only the directory records on path from an archived
 // tree, then opens the selected native file object. Directory records outside
 // that ancestor chain are not read or validated.
-func (o *Objects) OpenArchivedFile(ctx context.Context, format string, rootBytes []byte, readDirectory func(context.Context, string) ([]byte, error), path model.Path) (io.ReadCloser, Node, error) {
+func (o *Objects) OpenArchivedFile(ctx context.Context, format string, rootBytes []byte, readDirectory func(context.Context, string) ([]byte, error), path model.Path) (io.ReadSeekCloser, Node, error) {
 	if o == nil || o.repo == nil {
 		return nil, Node{}, fmt.Errorf("nil Kopia objects adapter")
 	}
@@ -90,7 +90,7 @@ func (o *Objects) OpenArchivedFile(ctx context.Context, format string, rootBytes
 			}
 		}
 		if child == nil {
-			return nil, Node{}, fmt.Errorf("%w: %q", ErrPathNotFound, path)
+			return nil, Node{Path: path, Kind: model.Absent}, fmt.Errorf("%w: %q", ErrPathNotFound, path)
 		}
 		if index != len(parts)-1 {
 			if child.Type != snapshot.EntryTypeDirectory {
@@ -100,14 +100,14 @@ func (o *Objects) OpenArchivedFile(ctx context.Context, format string, rootBytes
 			continue
 		}
 		if child.Type != snapshot.EntryTypeFile {
-			return nil, Node{}, fmt.Errorf("%w: %q", ErrPathNotFile, path)
+			return nil, Node{Path: path, Kind: model.Directory}, fmt.Errorf("%w: %q", ErrPathNotFile, path)
 		}
 		return o.openArchivedFileObject(ctx, path, child)
 	}
 	return nil, Node{}, fmt.Errorf("%w: %q", ErrPathNotFound, path)
 }
 
-func (o *Objects) openArchivedFileObject(ctx context.Context, path model.Path, entry *snapshot.DirEntry) (io.ReadCloser, Node, error) {
+func (o *Objects) openArchivedFileObject(ctx context.Context, path model.Path, entry *snapshot.DirEntry) (io.ReadSeekCloser, Node, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, Node{}, err
 	}

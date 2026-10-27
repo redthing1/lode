@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"sort"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	kopiaengine "github.com/redthing1/lode/internal/engine/kopia"
 	"github.com/redthing1/lode/internal/model"
 	"github.com/redthing1/lode/internal/project"
+	"github.com/redthing1/lode/internal/transfer"
 )
 
 var ErrRemote = errors.New("remote project service error")
@@ -53,6 +55,8 @@ func NewClient(baseURL, token string) (*Client, error) {
 		base: u, token: token,
 		http: &http.Client{
 			Transport: &http.Transport{
+				// A streaming upload requests each file signature on another
+				// connection or stream. Keep per-host connections unrestricted.
 				Proxy:               nil,
 				IdleConnTimeout:     60 * time.Second,
 				TLSHandshakeTimeout: 10 * time.Second,
@@ -264,13 +268,26 @@ func (c *Client) Apply(ctx context.Context, request project.ChangeRequest, openF
 	if err != nil {
 		return project.Commit{}, err
 	}
+	var signature fileSignature
+	if includeFiles && hasDeltaCandidate(request) {
+		operation, supported, err := c.prepareTransfer(ctx, request, manifest)
+		if err != nil {
+			return project.Commit{}, err
+		}
+		if supported {
+			includeFiles = operation.State == project.OperationCapturing
+			signature = func(ctx context.Context, change project.Change) (project.FileSignature, error) {
+				return c.fileSignature(ctx, request, change)
+			}
+		}
+	}
 
 	var body io.ReadCloser
 	var contentType string
 	var writerDone <-chan error
 	var cancelWriter func()
 	if includeFiles && fileCount != 0 {
-		body, contentType, writerDone, cancelWriter = streamMultipart(ctx, manifest, request.Changes, openFile)
+		body, contentType, writerDone, cancelWriter = streamMultipartFiles(ctx, manifest, request.Changes, openFile, signature)
 	} else {
 		var buffer bytes.Buffer
 		writer := multipart.NewWriter(&buffer)
@@ -323,11 +340,19 @@ func (c *Client) Apply(ctx context.Context, request project.ChangeRequest, openF
 }
 
 func streamMultipart(ctx context.Context, manifest []byte, changes []project.Change, openFile func(model.Path) (io.ReadCloser, error)) (io.ReadCloser, string, <-chan error, func()) {
+	return streamMultipartFiles(ctx, manifest, changes, openFile, nil)
+}
+
+type fileSignature func(context.Context, project.Change) (project.FileSignature, error)
+
+func streamMultipartFiles(ctx context.Context, manifest []byte, changes []project.Change, openFile func(model.Path) (io.ReadCloser, error), signature fileSignature) (io.ReadCloser, string, <-chan error, func()) {
+	ctx, cancelContext := context.WithCancel(ctx)
 	reader, writerPipe := io.Pipe()
 	writer := multipart.NewWriter(writerPipe)
 	done := make(chan error, 1)
 	state := &streamState{reader: reader, writer: writerPipe}
 	go func() {
+		defer cancelContext()
 		fail := func(err error) { _ = writerPipe.CloseWithError(err); done <- err }
 		manifestPart, err := writer.CreateFormField("manifest")
 		if err != nil {
@@ -348,6 +373,18 @@ func streamMultipart(ctx context.Context, manifest []byte, changes []project.Cha
 				fail(err)
 				return
 			}
+			var basis project.FileSignature
+			if signature != nil && change.Size >= project.MinDeltaFileSize {
+				basis, err = signature(ctx, change)
+				if err != nil {
+					fail(err)
+					return
+				}
+			}
+			if err := ctx.Err(); err != nil {
+				fail(err)
+				return
+			}
 			file, err := openFile(path)
 			if err != nil {
 				if file != nil {
@@ -362,25 +399,37 @@ func streamMultipart(ctx context.Context, manifest []byte, changes []project.Cha
 				fail(errors.New("transport: file opener returned nil reader"))
 				return
 			}
-			state.setActive(file)
-			part, err := writer.CreateFormFile("file:"+strconv.Itoa(fileIndex), "data")
+			if err := state.setActive(file); err != nil {
+				fail(err)
+				return
+			}
+			mediaType := "application/octet-stream"
+			if len(basis.Data) != 0 {
+				mediaType = DeltaMediaType
+			}
+			header := make(textproto.MIMEHeader)
+			header.Set("Content-Disposition", `form-data; name="file:`+strconv.Itoa(fileIndex)+`"; filename="data"`)
+			header.Set("Content-Type", mediaType)
+			part, err := writer.CreatePart(header)
 			if err != nil {
 				state.closeActive()
 				fail(err)
 				return
 			}
-			copied, copyErr := io.CopyN(part, &contextReader{ctx: ctx, reader: file}, change.Size+1)
-			closeErr := state.closeActive()
-			if copyErr != nil && !(errors.Is(copyErr, io.EOF) && copied == change.Size) {
-				fail(errors.Join(copyErr, closeErr))
-				return
+			var copyErr error
+			if len(basis.Data) != 0 {
+				copyErr = transfer.Delta(ctx, basis.Data, basis.Basis.Size, change.Size, file, part)
+			} else {
+				var copied int64
+				copied, copyErr = io.CopyN(part, &contextReader{ctx: ctx, reader: file}, change.Size+1)
+				if errors.Is(copyErr, io.EOF) && copied == change.Size {
+					copyErr = nil
+				} else if copyErr == nil {
+					copyErr = fmt.Errorf("transport: file %q size differs from manifest", change.Path)
+				}
 			}
-			if copied != change.Size {
-				fail(errors.Join(fmt.Errorf("transport: file %q size differs from manifest", change.Path), closeErr))
-				return
-			}
-			if closeErr != nil {
-				fail(closeErr)
+			if err := errors.Join(copyErr, state.closeActive()); err != nil {
+				fail(err)
 				return
 			}
 			fileIndex++
@@ -392,7 +441,12 @@ func streamMultipart(ctx context.Context, manifest []byte, changes []project.Cha
 		_ = writerPipe.Close()
 		done <- nil
 	}()
-	return reader, writer.FormDataContentType(), done, func() { state.cancel() }
+	return reader, writer.FormDataContentType(), done, func() {
+		// The body producer can be waiting on a signature request as well as a
+		// source read. Stop both before the caller waits for writer completion.
+		cancelContext()
+		state.cancel()
+	}
 }
 
 type contextReader struct {
@@ -408,13 +462,23 @@ func (r *contextReader) Read(p []byte) (int, error) {
 }
 
 type streamState struct {
-	mu     sync.Mutex
-	reader *io.PipeReader
-	writer *io.PipeWriter
-	active io.ReadCloser
+	mu       sync.Mutex
+	reader   *io.PipeReader
+	writer   *io.PipeWriter
+	active   io.ReadCloser
+	canceled bool
 }
 
-func (s *streamState) setActive(reader io.ReadCloser) { s.mu.Lock(); s.active = reader; s.mu.Unlock() }
+func (s *streamState) setActive(reader io.ReadCloser) error {
+	s.mu.Lock()
+	if s.canceled {
+		s.mu.Unlock()
+		return errors.Join(context.Canceled, reader.Close())
+	}
+	s.active = reader
+	s.mu.Unlock()
+	return nil
+}
 func (s *streamState) closeActive() error {
 	s.mu.Lock()
 	active := s.active
@@ -426,6 +490,9 @@ func (s *streamState) closeActive() error {
 	return nil
 }
 func (s *streamState) cancel() {
+	s.mu.Lock()
+	s.canceled = true
+	s.mu.Unlock()
 	_ = s.reader.CloseWithError(io.ErrClosedPipe)
 	_ = s.writer.CloseWithError(io.ErrClosedPipe)
 	_ = s.closeActive()

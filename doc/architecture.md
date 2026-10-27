@@ -29,6 +29,8 @@ The CLI presents application operations. The project service owns shared state; 
 
 The current implementation uses a project-scoped HTTP API, SQLite for history and operation records, and upstream Kopia for stored contents. Clients receive selected entry metadata and requested files; native storage credentials and indexes stay on the server. File size and SHA-256 bind transferred bytes to their intended contents.
 
+Large changed files can stream rsync deltas against the immutable base protected by their prepared publication. Clients request one bounded signature at a time and retain no patch files. The server reconstructs and verifies complete files before acceptance; transport encoding does not change commit or retry identity. Full uploads remain available for files without a usable base and servers without delta support.
+
 ## Publication and retention
 
 Publication protects the complete candidate's contents before accepting a branch update. An expected-tip check prevents stale work from silently replacing intervening changes. Retrying an accepted operation returns the same result.

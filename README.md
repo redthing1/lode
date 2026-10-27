@@ -51,6 +51,8 @@ Create a workspace containing only a selected path:
 
 Repeat `--select` to include additional paths; omitting it selects the whole project. Commits preserve unselected server contents and reject a stale branch base. Working folders store selected files and local metadata, without a repository-wide content cache.
 
+Changed large files use streamed deltas against their retained base when available. New files and older servers use full uploads. Delta transfer still reads the complete changed file; rewritten or recompressed contents may offer little network saving. The server verifies each reconstructed file before accepting the commit.
+
 Update a workspace, manage branches, or change its selection:
 
 ```sh

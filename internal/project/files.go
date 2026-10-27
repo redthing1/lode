@@ -33,33 +33,26 @@ func ValidateChanges(request ChangeRequest) error {
 // complete candidate on the server; unmentioned paths retain their base entries.
 // File readers are requested in canonical path order and always closed.
 func (s *Service) Apply(ctx context.Context, request ChangeRequest, openFile func(model.Path) (io.ReadCloser, error)) (Commit, error) {
+	return s.ApplyWithBasis(ctx, request, func(path model.Path, _ BasisOpener) (io.ReadCloser, error) {
+		if openFile == nil {
+			return nil, errors.New("file upload reader is missing")
+		}
+		return openFile(path)
+	})
+}
+
+// BasisOpener opens the sealed base's file at the current changed path. It is
+// valid only inside the synchronous capture callback. The service closes the
+// basis together with the returned input, including failed reconstruction.
+type BasisOpener func() (io.ReadSeekCloser, Node, error)
+
+// ApplyWithBasis accepts reconstructed whole-file inputs. A transfer decoder
+// can request the exact immutable base while Apply owns the mutation gate;
+// it must not call public service methods that acquire the same gate.
+func (s *Service) ApplyWithBasis(ctx context.Context, request ChangeRequest, openFile func(model.Path, BasisOpener) (io.ReadCloser, error)) (Commit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed.Load() {
-		return Commit{}, ErrServiceClosed
-	}
-	if s.objects == nil {
-		return Commit{}, errors.New("project content IO is not configured")
-	}
-	request, changes, err := normalizeChanges(request)
-	if err != nil {
-		return Commit{}, err
-	}
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		return Commit{}, err
-	}
-	digest := sha256.Sum256(append([]byte("lode-sparse-capture-v1\x00"), encoded...))
-	now := s.now().UTC()
-	record, err := s.metadata.prepareCapture(ctx, publicationRecord{
-		ID: request.OperationID, Fingerprint: hex.EncodeToString(digest[:]), CaptureInput: encoded,
-		Input:    publicationInput{Branch: request.Branch, Base: request.Base, Author: request.Author, Message: request.Message},
-		CommitID: newID(), CreatedAt: now, ExpiresAt: now.Add(s.ttl), State: OperationCapturing,
-	})
-	if err != nil {
-		return Commit{}, err
-	}
-	record, err = s.metadata.checkCapture(ctx, record.ID, s.now().UTC())
+	request, changes, record, err := s.prepareChangesLocked(ctx, request)
 	if err != nil {
 		return Commit{}, err
 	}
@@ -102,11 +95,47 @@ func (s *Service) Apply(ctx context.Context, request ChangeRequest, openFile fun
 		if openFile == nil {
 			return nil, errors.New("file upload reader is missing")
 		}
-		reader, err := openFile(path)
-		if err == nil {
-			remaining -= sizes[path]
+		var basis io.ReadSeekCloser
+		openBasis := func() (io.ReadSeekCloser, Node, error) {
+			if basis != nil {
+				return nil, Node{}, errors.New("capture basis is already open")
+			}
+			if base == nil {
+				return nil, Node{}, kopia.ErrPathNotFound
+			}
+			reader, entry, err := s.objects.OpenArchivedFile(ctx, base.Format, base.Root, func(ctx context.Context, id string) ([]byte, error) {
+				data, found := base.Directories[id]
+				if !found {
+					return nil, ErrMetadataNotFound
+				}
+				return data, ctx.Err()
+			}, path)
+			if err != nil {
+				return nil, Node{}, err
+			}
+			node, err := s.node(ctx, entry)
+			if err != nil {
+				_ = reader.Close()
+				return nil, Node{}, err
+			}
+			basis = reader
+			return reader, node, nil
 		}
-		return reader, err
+		reader, err := openFile(path, openBasis)
+		if err != nil || reader == nil {
+			if reader != nil {
+				err = errors.Join(err, reader.Close())
+			}
+			if basis != nil {
+				err = errors.Join(err, basis.Close())
+			}
+			if err == nil {
+				err = errors.New("file upload reader is missing")
+			}
+			return nil, err
+		}
+		remaining -= sizes[path]
+		return &captureFile{ReadCloser: reader, basis: basis}, nil
 	}
 	archive, facts, err := s.objects.Build(ctx, base, changes, guardedOpen)
 	if err != nil {
@@ -124,6 +153,54 @@ func (s *Service) Apply(ctx context.Context, request ChangeRequest, openFile fun
 		return Commit{}, err
 	}
 	return s.resume(ctx, record)
+}
+
+type captureFile struct {
+	io.ReadCloser
+	basis  io.Closer
+	closed bool
+	err    error
+}
+
+func (r *captureFile) Close() error {
+	if !r.closed {
+		r.closed = true
+		r.err = r.ReadCloser.Close()
+		if r.basis != nil {
+			r.err = errors.Join(r.err, r.basis.Close())
+		}
+	}
+	return r.err
+}
+
+// prepareChangesLocked seals semantic inputs independently of their transfer
+// encoding. Both preparation and actual capture recheck the durable outcome.
+func (s *Service) prepareChangesLocked(ctx context.Context, request ChangeRequest) (ChangeRequest, []kopia.Change, publicationRecord, error) {
+	if s.closed.Load() {
+		return ChangeRequest{}, nil, publicationRecord{}, ErrServiceClosed
+	}
+	if s.objects == nil {
+		return ChangeRequest{}, nil, publicationRecord{}, errors.New("project content IO is not configured")
+	}
+	request, changes, err := normalizeChanges(request)
+	if err != nil {
+		return request, nil, publicationRecord{}, err
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return request, nil, publicationRecord{}, err
+	}
+	digest := sha256.Sum256(append([]byte("lode-sparse-capture-v1\x00"), encoded...))
+	now := s.now().UTC()
+	record, err := s.metadata.prepareCapture(ctx, publicationRecord{
+		ID: request.OperationID, Fingerprint: hex.EncodeToString(digest[:]), CaptureInput: encoded,
+		Input:    publicationInput{Branch: request.Branch, Base: request.Base, Author: request.Author, Message: request.Message},
+		CommitID: newID(), CreatedAt: now, ExpiresAt: now.Add(s.ttl), State: OperationCapturing,
+	})
+	if err == nil {
+		record, err = s.metadata.checkCapture(ctx, record.ID, s.now().UTC())
+	}
+	return request, changes, record, err
 }
 
 func normalizeChanges(request ChangeRequest) (ChangeRequest, []kopia.Change, error) {

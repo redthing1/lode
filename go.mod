@@ -3,6 +3,7 @@ module github.com/redthing1/lode
 go 1.27.2
 
 require (
+	github.com/balena-os/librsync-go v0.9.0
 	github.com/gofrs/flock v0.13.0
 	github.com/kopia/kopia v0.23.1
 	golang.org/x/sys v0.49.0
@@ -13,6 +14,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.22.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.7.0 // indirect
+	github.com/balena-os/circbuf v0.1.3 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chmduquesne/rollinghash v4.0.0+incompatible // indirect
