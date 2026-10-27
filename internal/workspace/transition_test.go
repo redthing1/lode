@@ -56,6 +56,15 @@ func transitionJournal(t *testing.T, dir string) transition {
 	if err := json.Unmarshal(b, &p); err != nil {
 		t.Fatal(err)
 	}
+	progress, err := os.ReadFile(filepath.Join(dir, ".lode", "transition-progress.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cursor transitionProgress
+	if err := json.Unmarshal(progress, &cursor); err != nil {
+		t.Fatal(err)
+	}
+	p.Next, p.Cancelled = cursor.Next, cursor.Cancelled
 	return p
 }
 
@@ -519,6 +528,89 @@ func TestTransitionResumeCompletesAndCancelRestores(t *testing.T) {
 	}
 }
 
+func TestTransitionPlanWithoutProgressRefusesResume(t *testing.T) {
+	_, _, localDir, w := makeTransitionPair(t, map[string][]byte{"a": []byte("original")}, nil)
+	plan := transition{Target: w.state}
+	if err := w.store("transition.json", plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Resume(context.Background()); err == nil {
+		t.Fatal("resume accepted a plan with missing progress")
+	}
+	if got := string(read(t, localDir, "a")); got != "original" {
+		t.Fatalf("resume mutated file: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(localDir, ".lode", "transition.json")); err != nil {
+		t.Fatalf("plan was removed: %v", err)
+	}
+}
+
+func TestOrphanTransitionProgressIsOverwrittenByNextOperation(t *testing.T) {
+	_, sourceDir, _, w := makeTransitionPair(t, map[string][]byte{"a": []byte("one")}, nil)
+	write(t, sourceDir, "a", []byte("two"))
+	publishWorkspace(t, sourceDir)
+	if err := w.Update(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	orphan := transitionProgress{Next: 999, Cancelled: true}
+	if err := w.store("transition-progress.json", orphan); err != nil {
+		t.Fatal(err)
+	}
+	write(t, sourceDir, "a", []byte("three"))
+	publishWorkspace(t, sourceDir)
+	if err := w.Update(context.Background(), nil); err != nil {
+		t.Fatalf("next transition was affected by orphan progress: %v", err)
+	}
+}
+
+func TestResumeUsesCommittedCursorToFinishCleanup(t *testing.T) {
+	_, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"a": []byte("old")}, nil)
+	write(t, sourceDir, "a", []byte("new"))
+	publishWorkspace(t, sourceDir)
+	client, err := w.client()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := w.state
+	target.Base, err = client.Head(context.Background(), target.Branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target.Baseline, err = client.Entries(context.Background(), target.Base, target.Selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := model.Diff(w.state.Baseline, target.Baseline)
+	if err := w.root.Mkdir(".lode/transition", 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.root.Rename("a", recoveryName(0, "old")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, localDir, "a", []byte("new"))
+	plan := transition{Target: target, Changes: changes, Next: len(changes)}
+	if err := w.storeTransitionProgress(&plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.store("transition.json", plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Resume(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.state.Base != target.Base {
+		t.Fatal("resume did not apply committed target state")
+	}
+	if got := string(read(t, localDir, "a")); got != "new" {
+		t.Fatalf("installed contents = %q", got)
+	}
+	for _, name := range []string{"transition.json", "transition-progress.json", "transition"} {
+		if _, err := os.Stat(filepath.Join(localDir, ".lode", name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("recovery artifact %s remains: %v", name, err)
+		}
+	}
+}
+
 func TestCancelPreservesLaterEditUntilMovedAside(t *testing.T) {
 	var failB atomic.Bool
 	s := newWorkspaceServer(t, func(next http.Handler) http.Handler {
@@ -609,6 +701,9 @@ func TestTransitionResumePreservesEditMadeAfterInstallBeforeProgress(t *testing.
 		t.Fatal(err)
 	}
 	plan := transition{Target: target, Changes: changes, Next: 0}
+	if err := w.storeTransitionProgress(&plan); err != nil {
+		t.Fatal(err)
+	}
 	if err := w.store("transition.json", plan); err != nil {
 		t.Fatal(err)
 	}

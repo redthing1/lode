@@ -17,9 +17,31 @@ import (
 type transition struct {
 	Target    State          `json:"target"`
 	Changes   []model.Change `json:"changes"`
-	Next      int            `json:"next"`
-	Cancelled bool           `json:"cancelled"`
+	Next      int            `json:"-"`
+	Cancelled bool           `json:"-"`
 	Source    string         `json:"source,omitempty"`
+}
+
+type transitionProgress struct {
+	Next      int  `json:"next"`
+	Cancelled bool `json:"cancelled"`
+}
+
+func (w *Workspace) loadTransition() (transition, error) {
+	var p transition
+	if err := w.load("transition.json", &p); err != nil {
+		return p, err
+	}
+	var progress transitionProgress
+	if err := w.load("transition-progress.json", &progress); err != nil {
+		return p, fmt.Errorf("load transition progress: %w", err)
+	}
+	p.Next, p.Cancelled = progress.Next, progress.Cancelled
+	return p, nil
+}
+
+func (w *Workspace) storeTransitionProgress(p *transition) error {
+	return w.store("transition-progress.json", transitionProgress{Next: p.Next, Cancelled: p.Cancelled})
 }
 
 func recoveryName(i int, suffix string) string {
@@ -61,7 +83,7 @@ func (w *Workspace) runTransition(ctx context.Context, p *transition) error {
 				return err
 			}
 			p.Next--
-			if err := w.store("transition.json", p); err != nil {
+			if err := w.storeTransitionProgress(p); err != nil {
 				return err
 			}
 		}
@@ -75,7 +97,7 @@ func (w *Workspace) runTransition(ctx context.Context, p *transition) error {
 				return err
 			}
 			p.Next++
-			if err := w.store("transition.json", p); err != nil {
+			if err := w.storeTransitionProgress(p); err != nil {
 				return err
 			}
 		}
@@ -87,12 +109,15 @@ func (w *Workspace) runTransition(ctx context.Context, p *transition) error {
 	if err := w.cleanTransition(p); err != nil {
 		return err
 	}
-	return w.remove("transition.json")
+	if err := w.remove("transition.json"); err != nil {
+		return err
+	}
+	return w.remove("transition-progress.json")
 }
 
 func (w *Workspace) cancelTransition(ctx context.Context) error {
-	var p transition
-	if err := w.load("transition.json", &p); err != nil {
+	p, err := w.loadTransition()
+	if err != nil {
 		return err
 	}
 	if !p.Cancelled {
@@ -101,7 +126,7 @@ func (w *Workspace) cancelTransition(ctx context.Context) error {
 		}
 		p.Cancelled = true
 		p.Next++ // The active action may already have moved or installed a file.
-		if err := w.store("transition.json", p); err != nil {
+		if err := w.storeTransitionProgress(&p); err != nil {
 			return err
 		}
 	}
@@ -302,19 +327,21 @@ func (w *Workspace) cleanTransition(p *transition) error {
 				return err
 			}
 			if suffix != "part" {
-				actual, err := w.identity(name, c.After.Path)
-				if err != nil {
-					return err
-				}
-				expected := c.After
-				if suffix == "old" {
-					expected = c.Before
-				}
 				// An extra hard link means removing this private name cannot
 				// remove the only named copy of a user's subsequent edit.
 				linked := suffix != "old" && info.Mode().IsRegular() && info.Sys().(*syscall.Stat_t).Nlink > 1
-				if actual != expected && !linked {
-					return fmt.Errorf("changed contents preserved at %s; move them aside before resuming cleanup", name)
+				if !linked {
+					actual, err := w.identity(name, c.After.Path)
+					if err != nil {
+						return err
+					}
+					expected := c.After
+					if suffix == "old" {
+						expected = c.Before
+					}
+					if actual != expected {
+						return fmt.Errorf("changed contents preserved at %s; move them aside before resuming cleanup", name)
+					}
 				}
 				if info.IsDir() {
 					if err := w.emptyDirectory(name); err != nil {

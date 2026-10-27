@@ -26,6 +26,7 @@ const usage = `Lode — version large binary projects
 Usage: lode [-C workspace] COMMAND [options]
 
   init DIR                     Create a server project; print its access token
+  backup SOURCE DEST           Copy a stopped project; use the copy to restore
   serve [-listen HOST:PORT] DIR Serve a project on a loopback address
   attach [-include PATH] URL [DIR]  Track a folder in an empty project
   clone [-include PATH] URL DIR    Download a selected workspace
@@ -141,7 +142,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		flags.StringVar(&applyToken, "apply", "", "apply the supplied preview token")
 	case "restore":
 		flags.BoolVar(&force, "force", false, "discard local changes in restored paths")
-	case "init", "status", "resume", "cancel", "collect":
+	case "init", "status", "resume", "cancel", "collect", "backup":
 	default:
 		return fmt.Errorf("unknown command %q; use lode help", command)
 	}
@@ -152,6 +153,16 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	args = flags.Args()
+	if command == "backup" {
+		if len(args) != 2 {
+			return errors.New("usage: lode backup SOURCE DEST")
+		}
+		if err := project.Backup(ctx, args[0], args[1]); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Backup created: %s\n", args[1])
+		return nil
+	}
 	if emptySelection && len(selection) > 0 {
 		return errors.New("-none cannot be combined with selection rules")
 	}

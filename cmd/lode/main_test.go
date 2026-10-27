@@ -64,6 +64,28 @@ func TestBranchAndSwitchCLIWorkflow(t *testing.T) {
 	}
 }
 
+func TestBackupCLIIsAvailableOutsideAWorkspace(t *testing.T) {
+	ctx := context.Background()
+	// The -C directory need not exist: backup is a project-level operation.
+	dir := filepath.Join(t.TempDir(), "not-a-workspace")
+	var out, diagnostics bytes.Buffer
+	destination := filepath.Join(t.TempDir(), "backup")
+	source := filepath.Join(t.TempDir(), "source")
+	p, err := project.Create(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(ctx, []string{"-C", dir, "backup", source, destination}, &out, &diagnostics); err != nil {
+		t.Fatalf("backup CLI: %v (diagnostics %s)", err, diagnostics.String())
+	}
+	if !strings.Contains(out.String(), "Backup created:") {
+		t.Fatalf("backup output = %q", out.String())
+	}
+}
+
 func TestTagAndCleanupPreviewCLI(t *testing.T) {
 	ctx := context.Background()
 	p, err := project.Create(ctx, filepath.Join(t.TempDir(), "server"))

@@ -279,6 +279,11 @@ func (w *Workspace) applyView(ctx context.Context, target State, local, merged [
 		return err
 	}
 	plan := transition{Target: target, Changes: changes, Source: source}
+	// Initialize progress before the immutable plan. A crash here leaves only
+	// harmless orphan progress; a plan is never authoritative without it.
+	if err := w.storeTransitionProgress(&plan); err != nil {
+		return err
+	}
 	if err := w.store("transition.json", plan); err != nil {
 		return err
 	}

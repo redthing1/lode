@@ -301,8 +301,8 @@ func (w *Workspace) Resume(ctx context.Context) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	var plan transition
-	if err := w.load("transition.json", &plan); err != nil {
+	plan, err := w.loadTransition()
+	if err != nil {
 		return err
 	}
 	return w.runTransition(ctx, &plan)
