@@ -1,81 +1,71 @@
 # Architecture
 
-Lode is one Go module and executable. The server owns shared history and content protection. A workspace owns selected local files, its baseline, and any unfinished operation.
+Lode is one Go module and executable. The project service owns shared history and retention. A workspace owns selected local files, its baseline, and unfinished work. SQLite stores application facts; Kopia represents and collects content; librsync transforms transfer bytes.
 
 | Package | Responsibility |
 | --- | --- |
-| `model` | Pure path, selection, entry, comparison and whole-entry merge rules |
+| `model` | Pure path, selection, entry, comparison, and whole-entry merge rules |
 | `project` | Publication, SQLite history, references, and retention authority |
-| `content` | Kopia objects, snapshot roots, retrieval, release, and collection |
-| `transfer` | Bounded streaming signature, delta and patch calls to librsync |
-| `remote` | Authenticated HTTP requests and streamed file transfers |
+| `content` | Kopia objects, protected snapshot roots, retrieval, release, and collection |
+| `transfer` | Bounded streaming signature, delta, and patch calls to librsync |
+| `remote` | Authenticated HTTP operations and streamed file transfers |
 | `workspace` | Local observation, selected transitions, baseline, and recovery |
-| `cmd/lode` | CLI and server lifecycle |
+| `cmd/lode` | CLI presentation and server lifecycle |
 
-These are concrete components. The project service owns decisions; the content adapter supplies native storage operations.
+## Versions and presence
 
-## Versions and selection
+Every version describes a complete directory tree. Workspace selection controls local presence, while retention controls downloadable contents. Saving exact path changes preserves omitted entries. Directory deletion cannot implicitly erase unseen descendants; failed observation cannot become an inferred deletion.
 
-A version describes a complete directory tree. A workspace's selection controls local presence, not the completeness of its saved version. Saving exact path changes preserves omitted entries. Removing a directory cannot implicitly delete unseen descendants. Unreadable selected paths fail observation rather than becoming deletions.
+Five SQLite tables hold commits, path changes/checkpoints, branches, tags, and operation outcomes. Path changes are relative to the first parent, with a full checkpoint every 64 steps. Selected reads use indexed exact-path and descendant-range queries, replay at most 63 changesets, deduplicate overlapping prefixes, and apply exclusions. Logical metadata survives payload expiry.
 
-SQLite stores per-path changes with a complete checkpoint every 64 first-parent steps. Selected reads use indexed equality and descendant-range searches for each included prefix and replay at most 63 changesets. Overlapping prefixes are deduplicated and exclusion rules filter the result. Native object references remain on the server. Kopia represents and protects the complete content tree; it does not decide whether a branch may advance.
+Branches name versions without copying contents. Tags protect versions. Reference changes are serialized; deletion checks the expected target, and new targets require retained contents.
 
-Branches name versions; creating a branch copies no contents. Tags protect named versions. Reference changes are serialized, deletion checks the expected target, and new targets require retained contents. Logical history, content availability, and workspace presence remain separate concepts.
-
-Merges compare complete logical trees on the server and follow both parents to find common ancestors. Ambiguous best bases require an explicit common ancestor. Whole-entry choices select files or entire subtrees; selected native objects are reused from the parents. Every published merge records both parents, except a merge into an empty branch, whose sole parent is the source. A source already in the destination's ancestry produces no version.
+Merges compare complete logical trees, follow both parents for ancestry, and require an explicit choice among ambiguous best bases. Whole-file/subtree choices reuse native objects from the selected parents. Published merges record both parents; merging into an empty branch records only the source parent. Already-merged sources create no version.
 
 ## Publication
 
-1. The workspace records an operation ID, expected branch tip, changes, and file size/SHA-256 identities before uploading.
-2. The service durably binds the operation ID to that request's fingerprint and checks the branch tip.
-3. Kopia captures changed contents, reuses omitted contents, and flushes a protected complete snapshot tagged with the operation ID.
-4. One SQLite transaction records the version, advances the branch conditionally, and records acceptance. The operation ID is also the version ID.
-5. The workspace updates its selected baseline without rewriting local files.
+1. The workspace durably records an operation ID, expected branch tip, changes, and file size/SHA-256 identities.
+2. The service binds the operation ID to the request fingerprint and checks the branch tip.
+3. Kopia captures changed bytes, reuses omitted contents, and flushes a protected complete snapshot labelled with the operation ID.
+4. One SQLite transaction records the version, conditionally advances the branch, and records acceptance. The operation ID is also the version ID.
+5. The workspace advances its selected baseline without rewriting local files.
 
-Merges use the same publication path with immutable source and destination versions and explicit choices. They upload no file contents. Acceptance changes shared history; the workspace keeps its baseline and files until a separate update. This separates publication recovery from local mutation.
+Merge uses this same publication path with immutable parents and explicit choices; it uploads no contents. The workspace remains unchanged until a separate update.
 
-Retries resolve the original outcome. Accepted, stale, unchanged, and cancelled operations keep their decisions. Reusing an operation ID for another intent fails. Cancellation also blocks a request that has not yet arrived.
+Retries resolve the original outcome. Accepted, stale, unchanged, and cancelled decisions remain stable; an ID cannot be reused for another intent. Cancellation also prevents a request that has not arrived yet. Startup checks retained protection and releases unaccepted or expired roots. It never promotes an unfinished capture into history. Uncertain SQLite acceptance leaves protection intact until the outcome is resolved.
 
-Startup checks retained snapshot protection and releases unaccepted or expired roots. It never promotes an unfinished capture into history. An uncertain SQLite acceptance error leaves protection intact until the database outcome is resolved.
+## Local transitions
+
+Clone, update, switch, selection changes, and restore share one planner/executor/canceller. Comparison uses baseline, observed, and target entries. Independent edits survive; conflicts require whole-entry choices. Dirty unloading and unmatched explicit restore paths fail before mutation. Nonempty selection changes cannot empty a populated workspace without matching any remote or local entries.
+
+The immutable plan stores the target baseline, ordered before/after changes, and a historical content source when it differs from the baseline. A separate small progress record stores the cursor and cancellation direction. Local process locking excludes concurrent workspace commands.
+
+Each action verifies staged bytes, preserves the previous entry, and installs without replacing an unexpected path. Children leave before parent type changes; new parents arrive before children. Physical unselected contents remain protected, and directory removal requires emptiness.
+
+Progress is durable before the plan appears. The cursor advances only after the action is synchronized. Reaching the end durably commits the transition; the target baseline is installed before recovery contents are cleaned up. Cleanup removes the plan before progress. Orphan progress is replaced before a new plan.
+
+Before commitment, cancellation reverses actions and restores originals without replacing newer edits. Preserved/staged entries identify interrupted actions. Unexpected recovery contents remain available and are reported. After commitment, resume finishes cleanup. Initial clone starts from a valid empty-selection workspace; metadata-only changes need only an atomic baseline update.
+
+Hashing observes cancellation between reads; mutation boundaries preserve synchronization ordering. External writers must stop during these operations. Save recovery resolves its original request, leaving later file edits visible against the accepted baseline.
 
 ## Retention and collection
 
-Cleanup protects branch tips, tags and a requested number of first-parent versions per branch. Preview reports compact version identities, timestamps, availability and counts of each protection reason. Commit messages and reference-name lists are not needed to compute or transmit that decision. Its token binds the count, immutable version identities and current references. Apply recomputes that decision under the exclusive project gate and rejects a changed token. Availability is excluded from the token, so repeating the same expiry decision is idempotent.
+Cleanup protects branch tips, tags, and the requested recent first-parent history. Its preview token binds the count, version identities, and references. Apply recomputes the decision under the exclusive project gate. Availability is excluded from the token, making repeated expiry safe while history and references match.
 
-One SQLite transaction clears the native root reference of each eligible version. An empty root is the durable payload-availability fact; logical entries, parents and publication outcomes remain. Native manifests are released by collection or startup reconciliation only after that decision. Interrupted cleanup can leave extra protection temporarily, but cannot release contents still promised by SQLite.
+One SQLite transaction clears eligible commit root references. An empty root is the payload-expiry fact; parents, comparison metadata, and operation outcomes remain. Reconciliation releases native manifests only after that decision. Interruption may leave extra protection, never permission to remove promised contents.
 
-Reads check availability and hold the shared gate for their full stream. Publication, reference changes, expiry and collection use its exclusive side. Merges require retained parent payloads while common-ancestor comparison uses logical metadata even after expiry. An idle workspace base has no retention lease; its local baseline supports comparison and update. A multi-file transition can encounter expiry between reads and remains cancellable.
+Reads check availability and hold shared protection for their entire stream. Publication, references, expiry, and collection take the exclusive gate. Merges need retained parent contents, but can compare an expired ancestor's metadata. Idle clients hold no retention lease.
 
-The content adapter invokes Kopia's ordinary full snapshot garbage collection and maintenance with its standard safety delays. Kopia owns reachability, pack rewriting, deletion and maintenance state. Lode reports physical blob totals before and after the request; a successful request does not promise immediate reclamation. There is no separate pack ledger or collection scheduler.
+Kopia's ordinary full maintenance owns reachability, rewriting, deletion, and maintenance state, with standard safety delays. Lode measures repository bytes before and after collection; it maintains no parallel pack ledger or scheduler.
 
-## Local recovery
+## IO boundaries
 
-A workspace holds one unfinished save or local transition. Local process locking prevents concurrent commands from changing its state. State files are synchronized and replaced atomically.
+A project ownership lock excludes a second service. SQLite transactions and synchronized workspace state files record application decisions. Kopia synchronizes blob contents; the filesystem adapter also synchronizes affected directory chains. These contracts require local filesystems that honor synchronization.
 
-Checkout, update, switch, selection changes and historical restore use one transition mechanism. Planning compares baseline, observed and target entries. Independent edits survive; conflicting file or structural changes require whole-entry choices. Unloading local changes is rejected. Physical containers outside the selection remain in place. Restore changes only requested selected paths and keeps the baseline; overwriting local changes requires an explicit force option.
+HTTP requires a bearer token and expected project identity. Counted newline-delimited metadata records let clients detect truncated lists while bounding each record. Cleanup exposes its apply token only after complete validation. Selected inventories become workspace baseline metadata; native indexes stay on the server.
 
-The immutable plan contains the target baseline and ordered before/after entry changes. A separate small progress record holds the cursor and cancellation decision, avoiding rewriting the full plan after each file. Historical restore also records its content source because it differs from the baseline. For each change, the workspace stages and verifies required bytes, atomically preserves the previous entry, and installs the target without replacing an unexpected path. Existing descendants leave before parent type changes; new parents arrive before children. Directory removal requires emptiness, including at application time.
+Upload signatures are fetched for exact retained base paths before publication and spooled to a bounded anonymous file. Under the publication gate, librsync reconstructs into the same size/hash-verified capture path as full uploads. Downloads optionally use a local basis and reconstruct into the transition's existing staging file, then verify before installation. Retries regenerate signatures; neither direction adds durable transfer state.
 
-Initial progress is durable before the plan appears. The cursor advances only after the file action is synchronized. Reaching the end durably decides to commit; the target baseline is then installed before recovery files are cleaned up. Cleanup removes the plan before its progress record, so a present plan never loses its commit decision. Orphan progress is overwritten before the next plan. Cancellation before commitment reverses applied changes while preserving unexpected edits. Partial-action progress can be inferred from preserved and staged entries. Changed recovery contents are retained and reported.
+Backup holds the project ownership lock, closes database/content writers, copies identity/SQLite/native files while preserving maintenance timestamps, and excludes derived configuration/caches. It reopens the copy to check SQLite and retained roots before a synchronized no-replace rename publishes the destination. Restore uses the same copy operation.
 
-Initial checkout starts with a valid empty-selection workspace and uses the same transition to populate it. A metadata-only transition needs only an atomic baseline update. These operations require applications to stop writing affected files; process locking excludes other Lode commands, not external writers.
-
-Observation and recovery hashing check cancellation between reads; directory scans and operation boundaries also observe it. File mutations retain their synchronization ordering, and a cancelled operation leaves its existing recovery state for resume or cancellation. The CLI reports elapsed activity without storing progress facts in the application model.
-
-Save recovery uses the original request. Later file edits remain changes against the accepted baseline.
-
-## Storage and transport
-
-The service serializes mutations. Reads hold shared protection while streaming. A local ownership lock excludes a second service process. SQLite uses durable transactions. The filesystem content adapter synchronizes Kopia's blob directory chain after writes and deletions; Kopia synchronizes blob file contents before rename. These contracts require Linux local filesystems that honor synchronization.
-
-The server directory contains project identity and secrets, SQLite metadata, and the native content repository. Native connection configuration and bounded caches live there and are derived from its current location. Clients receive selected metadata and requested file bytes. HTTP requires a project token and expected project identity; plaintext client connections are limited to loopback addresses.
-
-Metadata lists use newline-delimited JSON with an expected record count. Clients bound each record, check the count and require a complete response. Cleanup visits records as they arrive and returns its apply token only after validation; selected inventories are collected into the workspace baseline. This adds no saved previews, paging cursors or server leases.
-
-For eligible changed-file uploads, the client fetches signatures of exact retained base paths before starting publication. Signatures are bounded and spooled to one unlinked temporary file; none become workspace state. Each file part carries either full bytes or a librsync delta. Under the publication gate, the service resolves the basis from the request's base/path, decodes directly into capture's bounded size/hash writer, and closes the basis before returning. Transfer encoding does not change operation identity or add an acceptance path. Native object identifiers stay private. Signature expiry between preflight and publication is handled by the existing branch/base checks; an accepted retry needs no payload decoding.
-
-For downloads with an eligible local basis, the client sends that file's signature with its read request. The service generates a delta under the same read protection as a full transfer. The client reconstructs into the transition's existing `.part` file and verifies the complete target size and SHA-256 before synchronization and installation. A malformed or interrupted response cannot advance the cursor or baseline. The local basis needs no server retention lease; the target still requires retained contents. Retries regenerate signatures from available local files, without extra persisted transfer state.
-
-The cgo adapter uses upstream librsync jobs, fixed IO buffers, bounded signature records and block sizes, exact reconstructed sizes, basis-range checks and strict input exhaustion. Full-file transfer remains available for new, small or unsupported bases and above the upload signature spool budget. Initial checkout has no local basis and transfers only its selected files in full.
-
-Backup uses the same ownership lock as the service. It opens and reconciles the source, closes SQLite and Kopia while retaining that lock, then copies the cold database and native repository into a private staging directory. It preserves file modification times used by native maintenance and excludes derived configuration/caches. Reopening the independent copy verifies its retained roots and SQLite consistency before a synchronized no-replace rename publishes it. Restoration is the same operation applied to a backup; no separate archive format or backup metadata ledger exists.
+See the [user guide](guide.md) for command behavior and [operations](operations.md) for deployment and resource limits.
