@@ -29,9 +29,11 @@ Usage: lode [-C workspace] COMMAND [options]
   clone [-include PATH] URL DIR    Download a selected workspace
   status                       Show selected local changes
   save -m MESSAGE [-author NAME]   Save selected changes
+  update [-ours PATH | -theirs PATH]  Update while preserving local edits
+  select [-include PATH] [-exclude PATH] [-none]  Inspect or replace selection
   log [-n COUNT]               List versions on the workspace branch
-  resume                       Resolve an unfinished save or checkout
-  cancel                       Cancel an unaccepted save
+  resume                       Finish an interrupted operation
+  cancel                       Cancel a save or roll back a local transition
 
 Use LODE_TOKEN for attach/clone and LODE_AUTHOR for the default author.
 Repeat -include to select multiple paths; omission selects the whole project.
@@ -67,17 +69,41 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
 	var selection model.Selection
+	var choices []model.Choice
+	var emptySelection bool
 	var message, author, listen string
 	limit := 20
 	switch command {
-	case "attach", "clone":
-		flags.Func("include", "select a file or directory (repeatable)", func(p string) error {
-			if p == "." {
-				p = ""
+	case "attach", "clone", "select":
+		addRule := func(include bool) func(string) error {
+			return func(p string) error {
+				if p == "." {
+					p = ""
+				}
+				selection = append(selection, model.Rule{Path: p, Include: include})
+				return selection.Validate()
 			}
-			selection = append(selection, model.Rule{Path: p, Include: true})
-			return selection.Validate()
-		})
+		}
+		flags.Func("include", "select a file or directory (repeatable)", addRule(true))
+		flags.Func("exclude", "exclude a file or directory (repeatable)", addRule(false))
+		if command == "select" {
+			flags.BoolVar(&emptySelection, "none", false, "unload all selected paths")
+		}
+	case "update":
+		addChoice := func(ours bool) func(string) error {
+			return func(p string) error {
+				if p == "." {
+					p = ""
+				}
+				if p != "" && !model.ValidPath(p) {
+					return errors.New("invalid choice path")
+				}
+				choices = append(choices, model.Choice{Path: p, Ours: ours})
+				return nil
+			}
+		}
+		flags.Func("ours", "keep the local entry/subtree (repeatable)", addChoice(true))
+		flags.Func("theirs", "take the remote entry/subtree (repeatable)", addChoice(false))
 	case "save":
 		flags.StringVar(&message, "m", "", "version message")
 		flags.StringVar(&author, "author", os.Getenv("LODE_AUTHOR"), "author name")
@@ -96,6 +122,19 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	args = flags.Args()
+	if emptySelection && len(selection) > 0 {
+		return errors.New("-none cannot be combined with selection rules")
+	}
+	if len(selection) > 0 {
+		hasInclude, hasRoot := false, false
+		for _, r := range selection {
+			hasInclude = hasInclude || r.Include
+			hasRoot = hasRoot || r.Path == ""
+		}
+		if !hasInclude && !hasRoot {
+			selection = append(model.Selection{{Include: true}}, selection...)
+		}
+	}
 	switch command {
 	case "init", "serve":
 		if len(args) != 1 {
@@ -175,6 +214,32 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 			return err
 		}
 		fmt.Fprintln(out, commit.ID)
+	case "update":
+		if err := w.Update(ctx, choices); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "Workspace updated.")
+	case "select":
+		if selection == nil && !emptySelection {
+			for _, r := range w.State().Selection {
+				prefix, p := "-", r.Path
+				if r.Include {
+					prefix = "+"
+				}
+				if p == "" {
+					p = "."
+				}
+				fmt.Fprintf(out, "%s %s\n", prefix, p)
+			}
+			return nil
+		}
+		if emptySelection {
+			selection = model.Selection{}
+		}
+		if err := w.Select(ctx, selection); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "Workspace selection updated.")
 	case "resume":
 		if err := w.Resume(ctx); err != nil {
 			return err
@@ -184,7 +249,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		if err := w.Cancel(ctx); err != nil {
 			return err
 		}
-		fmt.Fprintln(out, "Save cancelled; local files preserved.")
+		fmt.Fprintln(out, "Operation cancelled.")
 	case "log":
 		state := w.State()
 		client, err := remote.New(state.URL, state.Token, state.Project)

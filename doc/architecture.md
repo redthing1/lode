@@ -4,11 +4,11 @@ Lode is one Go module and executable. The server owns shared history and content
 
 | Package | Responsibility |
 | --- | --- |
-| `model` | Pure path, selection, entry, and tree-change rules |
+| `model` | Pure path, selection, entry, comparison and whole-entry merge rules |
 | `project` | Publication decisions, SQLite history, and branch authority |
 | `content` | Kopia objects, complete snapshot roots, retrieval, and release |
 | `remote` | Authenticated HTTP requests and streamed file transfers |
-| `workspace` | Local observation, selected checkout, baseline, and recovery |
+| `workspace` | Local observation, selected transitions, baseline, and recovery |
 | `cmd/lode` | CLI and server lifecycle |
 
 These are concrete components. The project service owns decisions; the content adapter supplies native storage operations.
@@ -35,9 +35,15 @@ Startup checks accepted snapshot protection and releases unaccepted candidates. 
 
 ## Local recovery
 
-A workspace holds one unfinished save or checkout. Local process locking prevents concurrent commands from changing its state. State files are synchronized and replaced atomically.
+A workspace holds one unfinished save or local transition. Local process locking prevents concurrent commands from changing its state. State files are synchronized and replaced atomically.
 
-Initial checkout records a selected target before installing files. Each file is streamed to staging, checked against its size and hash, synchronized, and installed without replacing an existing path. Resume infers progress from installed contents. The baseline becomes current only after installation completes. Unexpected local files are preserved and reported as conflicts.
+Checkout, update and selection changes use one transition mechanism. Planning compares baseline, observed and target entries. Independent edits survive; conflicting file or structural changes require whole-entry choices. Unloading local changes is rejected. Physical containers outside the selection remain in place.
+
+The journal contains the target baseline, ordered before/after entry changes, a progress cursor and cancellation decision. For each change, the workspace stages and verifies required bytes, atomically preserves the previous entry, and installs the target without replacing an unexpected path. Existing descendants leave before parent type changes; new parents arrive before children. Directory removal requires emptiness, including at application time.
+
+The cursor advances only after the file action is synchronized. Reaching the end durably decides to commit; the target baseline is then installed before recovery files are cleaned up. Cancellation before that decision reverses the applied changes while preserving unexpected edits. Partial-action progress can be inferred from the preserved and staged entries. Changed recovery contents are retained and reported.
+
+Initial checkout starts with a valid empty-selection workspace and uses the same transition to populate it. A metadata-only transition needs only an atomic baseline update. These operations require applications to stop writing affected files; process locking excludes other Lode commands, not external writers.
 
 Save recovery uses the original request. Later file edits remain changes against the accepted baseline.
 

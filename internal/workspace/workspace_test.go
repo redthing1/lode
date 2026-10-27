@@ -287,8 +287,27 @@ func TestResumeDoesNotTruncateInstalledHardlinkAndPreservesUnexpectedTarget(t *t
 	if _, err := Clone(context.Background(), s.srv.URL, s.p.Token(), cloneDir, nil); err == nil {
 		t.Fatal("expected interrupted checkout")
 	}
-	if err := os.Link(filepath.Join(cloneDir, "a.bin"), filepath.Join(cloneDir, ".lode", "download")); err != nil {
+	plan := transitionJournal(t, cloneDir)
+	var staged string
+	for i, change := range plan.Changes {
+		if change.After.Path == "a.bin" {
+			staged = filepath.Join(cloneDir, filepath.FromSlash(recoveryName(i, "new")))
+			break
+		}
+	}
+	if staged == "" {
+		t.Fatal("transition has no staged a.bin")
+	}
+	installed, err := os.Stat(filepath.Join(cloneDir, "a.bin"))
+	if err != nil {
 		t.Fatal(err)
+	}
+	stagedInfo, err := os.Stat(staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(installed, stagedInfo) {
+		t.Fatal("installed file is not linked to its per-action staged inode")
 	}
 	w, err := Open(cloneDir)
 	if err != nil {
@@ -301,6 +320,10 @@ func TestResumeDoesNotTruncateInstalledHardlinkAndPreservesUnexpectedTarget(t *t
 	if got := read(t, cloneDir, "a.bin"); string(got) != "first contents" {
 		closeWorkspace(t, w)
 		t.Fatalf("installed hardlink contents = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(cloneDir, ".lode", "transition")); !errors.Is(err, os.ErrNotExist) {
+		closeWorkspace(t, w)
+		t.Fatalf("transition recovery metadata remains after completion: %v", err)
 	}
 	closeWorkspace(t, w)
 

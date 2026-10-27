@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"strings"
 	"syscall"
 
@@ -42,17 +41,8 @@ func Open(directory string) (*Workspace, error) {
 		return nil, err
 	}
 	if err := w.load("state.json", &w.state); err != nil {
-		// A checkout has a sealed target before it has an installed baseline.
-		var plan materialization
-		if !errors.Is(err, os.ErrNotExist) {
-			w.Close()
-			return nil, err
-		}
-		if err := w.load("checkout.json", &plan); err != nil {
-			w.Close()
-			return nil, err
-		}
-		w.state = plan.Target
+		w.Close()
+		return nil, err
 	}
 	if err := w.state.validate(); err != nil {
 		w.Close()
@@ -186,7 +176,7 @@ func (w *Workspace) client() (*remote.Client, error) {
 }
 
 func (w *Workspace) pending() error {
-	for _, name := range []string{"save.json", "checkout.json"} {
+	for _, name := range []string{"save.json", "transition.json"} {
 		if _, err := w.root.Lstat(".lode/" + name); err == nil {
 			return ErrPending
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -224,6 +214,14 @@ func (w *Workspace) finishSave(ctx context.Context, r project.Request) (project.
 	}
 	commit, err := client.Save(ctx, r, project.Source{Open: func(name string) (io.ReadCloser, error) { return w.openFile(name) }})
 	if err != nil {
+		if errors.Is(err, project.ErrStale) {
+			// The server's stable rejection permits forgetting this intent once
+			// its unaccepted native candidates have also been released.
+			if cancelErr := client.Cancel(ctx, r.ID); cancelErr != nil {
+				return project.Commit{}, errors.Join(err, cancelErr)
+			}
+			err = errors.Join(err, w.remove("save.json"))
+		}
 		return project.Commit{}, err
 	}
 	if w.state.Base != commit.ID {
@@ -264,19 +262,21 @@ func (w *Workspace) Resume(ctx context.Context) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	var plan materialization
-	if err := w.load("checkout.json", &plan); err != nil {
+	var plan transition
+	if err := w.load("transition.json", &plan); err != nil {
 		return err
 	}
-	return w.materialize(ctx, plan)
+	return w.runTransition(ctx, &plan)
 }
 
-// Cancel resolves publication before forgetting its intent. Installed checkout
-// files stay in place; resuming checkout is required to establish its baseline.
+// Cancel resolves publication or rolls back an unfinished local transition.
 func (w *Workspace) Cancel(ctx context.Context) error {
 	var request project.Request
 	if err := w.load("save.json", &request); err != nil {
-		return err
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return w.cancelTransition(ctx)
 	}
 	client, err := w.client()
 	if err != nil {
@@ -343,26 +343,5 @@ func (w *Workspace) openFile(name string) (*os.File, error) {
 	if !model.ValidPath(name) {
 		return nil, errors.New("invalid workspace path")
 	}
-	for p := path.Dir(name); p != "."; p = path.Dir(p) {
-		info, err := w.root.Lstat(p)
-		if err != nil {
-			return nil, err
-		}
-		if !info.IsDir() {
-			return nil, fmt.Errorf("%s is not an ordinary directory", p)
-		}
-	}
-	f, err := w.root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, err
-	}
-	info, err := f.Stat()
-	if err == nil && !info.Mode().IsRegular() {
-		err = fmt.Errorf("%s is not a regular file", name)
-	}
-	if err != nil {
-		f.Close()
-		return nil, err
-	}
-	return f, nil
+	return w.openRegular(name)
 }

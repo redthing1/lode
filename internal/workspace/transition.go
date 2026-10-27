@@ -1,0 +1,334 @@
+package workspace
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path"
+	"syscall"
+
+	"github.com/redthing1/lode/internal/model"
+)
+
+// Next counts completed actions. Reaching the end durably decides to commit;
+// cancellation instead counts down, including the possibly interrupted action.
+type transition struct {
+	Target    State          `json:"target"`
+	Changes   []model.Change `json:"changes"`
+	Next      int            `json:"next"`
+	Cancelled bool           `json:"cancelled"`
+}
+
+func recoveryName(i int, suffix string) string {
+	return fmt.Sprintf(".lode/transition/%d.%s", i, suffix)
+}
+
+func (w *Workspace) runTransition(ctx context.Context, p *transition) error {
+	if err := p.Target.validate(); err != nil {
+		return err
+	}
+	if p.Target.Project != w.state.Project || p.Next < 0 || p.Next > len(p.Changes) {
+		return errors.New("invalid transition state")
+	}
+	for _, c := range p.Changes {
+		if err := c.Before.Validate(); err != nil {
+			return err
+		}
+		if err := c.After.Validate(); err != nil {
+			return err
+		}
+		if c.Before.Path != c.After.Path || c.Before == c.After {
+			return errors.New("invalid transition change")
+		}
+	}
+	if p.Cancelled {
+		for p.Next > 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			i := p.Next - 1
+			if err := w.undoChange(p.Changes[i], i); err != nil {
+				return err
+			}
+			p.Next--
+			if err := w.store("transition.json", p); err != nil {
+				return err
+			}
+		}
+	} else {
+		for p.Next < len(p.Changes) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			i := p.Next
+			if err := w.applyChange(ctx, p.Target.Base, p.Changes[i], i); err != nil {
+				return err
+			}
+			p.Next++
+			if err := w.store("transition.json", p); err != nil {
+				return err
+			}
+		}
+		if err := w.store("state.json", p.Target); err != nil {
+			return err
+		}
+		w.state = p.Target
+	}
+	if err := w.cleanTransition(p); err != nil {
+		return err
+	}
+	return w.remove("transition.json")
+}
+
+func (w *Workspace) cancelTransition(ctx context.Context) error {
+	var p transition
+	if err := w.load("transition.json", &p); err != nil {
+		return err
+	}
+	if !p.Cancelled {
+		if p.Next == len(p.Changes) {
+			return errors.New("transition already committed; use resume to finish cleanup")
+		}
+		p.Cancelled = true
+		p.Next++ // The active action may already have moved or installed a file.
+		if err := w.store("transition.json", p); err != nil {
+			return err
+		}
+	}
+	return w.runTransition(ctx, &p)
+}
+
+func (w *Workspace) applyChange(ctx context.Context, version string, c model.Change, i int) error {
+	name, old, new := c.After.Path, recoveryName(i, "old"), recoveryName(i, "new")
+	if c.After.Kind == model.File {
+		if err := w.stage(ctx, version, c.After, i); err != nil {
+			return err
+		}
+	}
+	backup, err := w.identity(old, name)
+	if err != nil {
+		return err
+	}
+	if c.Before.Kind != model.Absent && backup.Kind == model.Absent {
+		actual, err := w.identity(name, name)
+		if err != nil {
+			return err
+		}
+		if actual != c.Before {
+			return fmt.Errorf("%s changed since the transition was planned", name)
+		}
+		if actual.Kind == model.Directory {
+			if err := w.emptyDirectory(name); err != nil {
+				return err
+			}
+		}
+		if err := renameNoReplace(w.root, name, old); err != nil {
+			return err
+		}
+		backup, err = w.identity(old, name)
+		if err != nil {
+			return err
+		}
+	}
+	if backup != c.Before {
+		return fmt.Errorf("%s changed during replacement; its contents are preserved at %s; cancel to restore them", name, old)
+	}
+	if backup.Kind == model.Directory {
+		if err := w.emptyDirectory(old); err != nil {
+			return err
+		}
+	}
+	if backup.Kind == model.File {
+		f, err := w.openRegular(old)
+		if err != nil {
+			return err
+		}
+		if err := errors.Join(f.Sync(), f.Close()); err != nil {
+			return err
+		}
+	}
+	info, statErr := w.root.Lstat(name)
+	missing := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !missing {
+		return statErr
+	}
+	switch c.After.Kind {
+	case model.Absent:
+		if !missing {
+			return fmt.Errorf("unexpected entry at %s", name)
+		}
+	case model.Directory:
+		if missing {
+			if err := w.root.Mkdir(name, 0755); err != nil {
+				return err
+			}
+		} else if !info.IsDir() {
+			return fmt.Errorf("unexpected entry at %s", name)
+		}
+	case model.File:
+		if missing {
+			if err := w.root.Link(new, name); err != nil {
+				return err
+			}
+		} else if !w.sameFile(new, name) {
+			actual, err := w.identity(name, name)
+			if err != nil {
+				return err
+			}
+			if actual != c.After {
+				return fmt.Errorf("unexpected contents at %s; move them aside before resuming", name)
+			}
+		}
+	}
+	return errors.Join(syncDirectory(w.root, path.Dir(name)), syncDirectory(w.root, ".lode/transition"))
+}
+
+func (w *Workspace) stage(ctx context.Context, version string, e model.Entry, i int) error {
+	new, part := recoveryName(i, "new"), recoveryName(i, "part")
+	if w.sameFile(new, e.Path) {
+		return nil
+	} // An installed inode may have newer edits.
+	entry, err := w.identity(new, e.Path)
+	if err != nil {
+		return err
+	}
+	if entry == e {
+		return nil
+	}
+	if entry.Kind != model.Absent {
+		return fmt.Errorf("staged contents changed; preserve %s before resuming", new)
+	}
+	if err := w.root.Remove(part); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	client, err := w.client()
+	if err != nil {
+		return err
+	}
+	reader, err := client.Read(ctx, version, e.Path)
+	if err != nil {
+		return err
+	}
+	f, err := w.root.OpenFile(part, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0600)
+	if err != nil {
+		reader.Close()
+		return err
+	}
+	err = copyVerified(f, reader, e)
+	err = errors.Join(err, reader.Close(), f.Sync(), f.Close())
+	if err != nil {
+		return err
+	}
+	return renameNoReplace(w.root, part, new)
+}
+
+func (w *Workspace) undoChange(c model.Change, i int) error {
+	name, old, new, undo := c.After.Path, recoveryName(i, "old"), recoveryName(i, "new"), recoveryName(i, "undo")
+	backup, err := w.identity(old, name)
+	if err != nil {
+		return err
+	}
+	if c.Before.Kind != model.Absent && backup.Kind == model.Absent {
+		// Either this action never moved the original, or a previous rollback
+		// restored it before its progress write. Preserve the current entry.
+		return errors.Join(syncDirectory(w.root, path.Dir(name)), syncDirectory(w.root, ".lode/transition"))
+	}
+	removed, err := w.identity(undo, name)
+	if err != nil {
+		return err
+	}
+	if removed.Kind != model.Absent {
+		if removed != c.After || (removed.Kind == model.Directory && w.emptyDirectory(undo) != nil) {
+			if _, err := w.root.Lstat(name); errors.Is(err, os.ErrNotExist) {
+				_ = renameNoReplace(w.root, undo, name)
+			}
+			return fmt.Errorf("changed contents preserved at %s or %s; move them aside before cancelling", name, undo)
+		}
+	} else {
+		current, err := w.identity(name, name)
+		if err != nil {
+			return err
+		}
+		if current.Kind != model.Absent {
+			if c.Before.Kind == model.Absent && c.After.Kind == model.File && !w.sameFile(new, name) {
+				return nil
+			}
+			if current != c.After {
+				return fmt.Errorf("%s has newer changes; move it aside before cancelling", name)
+			}
+			if current.Kind == model.Directory {
+				if err := w.emptyDirectory(name); err != nil {
+					return err
+				}
+			}
+			if err := renameNoReplace(w.root, name, undo); err != nil {
+				return err
+			}
+			removed, err = w.identity(undo, name)
+			if err != nil {
+				return err
+			}
+			if removed != c.After || (removed.Kind == model.Directory && w.emptyDirectory(undo) != nil) {
+				_ = renameNoReplace(w.root, undo, name)
+				return fmt.Errorf("%s changed during cancellation; its contents are preserved", name)
+			}
+		}
+	}
+	if backup.Kind != model.Absent {
+		return renameNoReplace(w.root, old, name)
+	}
+	return syncDirectory(w.root, path.Dir(name))
+}
+
+func (w *Workspace) cleanTransition(p *transition) error {
+	for i, c := range p.Changes {
+		for _, suffix := range []string{"old", "new", "undo", "part"} {
+			name := recoveryName(i, suffix)
+			info, err := w.root.Lstat(name)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if suffix != "part" {
+				actual, err := w.identity(name, c.After.Path)
+				if err != nil {
+					return err
+				}
+				expected := c.After
+				if suffix == "old" {
+					expected = c.Before
+				}
+				// An extra hard link means removing this private name cannot
+				// remove the only named copy of a user's subsequent edit.
+				linked := suffix != "old" && info.Mode().IsRegular() && info.Sys().(*syscall.Stat_t).Nlink > 1
+				if actual != expected && !linked {
+					return fmt.Errorf("changed contents preserved at %s; move them aside before resuming cleanup", name)
+				}
+				if info.IsDir() {
+					if err := w.emptyDirectory(name); err != nil {
+						return err
+					}
+				}
+			}
+			if err := w.root.Remove(name); err != nil {
+				return err
+			}
+		}
+	}
+	if err := w.root.Remove(".lode/transition"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return syncDirectory(w.root, ".lode")
+}
+
+func (w *Workspace) sameFile(a, b string) bool {
+	one, err := w.root.Lstat(a)
+	if err != nil || !one.Mode().IsRegular() {
+		return false
+	}
+	two, err := w.root.Lstat(b)
+	return err == nil && two.Mode().IsRegular() && os.SameFile(one, two)
+}
