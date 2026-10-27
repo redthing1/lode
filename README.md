@@ -6,6 +6,8 @@ A **project** holds shared history on a server. A **workspace** is an ordinary e
 
 ## Build
 
+For a containerized server, follow [Podman Compose setup](doc/operations.md#run-with-podman-compose).
+
 Use Go 1.27.2 or later, cgo, a C compiler, and the development headers/library for [librsync 2.3.4](https://github.com/librsync/librsync/releases/tag/v2.3.4). Every machine running Lode also needs the librsync shared library ([LGPL-2.1](https://github.com/librsync/librsync/blob/v2.3.4/COPYING)).
 
 ```sh

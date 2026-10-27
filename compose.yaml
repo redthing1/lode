@@ -1,0 +1,14 @@
+services:
+  lode:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: localhost/lode:local
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - lode-data:/data
+
+volumes:
+  lode-data:

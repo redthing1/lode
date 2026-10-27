@@ -1,6 +1,6 @@
 # Operations
 
-Lode currently supports one private project per server process on Linux. Use local filesystems that support file and directory synchronization and atomic rename without replacement. Build and runtime requirements are in the [README](../README.md#build).
+Lode currently supports one private project per server process on Linux. Use case-sensitive local filesystems that support file and directory synchronization and atomic rename without replacement. Build and runtime requirements are in the [README](../README.md#build).
 
 ## Host a project
 
@@ -31,6 +31,41 @@ Clients connect using the HTTPS origin, without a path prefix:
 export LODE_TOKEN='the project access token'
 bin/lode clone https://lode.example.com ./work
 ```
+
+## Run with Podman Compose
+
+The repository includes a Linux container build and Compose service. Install Podman and a Compose provider such as [podman-compose](https://docs.podman.io/en/latest/markdown/podman-compose.1.html), then build the image and initialize the project volume once:
+
+```sh
+podman compose build
+podman compose run --rm lode init /data/project
+```
+
+Save the printed access token privately. Start the server with:
+
+```sh
+podman compose up -d
+```
+
+The service keeps the project in the named `lode-data` volume and binds `127.0.0.1:8473` in the host network namespace. It publishes no ports. Use a TLS reverse proxy on the host for remote clients, as described above. Host networking is required because Lode accepts loopback listeners only; the container can reach services bound to host loopback. `podman compose` uses an external Compose provider, which must be installed separately.
+
+Restart with `podman compose restart`; view server output with `podman compose logs`. `podman compose down` stops and removes the service while preserving its named volume. For a cold backup, stop the service and copy the verified backup out to a host directory:
+
+```sh
+podman compose stop
+mkdir -p ./backups
+podman compose run --rm -v "$PWD/backups:/backups:Z" lode backup /data/project /backups/project-backup
+podman compose down
+```
+
+To restore that copy into a fresh volume while keeping the original volume available, use a new Compose project name:
+
+```sh
+podman compose -p lode-restored run --rm -v "$PWD/backups:/backups:Z" lode backup /backups/project-backup /data/project
+podman compose -p lode-restored up -d
+```
+
+The restored service binds the same loopback address, so stop the original service before starting it. Use the restored Compose project name for later commands.
 
 ## Credentials and files
 
