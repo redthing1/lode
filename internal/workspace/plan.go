@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 
@@ -90,6 +91,13 @@ func (w *Workspace) transitionTo(ctx context.Context, target State, choices []mo
 	if err != nil {
 		return err
 	}
+	// A typo must not turn a populated workspace into an empty checkout.
+	// Explicit unloading uses an empty selection; new local paths also count.
+	if len(w.state.Baseline) > 0 && len(target.Selection) > 0 && !slices.Equal(w.state.Selection, target.Selection) {
+		if !hasSelectedEntry(target.Selection, target.Baseline, local) {
+			return errors.New("selection matches no files or directories; check the paths or use select -none to unload all")
+		}
+	}
 	for _, change := range model.Diff(w.state.Baseline, local) {
 		p := change.After.Path
 		if w.state.Selection.Includes(p) && !target.Selection.Includes(p) {
@@ -123,6 +131,7 @@ func (w *Workspace) Restore(ctx context.Context, version string, requested model
 			return fmt.Errorf("restore path %s is outside the workspace selection", rule.Path)
 		}
 	}
+	explicitPaths := requested
 	if requested == nil {
 		requested = model.Selection{{Include: true}}
 	}
@@ -145,6 +154,11 @@ func (w *Workspace) Restore(ctx context.Context, version string, requested model
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	for _, rule := range explicitPaths {
+		if rule.Include && !hasSelectedEntry(model.Selection{rule}, desired, local, w.state.Baseline) {
+			return fmt.Errorf("restore path %q is not present in the version or workspace; check the path", rule.Path)
+		}
+	}
 	var baseline []model.Entry
 	for _, e := range w.state.Baseline {
 		if scope.Includes(e.Path) {
@@ -155,6 +169,17 @@ func (w *Workspace) Restore(ctx context.Context, version string, requested model
 		return errors.New("restore would discard local changes; save them first or use -force")
 	}
 	return w.applyView(ctx, w.state, local, desired, version, scope)
+}
+
+func hasSelectedEntry(selection model.Selection, groups ...[]model.Entry) bool {
+	for _, entries := range groups {
+		for _, entry := range entries {
+			if selection.Includes(entry.Path) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (w *Workspace) applyView(ctx context.Context, target State, local, merged []model.Entry, source string, scopes ...model.Selection) error {

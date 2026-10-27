@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,12 +223,14 @@ func TestUnauthorizedRequest(t *testing.T) {
 	defer p.Close()
 	srv := httptest.NewServer(Handler(p))
 	defer srv.Close()
-	c, err := New(srv.URL, "wrong-token", p.ID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.Info(context.Background()); err == nil {
-		t.Fatal("unauthorized request succeeded")
+	for _, id := range []string{"", p.ID()} {
+		c, err := New(srv.URL, "wrong-token", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Info(context.Background()); err == nil || !strings.Contains(err.Error(), "access token") || strings.Contains(err.Error(), "identity") {
+			t.Fatalf("unauthorized request should explain credentials: %v", err)
+		}
 	}
 }
 
@@ -403,6 +406,8 @@ func TestTypedErrorWireRoundTrips(t *testing.T) {
 		{"conflicts", fmt.Errorf("wrapped: %w", &model.Conflicts{Paths: []string{"a.bin", "dir/b.bin"}}), "conflicts"},
 		{"merge bases", fmt.Errorf("wrapped: %w", &project.MergeBaseConflict{Bases: []string{"abc", "def"}}), "merge_base"},
 		{"already merged", fmt.Errorf("wrapped: %w", project.ErrAlreadyMerged), "unchanged"},
+		{"stale", project.ErrStale, "stale"},
+		{"invalid detail", fmt.Errorf("%w: missing file part", project.ErrInvalid), "invalid"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -431,6 +436,17 @@ func TestTypedErrorWireRoundTrips(t *testing.T) {
 				if !errors.Is(got, project.ErrAlreadyMerged) {
 					t.Fatalf("round-trip already merged: %v", got)
 				}
+			case "stale":
+				if !errors.Is(got, project.ErrStale) {
+					t.Fatalf("round-trip stale: %v", got)
+				}
+			case "invalid":
+				if !errors.Is(got, project.ErrInvalid) {
+					t.Fatalf("round-trip invalid: %v", got)
+				}
+			}
+			if tc.code != "conflicts" && tc.code != "merge_base" && got.Error() != tc.err.Error() {
+				t.Fatalf("error explanation changed: got %q, want %q", got, tc.err)
 			}
 		})
 	}

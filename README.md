@@ -55,7 +55,7 @@ bin/lode -C ./selected select -include assets -exclude assets/cache
 
 Conflicting changes stop an update before files change. Resolve them with `update -ours PATH` to keep local contents or `update -theirs PATH` to take remote contents. Choices apply to whole files or subtrees and may be repeated. Local choices remain changes against the updated baseline.
 
-`select` without options shows the current rules. With rules, it replaces the selection at the current version; `select -none` unloads selected content. Directories needed by unselected local contents remain. Unloading locally modified, deleted, or untracked selected entries fails until those changes are resolved.
+`select` without options shows the current rules. With rules, it replaces the selection at the current version; `select -none` unloads selected content. Rules that match no remote or local entries cannot empty a populated workspace; check the paths or use `-none` explicitly. Directories needed by unselected local contents remain. Unloading locally modified, deleted, or untracked selected entries fails until those changes are resolved.
 
 ## Branches and restore
 
@@ -77,7 +77,7 @@ bin/lode -C ./work update
 
 Conflicts require `merge -ours PATH BRANCH` or `merge -theirs PATH BRANCH`, choosing the destination or source version respectively. A directory choice replaces that entire subtree, including independent changes within it; use individual file paths for narrower choices. Merges record both parents. An already merged source creates no version. If history has multiple best common ancestors, choose one of the reported versions with `-base COMMIT`. `log` follows first-parent history.
 
-`restore COMMIT [PATH...]` places historical contents into currently selected paths as local changes, keeping the branch and baseline. Omit paths to restore the whole selection. It refuses to overwrite local changes unless `-force` is supplied. Save the restored changes to publish a new version.
+`restore COMMIT [PATH...]` places historical contents into currently selected paths as local changes, keeping the branch and baseline. Omit paths to restore the whole selection. An explicit path must exist in the historical version, local files or current baseline; a misspelling fails before any files change. It refuses to overwrite local changes unless `-force` is supplied. Save the restored changes to publish a new version.
 
 ## Storage lifetime
 

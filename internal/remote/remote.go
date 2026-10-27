@@ -489,6 +489,10 @@ func (c *Client) request(ctx context.Context, method, p string, body io.Reader, 
 	return c.http.Do(req)
 }
 func (c *Client) verify(resp *http.Response) error {
+	// Authentication fails before the service reveals its project identity.
+	if resp.StatusCode == http.StatusUnauthorized {
+		return errors.New("access denied; check the project's access token")
+	}
 	if c.projectID != "" && resp.Header.Get(projectHeader) != c.projectID {
 		return errors.New("remote project identity mismatch")
 	}
@@ -532,34 +536,44 @@ func parseError(resp *http.Response) error {
 		return fmt.Errorf("remote HTTP %d", resp.StatusCode)
 	}
 	switch w.Code {
-	case "not_found":
-		return fmt.Errorf("%s: %w", w.Message, project.ErrNotFound)
-	case "exists":
-		return fmt.Errorf("%s: %w", w.Message, project.ErrExists)
-	case "stale":
-		return fmt.Errorf("%s: %w", w.Message, project.ErrStale)
-	case "cancelled":
-		return fmt.Errorf("%s: %w", w.Message, project.ErrCancelled)
-	case "operation_conflict":
-		return fmt.Errorf("%s: %w", w.Message, project.ErrOperationConflict)
-	case "already_accepted":
-		return fmt.Errorf("%s: %w", w.Message, project.ErrAlreadyAccepted)
-	case "expired":
-		return fmt.Errorf("%s: %w", w.Message, project.ErrExpired)
-	case "cleanup_changed":
-		return fmt.Errorf("%s: %w", w.Message, project.ErrCleanupChanged)
-	case "reference_changed":
-		return fmt.Errorf("%s: %w", w.Message, project.ErrReferenceChanged)
-	case "invalid":
-		return fmt.Errorf("%s: %w", w.Message, project.ErrInvalid)
 	case "conflicts":
 		return &model.Conflicts{Paths: append([]string(nil), w.Paths...)}
 	case "merge_base":
 		return &project.MergeBaseConflict{Bases: append([]string(nil), w.Bases...)}
-	case "unchanged":
-		return fmt.Errorf("%s: %w", w.Message, project.ErrAlreadyMerged)
 	default:
-		return errors.New(w.Message)
+		return &w
+	}
+}
+
+// Preserve the service's explanation once while retaining typed error checks.
+func (w *wireError) Error() string { return w.Message }
+
+func (w *wireError) Unwrap() error {
+	switch w.Code {
+	case "not_found":
+		return project.ErrNotFound
+	case "exists":
+		return project.ErrExists
+	case "stale":
+		return project.ErrStale
+	case "cancelled":
+		return project.ErrCancelled
+	case "operation_conflict":
+		return project.ErrOperationConflict
+	case "already_accepted":
+		return project.ErrAlreadyAccepted
+	case "expired":
+		return project.ErrExpired
+	case "cleanup_changed":
+		return project.ErrCleanupChanged
+	case "reference_changed":
+		return project.ErrReferenceChanged
+	case "invalid":
+		return project.ErrInvalid
+	case "unchanged":
+		return project.ErrAlreadyMerged
+	default:
+		return nil
 	}
 }
 func (c *Client) Info(ctx context.Context) (Info, error) {
