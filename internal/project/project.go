@@ -34,14 +34,18 @@ var (
 	ErrAlreadyAccepted   = errors.New("operation was already accepted; resume it")
 	ErrExists            = errors.New("name already exists")
 	ErrAlreadyMerged     = errors.New("source version is already merged")
+	ErrExpired           = errors.New("version contents have expired")
+	ErrCleanupChanged    = errors.New("history or protection changed; preview cleanup again")
+	ErrReferenceChanged  = errors.New("reference changed; list references again")
 )
 
 type Commit struct {
-	ID      string    `json:"id"`
-	Parents []string  `json:"parents"`
-	Author  string    `json:"author"`
-	Message string    `json:"message"`
-	Created time.Time `json:"created"`
+	ID       string    `json:"id"`
+	Parents  []string  `json:"parents"`
+	Author   string    `json:"author"`
+	Message  string    `json:"message"`
+	Created  time.Time `json:"created"`
+	Retained bool      `json:"retained"`
 }
 
 type Request struct {
@@ -171,7 +175,7 @@ func open(ctx context.Context, directory string, create bool) (_ *Project, err e
 	} else {
 		var version int
 		err = p.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
-		if err == nil && version != 1 {
+		if err == nil && version != 2 {
 			err = errors.New("unsupported project database version")
 		}
 	}
@@ -182,22 +186,29 @@ func open(ctx context.Context, directory string, create bool) (_ *Project, err e
 	if err != nil {
 		return nil, err
 	}
-	// No unaccepted candidate is promoted on recovery. The original client
-	// request can retry capture; accepted roots must retain their exact identity.
-	roots, err := p.contents.Roots(ctx)
-	if err != nil {
+	if err := p.reconcileRoots(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := p.db.QueryContext(ctx, "SELECT id,root FROM commits")
+	return p, nil
+}
+
+// SQLite decides which contents remain available. Unaccepted and expired roots
+// may be released; a promised retained root must still exist with its exact ID.
+func (p *Project) reconcileRoots(ctx context.Context) error {
+	roots, err := p.contents.Roots(ctx)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	rows, err := p.db.QueryContext(ctx, "SELECT id,root FROM commits WHERE root<>''")
+	if err != nil {
+		return err
 	}
 	accepted := map[string]string{}
 	for rows.Next() {
 		var operation, root string
 		if err := rows.Scan(&operation, &root); err != nil {
 			rows.Close()
-			return nil, err
+			return err
 		}
 		accepted[operation] = root
 		found := false
@@ -208,22 +219,22 @@ func open(ctx context.Context, directory string, create bool) (_ *Project, err e
 		}
 		if !found {
 			rows.Close()
-			return nil, fmt.Errorf("accepted version %s has no protected contents", operation)
+			return fmt.Errorf("accepted version %s has no protected contents", operation)
 		}
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return nil, err
+		return err
 	}
 	for operation, ids := range roots {
 		for _, id := range ids {
 			if id != accepted[operation] {
 				if err := p.contents.Release(ctx, id); err != nil {
-					return nil, err
+					return err
 				}
 			}
 		}
 	}
-	return p, nil
+	return nil
 }
 
 func (p *Project) Close() error {
@@ -453,6 +464,9 @@ func (p *Project) Read(ctx context.Context, id, name string, consume func(model.
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	if err := p.requireRetained(ctx, id); err != nil {
+		return err
+	}
 	entries, err := p.inventory(ctx, id, model.Selection{{Path: name, Include: true}})
 	if err != nil {
 		return err

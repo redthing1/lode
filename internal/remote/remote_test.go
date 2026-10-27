@@ -112,6 +112,67 @@ func TestStreamSaveAndRead(t *testing.T) {
 	}
 }
 
+func TestTagsAndCleanupTransport(t *testing.T) {
+	ctx := context.Background()
+	p, err := project.Create(ctx, t.TempDir()+"/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	srv := httptest.NewServer(Handler(p))
+	defer srv.Close()
+	c, err := New(srv.URL, p.Token(), p.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := c.Save(ctx, project.Request{ID: project.NewID(), Branch: "main", Author: "test", Message: "first", Changes: []model.Entry{{Path: "folder", Kind: model.Directory}}}, project.Source{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := c.Save(ctx, project.Request{ID: project.NewID(), Branch: "main", Base: first.ID, Author: "test", Message: "second", Changes: []model.Entry{{Path: "folder", Kind: model.Absent}}}, project.Source{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CreateTag(ctx, "release", first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteTag(ctx, "release", second.ID); !errors.Is(err, project.ErrReferenceChanged) {
+		t.Fatalf("stale tag delete error = %v", err)
+	}
+	tags, err := c.Tags(ctx)
+	if err != nil || len(tags) != 1 || tags[0] != (project.Tag{Name: "release", Commit: first.ID}) {
+		t.Fatalf("tags %#v: %v", tags, err)
+	}
+	plan, err := c.PreviewCleanup(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Keep != 0 || len(plan.Token) == 0 || len(plan.Versions) != 2 {
+		t.Fatalf("cleanup plan %#v", plan)
+	}
+	if err := c.DeleteTag(ctx, "release", first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ApplyCleanup(ctx, 0, plan.Token); !errors.Is(err, project.ErrCleanupChanged) {
+		t.Fatalf("stale cleanup token error = %v", err)
+	}
+	plan, err = c.PreviewCleanup(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired, err := c.ApplyCleanup(ctx, 0, plan.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expired count %d (second=%s)", expired, second.ID)
+	}
+	if err := c.CreateTag(ctx, "rescue", first.ID); !errors.Is(err, project.ErrExpired) {
+		t.Fatalf("tag expired version error = %v", err)
+	}
+}
+
 type endlessReader struct{}
 
 func (*endlessReader) Read(p []byte) (int, error) {

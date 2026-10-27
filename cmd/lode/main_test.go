@@ -63,3 +63,64 @@ func TestBranchAndSwitchCLIWorkflow(t *testing.T) {
 		t.Fatalf("delete current branch error = %v", err)
 	}
 }
+
+func TestTagAndCleanupPreviewCLI(t *testing.T) {
+	ctx := context.Background()
+	p, err := project.Create(ctx, filepath.Join(t.TempDir(), "server"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	srv := httptest.NewServer(remote.Handler(p))
+	defer srv.Close()
+	dir := t.TempDir()
+	file := filepath.Join(dir, "scene.bin")
+	if err := os.WriteFile(file, []byte("one"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := workspace.Attach(ctx, srv.URL, p.Token(), dir, model.Selection{{Include: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := w.Save(ctx, "tester", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("two"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := w.Save(ctx, "tester", "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	invoke := func(args ...string) (string, error) {
+		t.Helper()
+		var out, diagnostics bytes.Buffer
+		err := run(ctx, append([]string{"-C", dir}, args...), &out, &diagnostics)
+		return out.String(), err
+	}
+	if out, err := invoke("tag", "release", first.ID); err != nil || !strings.Contains(out, "Created tag release") {
+		t.Fatalf("tag output %q: %v", out, err)
+	}
+	if out, err := invoke("tag"); err != nil || !strings.Contains(out, "release "+first.ID) {
+		t.Fatalf("tag list %q: %v", out, err)
+	}
+	if out, err := invoke("cleanup", "-keep", "0"); err != nil || !strings.Contains(out, "keep "+second.ID) || !strings.Contains(out, "keep "+first.ID) {
+		t.Fatalf("cleanup preview %q: %v", out, err)
+	}
+	if out, err := invoke("tag", "-delete", "release"); err != nil || !strings.Contains(out, "Deleted tag release") {
+		t.Fatalf("tag delete %q: %v", out, err)
+	}
+	if out, err := invoke("tag", "-delete", "release"); err != nil || !strings.Contains(out, "already absent") {
+		t.Fatalf("repeat tag delete %q: %v", out, err)
+	}
+	if out, err := invoke("cleanup", "-keep", "0"); err != nil || !strings.Contains(out, "release "+first.ID) || !strings.Contains(out, "keep "+second.ID) {
+		t.Fatalf("cleanup release preview %q: %v", out, err)
+	}
+	if _, err := invoke("cleanup"); err == nil || !strings.Contains(err.Error(), "explicit -keep") {
+		t.Fatalf("missing keep error %v", err)
+	}
+}

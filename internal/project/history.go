@@ -19,16 +19,23 @@ CREATE TABLE commits(id TEXT PRIMARY KEY, parent TEXT REFERENCES commits(id), se
 CREATE TABLE entries(commit_id TEXT NOT NULL REFERENCES commits(id), path TEXT NOT NULL, kind TEXT NOT NULL,
  size INTEGER NOT NULL, sha256 TEXT NOT NULL, object TEXT NOT NULL, PRIMARY KEY(commit_id,path)) WITHOUT ROWID;
 CREATE TABLE branches(name TEXT PRIMARY KEY, tip TEXT REFERENCES commits(id));
+CREATE TABLE tags(name TEXT PRIMARY KEY, commit_id TEXT NOT NULL REFERENCES commits(id));
 CREATE TABLE operations(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, outcome TEXT NOT NULL);
 INSERT INTO branches VALUES('main',NULL);
-PRAGMA user_version=1;
+PRAGMA user_version=2;
 `
 
+const commitColumns = "id,parent,second_parent,author,message,created,root<>''"
+
 func (p *Project) commit(ctx context.Context, id string) (Commit, error) {
-	c := Commit{ID: id}
+	return scanCommit(p.db.QueryRowContext(ctx, "SELECT "+commitColumns+" FROM commits WHERE id=?", id))
+}
+
+func scanCommit(row interface{ Scan(...any) error }) (Commit, error) {
+	var c Commit
 	var parent, second sql.NullString
 	var created string
-	err := p.db.QueryRowContext(ctx, "SELECT parent,second_parent,author,message,created FROM commits WHERE id=?", id).Scan(&parent, &second, &c.Author, &c.Message, &created)
+	err := row.Scan(&c.ID, &parent, &second, &c.Author, &c.Message, &created, &c.Retained)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Commit{}, ErrNotFound
 	}
@@ -147,7 +154,7 @@ func (p *Project) accept(ctx context.Context, r Request, root string, before, af
 		parent = first
 	}
 	checkpoint := depth%64 == 0
-	c := Commit{ID: r.ID, Author: r.Author, Message: r.Message, Created: time.Now().UTC()}
+	c := Commit{ID: r.ID, Author: r.Author, Message: r.Message, Created: time.Now().UTC(), Retained: true}
 	if first != "" {
 		c.Parents = []string{first}
 	}

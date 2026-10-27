@@ -17,6 +17,10 @@ type Branch struct {
 func (p *Project) Branches(ctx context.Context) ([]Branch, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	return p.branches(ctx)
+}
+
+func (p *Project) branches(ctx context.Context) ([]Branch, error) {
 	rows, err := p.db.QueryContext(ctx, "SELECT name,coalesce(tip,'') FROM branches ORDER BY name")
 	if err != nil {
 		return nil, err
@@ -40,10 +44,7 @@ func (p *Project) CreateBranch(ctx context.Context, name, tip string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if tip != "" {
-		var exists int
-		if err := p.db.QueryRowContext(ctx, "SELECT 1 FROM commits WHERE id=?", tip).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		} else if err != nil {
+		if err := p.requireRetained(ctx, tip); err != nil {
 			return err
 		}
 	}

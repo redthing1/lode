@@ -24,6 +24,11 @@ func (p *Project) mergeEntries(ctx context.Context, r Request) ([]content.Entry,
 	if err != nil {
 		return nil, nil, err
 	}
+	for _, id := range []string{r.Base, r.SecondParent} {
+		if err := p.requireRetained(ctx, id); err != nil {
+			return nil, nil, err
+		}
+	}
 	base, err := p.inventory(ctx, baseID, nil)
 	if err != nil {
 		return nil, nil, err

@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/redthing1/lode/internal/content"
 	"github.com/redthing1/lode/internal/model"
 	"github.com/redthing1/lode/internal/project"
 	"github.com/redthing1/lode/internal/remote"
@@ -35,6 +37,12 @@ Usage: lode [-C workspace] COMMAND [options]
   branch                       List branches
   branch NAME [COMMIT]         Create a branch at COMMIT or the workspace base
   branch -delete NAME          Delete a branch
+  tag                          List retention tags
+  tag NAME [COMMIT]             Tag COMMIT or the workspace base
+  tag -delete NAME              Delete a tag
+  cleanup -keep N               Preview expiry; apply with -apply TOKEN
+  cleanup -keep N -apply TOKEN  Record expiry and collect storage
+  collect                       Collect expired content
   switch [-ours PATH | -theirs PATH] BRANCH  Change workspace branch
   merge [-m MESSAGE] [-author NAME] [-base COMMIT] BRANCH
                                Merge saved versions from another branch
@@ -77,8 +85,9 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 	flags.SetOutput(diagnostics)
 	var selection model.Selection
 	var choices []model.Choice
-	var emptySelection, force, deleteBranch bool
-	var message, author, listen, base string
+	var emptySelection, force, deleteBranch, deleteTag bool
+	var message, author, listen, base, applyToken string
+	keep := -1
 	limit := 20
 	switch command {
 	case "attach", "clone", "select":
@@ -125,9 +134,14 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		flags.IntVar(&limit, "n", 20, "maximum versions")
 	case "branch":
 		flags.BoolVar(&deleteBranch, "delete", false, "delete a branch")
+	case "tag":
+		flags.BoolVar(&deleteTag, "delete", false, "delete a tag")
+	case "cleanup":
+		flags.IntVar(&keep, "keep", -1, "keep N first-parent versions per branch, including its tip; 0 keeps tips and tags")
+		flags.StringVar(&applyToken, "apply", "", "apply the supplied preview token")
 	case "restore":
 		flags.BoolVar(&force, "force", false, "discard local changes in restored paths")
-	case "init", "status", "resume", "cancel":
+	case "init", "status", "resume", "cancel", "collect":
 	default:
 		return fmt.Errorf("unknown command %q; use lode help", command)
 	}
@@ -191,7 +205,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		return w.Close()
 	}
 	switch command {
-	case "branch", "switch", "merge", "restore":
+	case "branch", "tag", "switch", "merge", "restore":
 	default:
 		if len(args) != 0 {
 			return fmt.Errorf("unexpected arguments for %s", command)
@@ -199,6 +213,15 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 	}
 	if command == "save" && message == "" {
 		return errors.New("save requires -m MESSAGE")
+	}
+	if command == "cleanup" && keep < 0 {
+		return errors.New("cleanup requires an explicit -keep N with N >= 0")
+	}
+	if command == "tag" && deleteTag && len(args) != 1 {
+		return errors.New("usage: lode tag -delete NAME")
+	}
+	if command == "tag" && !deleteTag && len(args) > 2 {
+		return errors.New("usage: lode tag [NAME [COMMIT]]")
 	}
 	w, err := workspace.Open(*directory)
 	if err != nil {
@@ -281,7 +304,11 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 			return err
 		}
 		for _, c := range commits {
-			fmt.Fprintf(out, "%s  %s  %s\n", c.ID, c.Created.Format(time.RFC3339), c.Message)
+			state := ""
+			if !c.Retained {
+				state = "  [expired]"
+			}
+			fmt.Fprintf(out, "%s  %s  %s%s\n", c.ID, c.Created.Format(time.RFC3339), c.Message, state)
 		}
 	case "branch":
 		state := w.State()
@@ -331,6 +358,101 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(out, "Created branch %s at %s.\n", args[0], tip)
+	case "tag":
+		state := w.State()
+		client, err := remote.New(state.URL, state.Token, state.Project)
+		if err != nil {
+			return err
+		}
+		if deleteTag {
+			tags, err := client.Tags(ctx)
+			if err != nil {
+				return err
+			}
+			var expected string
+			for _, tag := range tags {
+				if tag.Name == args[0] {
+					expected = tag.Commit
+					break
+				}
+			}
+			if expected == "" {
+				fmt.Fprintf(out, "Tag %s is already absent.\n", args[0])
+				return nil
+			}
+			if err := client.DeleteTag(ctx, args[0], expected); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Deleted tag %s.\n", args[0])
+			return nil
+		}
+		if len(args) == 0 {
+			tags, err := client.Tags(ctx)
+			if err != nil {
+				return err
+			}
+			for _, tag := range tags {
+				fmt.Fprintf(out, "%s %s\n", tag.Name, tag.Commit)
+			}
+			return nil
+		}
+		id := state.Base
+		if len(args) == 2 {
+			id = args[1]
+		}
+		if id == "" {
+			return errors.New("cannot tag an empty workspace base; provide a COMMIT")
+		}
+		if err := client.CreateTag(ctx, args[0], id); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Created tag %s at %s.\n", args[0], id)
+	case "cleanup":
+		state := w.State()
+		client, err := remote.New(state.URL, state.Token, state.Project)
+		if err != nil {
+			return err
+		}
+		if applyToken != "" {
+			expired, err := client.ApplyCleanup(ctx, keep, applyToken)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Expiry recorded for %d versions.\n", expired)
+			collected, err := client.Collect(ctx)
+			if err != nil {
+				return fmt.Errorf("Expiry recorded; collection failed: %w", err)
+			}
+			printCollection(out, collected)
+			return nil
+		}
+		plan, err := client.PreviewCleanup(ctx, keep)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Protect branch tips and tags; keep %d first-parent versions per branch, counting its tip.\n", plan.Keep)
+		for _, version := range plan.Versions {
+			label := "release"
+			if !version.Commit.Retained {
+				label = "expired"
+			}
+			if version.Commit.Retained && len(version.Reasons) > 0 {
+				label = "keep"
+			}
+			fmt.Fprintf(out, "%s %s  %s  reasons: %s\n", label, version.Commit.ID, version.Commit.Message, strings.Join(version.Reasons, ", "))
+		}
+		fmt.Fprintf(out, "Token: %s\nApply with: lode cleanup -keep %d -apply %s (from this workspace)\n", plan.Token, keep, plan.Token)
+	case "collect":
+		state := w.State()
+		client, err := remote.New(state.URL, state.Token, state.Project)
+		if err != nil {
+			return err
+		}
+		collected, err := client.Collect(ctx)
+		if err != nil {
+			return err
+		}
+		printCollection(out, collected)
 	case "switch":
 		if len(args) != 1 {
 			return errors.New("usage: lode switch [-ours PATH | -theirs PATH] BRANCH")
@@ -411,4 +533,8 @@ func serve(ctx context.Context, directory, address string, out io.Writer) error 
 		}
 		return nil
 	}
+}
+
+func printCollection(out io.Writer, result content.Collection) {
+	fmt.Fprintf(out, "Physical repository bytes: %d before, %d after. Native safety delays may require a later collect.\n", result.BeforeBytes, result.AfterBytes)
 }

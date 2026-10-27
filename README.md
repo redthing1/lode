@@ -2,7 +2,7 @@
 
 Lode is a self-hosted version-control application for large binary files and folders. A server stores complete versions; clients work with ordinary files and can download only selected paths.
 
-The current implementation supports connected saves, branches, whole-file merges, partial checkout, workspace updates, historical restore, status, history, and recovery. It is experimental. Retention, collection, and backup commands are not available; all accepted versions currently retain their contents.
+The current implementation supports connected saves, branches, whole-file merges, partial checkout, workspace updates, historical restore, retention tags, cleanup, and recovery. It is experimental. Complete-store backup commands are not yet available.
 
 ## Build
 
@@ -76,6 +76,26 @@ bin/lode -C ./work update
 Conflicts require `merge -ours PATH BRANCH` or `merge -theirs PATH BRANCH`, choosing the destination or source version respectively. A directory choice replaces that entire subtree, including independent changes within it; use individual file paths for narrower choices. Merges record both parents. An already merged source creates no version. If history has multiple best common ancestors, choose one of the reported versions with `-base COMMIT`. `log` follows first-parent history.
 
 `restore COMMIT [PATH...]` places historical contents into currently selected paths as local changes, keeping the branch and baseline. Omit paths to restore the whole selection. It refuses to overwrite local changes unless `-force` is supplied. Save the restored changes to publish a new version.
+
+## Storage lifetime
+
+Tags protect important versions from content expiry. `tag NAME [COMMIT]` uses the workspace base when no version is supplied; `tag` lists tags and `tag -delete NAME` removes one. A tag cannot silently move to a different version.
+
+Preview cleanup before applying it:
+
+```sh
+bin/lode -C ./work tag release-1
+bin/lode -C ./work cleanup -keep 20
+bin/lode -C ./work cleanup -keep 20 -apply PREVIEW_TOKEN
+```
+
+`-keep N` protects the latest N first-parent versions of every branch, counting each tip. Branch tips and tagged versions are always protected, including with `-keep 0`. The preview identifies kept, eligible and already expired versions. Apply uses the printed token and rejects changes to history or references since that preview. Repeating an applied token is safe while history and references still match.
+
+Expiry removes the promise of downloadable contents; history and comparison metadata remain, and `log` marks expired versions. Increasing `-keep` later cannot restore expired contents. Expired versions cannot become new branch or tag targets. Local files and baseline facts remain usable after their server base expires, and `update` can preserve local work while advancing to a retained tip.
+
+Applying cleanup records expiry, then requests native collection. `collect` requests collection again without changing retention. Collection reports physical repository blob bytes before and after, excluding caches. Native safety delays can require several runs over hours or days; packed storage overhead can remain. Collection runs explicitly and temporarily blocks other project operations. Logical history metadata is not pruned.
+
+An active file download stays protected until its stream finishes. A version can expire between downloads in a local transition; resume then reports unavailable contents, and cancel restores the preserved local files. Idle workspaces and unfinished local operations do not indefinitely retain server contents.
 
 ## Recovery and limits
 

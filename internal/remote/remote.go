@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/redthing1/lode/internal/content"
 	"github.com/redthing1/lode/internal/model"
 	"github.com/redthing1/lode/internal/project"
 )
@@ -49,6 +50,12 @@ func codeOf(err error) string {
 		return "merge_base"
 	case errors.Is(err, project.ErrAlreadyMerged):
 		return "unchanged"
+	case errors.Is(err, project.ErrExpired):
+		return "expired"
+	case errors.Is(err, project.ErrCleanupChanged):
+		return "cleanup_changed"
+	case errors.Is(err, project.ErrReferenceChanged):
+		return "reference_changed"
 	}
 	switch {
 	case errors.Is(err, project.ErrNotFound):
@@ -84,6 +91,10 @@ func (h *handler) fail(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case "invalid":
 		status = http.StatusBadRequest
+	case "expired":
+		status = http.StatusGone
+	case "cleanup_changed", "reference_changed":
+		status = http.StatusConflict
 	case "conflicts", "merge_base", "unchanged":
 		status = http.StatusConflict
 	}
@@ -172,6 +183,94 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+	}
+	if len(parts) == 1 && parts[0] == "tags" {
+		switch r.Method {
+		case http.MethodGet:
+			items, err := h.p.Tags(ctx)
+			if err != nil {
+				h.fail(w, err)
+				return
+			}
+			h.json(w, items)
+			return
+		case http.MethodPost:
+			var req project.Tag
+			if !h.decode(w, r, &req) {
+				return
+			}
+			if err := h.p.CreateTag(ctx, req.Name, req.Commit); err != nil {
+				h.fail(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		case http.MethodDelete:
+			var req struct {
+				Name     string `json:"name"`
+				Expected string `json:"expected"`
+			}
+			if !h.decode(w, r, &req) {
+				return
+			}
+			if err := h.p.DeleteTag(ctx, req.Name, req.Expected); err != nil {
+				h.fail(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+	if len(parts) == 2 && parts[0] == "cleanup" {
+		switch parts[1] {
+		case "preview":
+			if r.Method != http.MethodPost {
+				break
+			}
+			var req struct {
+				Keep int `json:"keep"`
+			}
+			if !h.decode(w, r, &req) {
+				return
+			}
+			plan, err := h.p.PreviewCleanup(ctx, req.Keep)
+			if err != nil {
+				h.fail(w, err)
+				return
+			}
+			h.json(w, plan)
+			return
+		case "apply":
+			if r.Method != http.MethodPost {
+				break
+			}
+			var req struct {
+				Keep  int    `json:"keep"`
+				Token string `json:"token"`
+			}
+			if !h.decode(w, r, &req) {
+				return
+			}
+			n, err := h.p.ApplyCleanup(ctx, req.Keep, req.Token)
+			if err != nil {
+				h.fail(w, err)
+				return
+			}
+			h.json(w, n)
+			return
+		}
+	}
+	if len(parts) == 1 && parts[0] == "collect" && r.Method == http.MethodPost {
+		if !h.decodeEmpty(w, r) {
+			return
+		}
+		result, err := h.p.Collect(ctx)
+		if err != nil {
+			h.fail(w, err)
+			return
+		}
+		h.json(w, result)
+		return
 	}
 	if len(parts) == 1 && parts[0] == "entries" && r.Method == http.MethodPost {
 		var req struct {
@@ -435,6 +534,12 @@ func parseError(resp *http.Response) error {
 		return fmt.Errorf("%s: %w", w.Message, project.ErrOperationConflict)
 	case "already_accepted":
 		return fmt.Errorf("%s: %w", w.Message, project.ErrAlreadyAccepted)
+	case "expired":
+		return fmt.Errorf("%s: %w", w.Message, project.ErrExpired)
+	case "cleanup_changed":
+		return fmt.Errorf("%s: %w", w.Message, project.ErrCleanupChanged)
+	case "reference_changed":
+		return fmt.Errorf("%s: %w", w.Message, project.ErrReferenceChanged)
 	case "invalid":
 		return fmt.Errorf("%s: %w", w.Message, project.ErrInvalid)
 	case "conflicts":
@@ -486,6 +591,68 @@ func (c *Client) DeleteBranch(ctx context.Context, name, expected string) error 
 		return err
 	}
 	return c.result(resp, nil)
+}
+func (c *Client) Tags(ctx context.Context) ([]project.Tag, error) {
+	resp, err := c.request(ctx, http.MethodGet, "tags", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	var out []project.Tag
+	err = c.result(resp, &out)
+	return out, err
+}
+func (c *Client) CreateTag(ctx context.Context, name, commit string) error {
+	body, _ := json.Marshal(project.Tag{Name: name, Commit: commit})
+	resp, err := c.request(ctx, http.MethodPost, "tags", bytes.NewReader(body), "application/json")
+	if err != nil {
+		return err
+	}
+	return c.result(resp, nil)
+}
+func (c *Client) DeleteTag(ctx context.Context, name, expected string) error {
+	body, _ := json.Marshal(struct {
+		Name     string `json:"name"`
+		Expected string `json:"expected"`
+	}{name, expected})
+	resp, err := c.request(ctx, http.MethodDelete, "tags", bytes.NewReader(body), "application/json")
+	if err != nil {
+		return err
+	}
+	return c.result(resp, nil)
+}
+func (c *Client) PreviewCleanup(ctx context.Context, keep int) (project.CleanupPlan, error) {
+	body, _ := json.Marshal(struct {
+		Keep int `json:"keep"`
+	}{keep})
+	resp, err := c.request(ctx, http.MethodPost, "cleanup/preview", bytes.NewReader(body), "application/json")
+	if err != nil {
+		return project.CleanupPlan{}, err
+	}
+	var out project.CleanupPlan
+	err = c.result(resp, &out)
+	return out, err
+}
+func (c *Client) ApplyCleanup(ctx context.Context, keep int, token string) (int, error) {
+	body, _ := json.Marshal(struct {
+		Keep  int    `json:"keep"`
+		Token string `json:"token"`
+	}{keep, token})
+	resp, err := c.request(ctx, http.MethodPost, "cleanup/apply", bytes.NewReader(body), "application/json")
+	if err != nil {
+		return 0, err
+	}
+	var out int
+	err = c.result(resp, &out)
+	return out, err
+}
+func (c *Client) Collect(ctx context.Context) (content.Collection, error) {
+	resp, err := c.request(ctx, http.MethodPost, "collect", bytes.NewReader([]byte("{}")), "application/json")
+	if err != nil {
+		return content.Collection{}, err
+	}
+	var out content.Collection
+	err = c.result(resp, &out)
+	return out, err
 }
 func (c *Client) Head(ctx context.Context, branch string) (string, error) {
 	resp, e := c.request(ctx, "GET", "head?branch="+url.QueryEscape(branch), nil, "")

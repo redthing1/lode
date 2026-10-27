@@ -216,7 +216,7 @@ func (w *Workspace) finishSave(ctx context.Context, r project.Request) (project.
 	if err != nil {
 		var conflicts *model.Conflicts
 		var bases *project.MergeBaseConflict
-		resolvedMerge := r.SecondParent != "" && (errors.Is(err, project.ErrAlreadyMerged) || errors.Is(err, project.ErrInvalid) || errors.Is(err, project.ErrNotFound) || errors.As(err, &conflicts) || errors.As(err, &bases))
+		resolvedMerge := r.SecondParent != "" && (errors.Is(err, project.ErrAlreadyMerged) || errors.Is(err, project.ErrInvalid) || errors.Is(err, project.ErrNotFound) || errors.Is(err, project.ErrExpired) || errors.As(err, &conflicts) || errors.As(err, &bases))
 		if errors.Is(err, project.ErrStale) || resolvedMerge {
 			// The server's stable rejection permits forgetting this intent once
 			// its unaccepted native candidates have also been released.

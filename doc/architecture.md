@@ -5,8 +5,8 @@ Lode is one Go module and executable. The server owns shared history and content
 | Package | Responsibility |
 | --- | --- |
 | `model` | Pure path, selection, entry, comparison and whole-entry merge rules |
-| `project` | Publication decisions, SQLite history, and branch authority |
-| `content` | Kopia objects, complete snapshot roots, retrieval, and release |
+| `project` | Publication, SQLite history, references, and retention authority |
+| `content` | Kopia objects, snapshot roots, retrieval, release, and collection |
 | `remote` | Authenticated HTTP requests and streamed file transfers |
 | `workspace` | Local observation, selected transitions, baseline, and recovery |
 | `cmd/lode` | CLI and server lifecycle |
@@ -19,7 +19,7 @@ A version describes a complete directory tree. A workspace's selection controls 
 
 SQLite stores per-path changes with a complete checkpoint every 64 first-parent steps. Selected reads query indexed path ranges and replay at most 63 changesets. Native object references remain on the server. Kopia represents and protects the complete content tree; it does not decide whether a branch may advance.
 
-Branches name versions; creating a branch copies no contents. Reference changes are serialized, and deletion checks the expected tip. The service retains every accepted version. Logical history, content availability, and workspace presence remain separate concepts.
+Branches name versions; creating a branch copies no contents. Tags protect named versions. Reference changes are serialized, deletion checks the expected target, and new targets require retained contents. Logical history, content availability, and workspace presence remain separate concepts.
 
 Merges compare complete logical trees on the server and follow both parents to find common ancestors. Ambiguous best bases require an explicit common ancestor. Whole-entry choices select files or entire subtrees; selected native objects are reused from the parents. Every published merge records both parents, except a merge into an empty branch, whose sole parent is the source. A source already in the destination's ancestry produces no version.
 
@@ -35,7 +35,17 @@ Merges use the same publication path with immutable source and destination versi
 
 Retries resolve the original outcome. Accepted, stale, unchanged, and cancelled operations keep their decisions. Reusing an operation ID for another intent fails. Cancellation also blocks a request that has not yet arrived.
 
-Startup checks accepted snapshot protection and releases unaccepted candidates. It never promotes an unfinished capture into history. An uncertain SQLite acceptance error leaves protection intact until the database outcome is resolved.
+Startup checks retained snapshot protection and releases unaccepted or expired roots. It never promotes an unfinished capture into history. An uncertain SQLite acceptance error leaves protection intact until the database outcome is resolved.
+
+## Retention and collection
+
+Cleanup protects branch tips, tags and a requested number of first-parent versions per branch. Preview explains those reasons. Its token binds the count, immutable version identities and current references. Apply recomputes that decision under the exclusive project gate and rejects a changed token. Availability is excluded from the token, so repeating the same expiry decision is idempotent.
+
+One SQLite transaction clears the native root reference of each eligible version. An empty root is the durable payload-availability fact; logical entries, parents and publication outcomes remain. Native manifests are released by collection or startup reconciliation only after that decision. Interrupted cleanup can leave extra protection temporarily, but cannot release contents still promised by SQLite.
+
+Reads check availability and hold the shared gate for their full stream. Publication, reference changes, expiry and collection use its exclusive side. Merges require retained parent payloads while common-ancestor comparison uses logical metadata even after expiry. An idle workspace base has no retention lease; its local baseline supports comparison and update. A multi-file transition can encounter expiry between reads and remains cancellable.
+
+The content adapter invokes Kopia's ordinary full snapshot garbage collection and maintenance with its standard safety delays. Kopia owns reachability, pack rewriting, deletion and maintenance state. Lode reports physical blob totals before and after the request; a successful request does not promise immediate reclamation. There is no separate pack ledger or collection scheduler.
 
 ## Local recovery
 
