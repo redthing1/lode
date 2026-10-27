@@ -136,7 +136,7 @@ func (w *Workspace) cancelTransition(ctx context.Context) error {
 func (w *Workspace) applyChange(ctx context.Context, version string, c model.Change, i int) error {
 	name, old, new := c.After.Path, recoveryName(i, "old"), recoveryName(i, "new")
 	if c.After.Kind == model.File {
-		if err := w.stage(ctx, version, c.After, i); err != nil {
+		if err := w.stage(ctx, version, c, i); err != nil {
 			return err
 		}
 	}
@@ -218,7 +218,8 @@ func (w *Workspace) applyChange(ctx context.Context, version string, c model.Cha
 	return errors.Join(syncDirectory(w.root, path.Dir(name)), syncDirectory(w.root, ".lode/transition"))
 }
 
-func (w *Workspace) stage(ctx context.Context, version string, e model.Entry, i int) error {
+func (w *Workspace) stage(ctx context.Context, version string, change model.Change, i int) error {
+	e := change.After
 	new, part := recoveryName(i, "new"), recoveryName(i, "part")
 	if w.sameFile(new, e.Path) {
 		return nil
@@ -240,17 +241,26 @@ func (w *Workspace) stage(ctx context.Context, version string, e model.Entry, i 
 	if err != nil {
 		return err
 	}
-	reader, err := client.Read(ctx, version, e.Path)
-	if err != nil {
-		return err
+	var basis *os.File
+	if change.Before.Kind == model.File {
+		basis, err = w.openFile(e.Path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if basis != nil {
+			defer basis.Close()
+		}
 	}
 	f, err := w.root.OpenFile(part, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
-		reader.Close()
 		return err
 	}
-	err = copyVerified(f, reader, e)
-	err = errors.Join(err, reader.Close(), f.Sync(), f.Close())
+	if basis == nil {
+		err = client.Download(ctx, version, e, nil, 0, f)
+	} else {
+		err = client.Download(ctx, version, e, basis, change.Before.Size, f)
+	}
+	err = errors.Join(err, f.Sync(), f.Close())
 	if err != nil {
 		return err
 	}

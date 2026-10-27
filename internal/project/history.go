@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/redthing1/lode/internal/content"
@@ -61,26 +60,23 @@ func (p *Project) inventory(ctx context.Context, id string, selection model.Sele
 	if selection == nil {
 		selection = model.Selection{{Include: true}}
 	}
-	var clauses []string
-	var scope []any
+	var scopes [][]any
 	for _, r := range selection {
 		if r.Include {
 			if r.Path == "" {
-				clauses = []string{"1"}
-				scope = nil
+				scopes = [][]any{nil}
 				break
 			}
-			clauses = append(clauses, "(path=? OR (path>=? AND path<?))")
-			scope = append(scope, r.Path, r.Path+"/", r.Path+"0")
+			scopes = append(scopes, []any{r.Path, r.Path + "/", r.Path + "0"})
 		}
 	}
-	if len(clauses) == 0 {
+	if len(scopes) == 0 {
 		if _, err := p.commit(ctx, id); err != nil {
 			return nil, err
 		}
 		return []content.Entry{}, nil
 	}
-	query := "SELECT path,kind,size,sha256,object FROM entries WHERE commit_id=? AND (" + strings.Join(clauses, " OR ") + ")"
+	const selectEntries = "SELECT path,kind,size,sha256,object FROM entries WHERE commit_id=?1"
 	seen := map[string]bool{}
 	result := []content.Entry{}
 	for count := 0; id != ""; count++ {
@@ -95,27 +91,35 @@ func (p *Project) inventory(ctx context.Context, id string, selection model.Sele
 			}
 			return nil, err
 		}
-		args := append([]any{id}, scope...)
-		rows, err := p.db.QueryContext(ctx, query, args...)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var e content.Entry
-			if err := rows.Scan(&e.Path, &e.Kind, &e.Size, &e.SHA256, &e.Object); err != nil {
-				rows.Close()
+		for _, scope := range scopes {
+			query := selectEntries
+			if len(scope) != 0 {
+				// On WITHOUT ROWID tables, OR can scan every entry of a commit.
+				// Separate indexed searches keep selected reads proportional to
+				// their prefixes. ?1 shares the version parameter in both arms.
+				query += " AND path=? UNION ALL " + selectEntries + " AND path>=? AND path<?"
+			}
+			args := append([]any{id}, scope...)
+			rows, err := p.db.QueryContext(ctx, query, args...)
+			if err != nil {
 				return nil, err
 			}
-			if !seen[e.Path] {
-				seen[e.Path] = true
-				if e.Kind != model.Absent && selection.Includes(e.Path) {
-					result = append(result, e)
+			for rows.Next() {
+				var e content.Entry
+				if err := rows.Scan(&e.Path, &e.Kind, &e.Size, &e.SHA256, &e.Object); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				if !seen[e.Path] {
+					seen[e.Path] = true
+					if e.Kind != model.Absent && selection.Includes(e.Path) {
+						result = append(result, e)
+					}
 				}
 			}
-		}
-		err = errors.Join(rows.Err(), rows.Close())
-		if err != nil {
-			return nil, err
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				return nil, err
+			}
 		}
 		if checkpoint {
 			sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })

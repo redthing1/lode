@@ -24,34 +24,57 @@ import (
 )
 
 type observedRequest struct {
-	method string
-	path   string
-	body   []byte
+	method        string
+	path          string
+	body          []byte
+	responseBytes int64
+	encoding      string
 }
 
 type requestObserver struct {
 	mu       sync.Mutex
-	requests []observedRequest
+	requests []*observedRequest
 }
 
 func (o *requestObserver) handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body []byte
-		if r.Method == http.MethodPost && r.URL.Path == "/v1/save" {
+		if r.Method == http.MethodPost && (r.URL.Path == "/v1/save" || r.URL.Path == "/v1/read") {
 			body, _ = io.ReadAll(r.Body)
 			r.Body = io.NopCloser(bytes.NewReader(body))
 		}
+		record := &observedRequest{method: r.Method, path: r.URL.RequestURI(), body: body}
 		o.mu.Lock()
-		o.requests = append(o.requests, observedRequest{method: r.Method, path: r.URL.RequestURI(), body: body})
+		o.requests = append(o.requests, record)
 		o.mu.Unlock()
-		next.ServeHTTP(w, r)
+		capture := &observedWriter{ResponseWriter: w}
+		next.ServeHTTP(capture, r)
+		o.mu.Lock()
+		record.responseBytes = capture.bytes
+		record.encoding = capture.Header().Get("Lode-Encoding")
+		o.mu.Unlock()
 	})
+}
+
+type observedWriter struct {
+	http.ResponseWriter
+	bytes int64
+}
+
+func (w *observedWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += int64(n)
+	return n, err
 }
 
 func (o *requestObserver) snapshot() []observedRequest {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return append([]observedRequest(nil), o.requests...)
+	result := make([]observedRequest, len(o.requests))
+	for i, request := range o.requests {
+		result[i] = *request
+	}
+	return result
 }
 
 func transferFixture(t *testing.T) (*project.Project, *Client, *requestObserver) {
@@ -165,6 +188,89 @@ func TestHTTPTransferUsesDeltaAndBoundsFullRewrite(t *testing.T) {
 		t.Fatalf("full-rewrite multipart body size = %d for %d-byte target", len(post), rewriteEntry.Size)
 	}
 	assertStoredBytes(t, p, rewrite.ID, rewriteEntry, fullRewrite)
+}
+
+func TestDownloadUsesDeltaRawFallbackAndFullRewrite(t *testing.T) {
+	ctx := context.Background()
+	_, c, observer := transferFixture(t)
+	baseBytes := opaqueData(t, 4<<20)
+	baseEntry := transferEntry("download.bin", baseBytes)
+	base, err := saveBytes(ctx, c, project.Request{ID: project.NewID(), Branch: "main", Author: "test", Message: "base", Changes: []model.Entry{baseEntry}}, baseBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := append([]byte(nil), baseBytes...)
+	copy(target[2<<20:2<<20+8], []byte{0, 255, 1, 0, 254, 2, 0, 253})
+	targetEntry := transferEntry(baseEntry.Path, target)
+	commit, err := saveBytes(ctx, c, project.Request{ID: project.NewID(), Branch: "main", Base: base.ID, Author: "test", Message: "small edit", Changes: []model.Entry{targetEntry}}, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer.mu.Lock()
+	observer.requests = nil
+	observer.mu.Unlock()
+	var got bytes.Buffer
+	if err := c.Download(ctx, commit.ID, targetEntry, bytes.NewReader(baseBytes), int64(len(baseBytes)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Bytes(), target) {
+		t.Fatal("delta download differs from target")
+	}
+	seen := observer.snapshot()
+	if len(seen) != 1 || seen[0].method != http.MethodPost || !strings.HasPrefix(seen[0].path, "/v1/read?") || len(seen[0].body) == 0 || seen[0].encoding != "rsync" {
+		t.Fatalf("delta download request = %#v", seen)
+	}
+	if seen[0].responseBytes >= int64(len(target))/4 {
+		t.Fatalf("delta response was not small: %d bytes", seen[0].responseBytes)
+	}
+
+	observer.mu.Lock()
+	observer.requests = nil
+	observer.mu.Unlock()
+	got.Reset()
+	if err := c.Download(ctx, commit.ID, targetEntry, nil, 0, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Bytes(), target) {
+		t.Fatal("raw download differs from target")
+	}
+	seen = observer.snapshot()
+	if len(seen) != 1 || seen[0].method != http.MethodGet || !strings.HasPrefix(seen[0].path, "/v1/read?") || seen[0].encoding == "rsync" {
+		t.Fatalf("raw download request = %#v", seen)
+	}
+
+	rewrite := opaqueData(t, len(target))
+	rewriteEntry := transferEntry(baseEntry.Path, rewrite)
+	rewritten, err := saveBytes(ctx, c, project.Request{ID: project.NewID(), Branch: "main", Base: commit.ID, Author: "test", Message: "full rewrite", Changes: []model.Entry{rewriteEntry}}, rewrite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer.mu.Lock()
+	observer.requests = nil
+	observer.mu.Unlock()
+	got.Reset()
+	if err := c.Download(ctx, rewritten.ID, rewriteEntry, bytes.NewReader(target), int64(len(target)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Bytes(), rewrite) {
+		t.Fatal("full rewrite delta differs from target")
+	}
+	seen = observer.snapshot()
+	if len(seen) != 1 || seen[0].method != http.MethodPost || seen[0].encoding != "rsync" || seen[0].responseBytes < int64(len(rewrite))/2 {
+		t.Fatalf("full rewrite download did not use a large delta: %#v", seen)
+	}
+}
+
+func TestReadRejectsOversizedSignature(t *testing.T) {
+	_, c, _ := transferFixture(t)
+	resp, err := c.request(context.Background(), http.MethodPost, "read?commit="+project.NewID()+"&path=file", bytes.NewReader(make([]byte, transfer.MaxSignatureSize+1)), "application/octet-stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 400 {
+		t.Fatalf("oversized signature status = %s", resp.Status)
+	}
 }
 
 func TestHTTPTransferUsesRawBodyWithoutSignatureAndRetryOutcomesStayStable(t *testing.T) {

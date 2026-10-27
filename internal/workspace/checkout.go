@@ -2,11 +2,8 @@ package workspace
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
@@ -51,19 +48,4 @@ func Clone(ctx context.Context, url, token, directory string, selection model.Se
 		return nil, fmt.Errorf("checkout incomplete; use resume or cancel in %s: %w", directory, err)
 	}
 	return w, nil
-}
-
-func copyVerified(dst io.Writer, src io.Reader, e model.Entry) error {
-	hash := sha256.New()
-	if _, err := io.CopyN(io.MultiWriter(dst, hash), src, e.Size); err != nil {
-		return fmt.Errorf("read %s: %w", e.Path, err)
-	}
-	var extra [1]byte
-	if n, err := io.ReadFull(src, extra[:]); n != 0 || err != io.EOF {
-		return fmt.Errorf("unexpected content length for %s", e.Path)
-	}
-	if hex.EncodeToString(hash.Sum(nil)) != e.SHA256 {
-		return fmt.Errorf("content hash mismatch for %s", e.Path)
-	}
-	return nil
 }

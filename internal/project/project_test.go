@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/redthing1/lode/internal/model"
@@ -324,6 +325,44 @@ func TestCheckpointBoundaryHistoriesReopen(t *testing.T) {
 		want := []byte{byte(step), 0, byte(step >> 1)}
 		if got := readFile(t, tp.p, id, "stable"); !bytes.Equal(got, want) {
 			t.Errorf("step %d bytes = %v, want %v", step, got, want)
+		}
+	}
+}
+
+func TestSelectedHistoryOverlappingPrefixesAndExclusions(t *testing.T) {
+	tp := newTestProject(t)
+	files := map[string][]byte{
+		"a/one": []byte("one"), "a/n/two": []byte("two"),
+		"a0/neighbor": []byte("zero"), "a!/neighbor": []byte("bang"), "other": []byte("other"),
+	}
+	var entries []model.Entry
+	for name, data := range files {
+		entries = append(entries, fileEntry(name, data))
+	}
+	first := save(t, tp.p, request(entries...), files)
+	data := []byte("three")
+	next := request(model.Entry{Path: "a/n/two", Kind: model.Absent}, fileEntry("a/n/three", data))
+	next.Base = first.ID
+	second := save(t, tp.p, next, map[string][]byte{"a/n/three": data})
+	tp.reopen()
+	selection := model.Selection{
+		{Path: "a", Include: true}, {Path: "a/one", Include: true},
+		{Path: "a/n", Include: false}, {Path: "a/n/three", Include: true}, {Path: "a/n/two", Include: true}, {Path: "other", Include: true},
+	}
+	for _, tc := range []struct {
+		id   string
+		want []string
+	}{{first.ID, []string{"a", "a/n/two", "a/one", "other"}}, {second.ID, []string{"a", "a/n/three", "a/one", "other"}}} {
+		got, err := tp.p.Entries(tp.ctx, tc.id, selection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var paths []string
+		for _, e := range got {
+			paths = append(paths, e.Path)
+		}
+		if !reflect.DeepEqual(paths, tc.want) {
+			t.Fatalf("selected paths = %v, want %v", paths, tc.want)
 		}
 	}
 }

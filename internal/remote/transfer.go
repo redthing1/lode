@@ -3,6 +3,8 @@ package remote
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +20,128 @@ import (
 
 const minDeltaSize = 1 << 20
 const signatureBudget = 64 << 20
+
+// read holds the normal project read protection for either representation.
+// POST supplies a bounded client signature; GET requests the complete file.
+func (h *handler) read(w http.ResponseWriter, r *http.Request) {
+	var sig []byte
+	if r.Method == http.MethodPost {
+		var err error
+		sig, err = io.ReadAll(http.MaxBytesReader(w, r.Body, transfer.MaxSignatureSize))
+		if err != nil || len(sig) == 0 {
+			h.fail(w, project.ErrInvalid)
+			return
+		}
+	}
+	out := &downloadResponse{ResponseWriter: w}
+	err := h.p.Read(r.Context(), r.URL.Query().Get("commit"), r.URL.Query().Get("path"), func(e model.Entry, rd io.Reader) error {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		if sig != nil {
+			w.Header().Set("Lode-Encoding", "rsync")
+			if err := transfer.Delta(r.Context(), bytes.NewReader(sig), rd, out); err != nil {
+				return fmt.Errorf("%w: delta download: %v", project.ErrInvalid, err)
+			}
+			return nil
+		}
+		w.Header().Set("Content-Length", fmt.Sprint(e.Size))
+		_, err := io.Copy(out, rd)
+		return err
+	})
+	if err != nil {
+		if out.started {
+			panic(http.ErrAbortHandler)
+		}
+		w.Header().Del("Lode-Encoding")
+		w.Header().Del("Content-Length")
+		h.fail(w, err)
+	}
+}
+
+type downloadResponse struct {
+	http.ResponseWriter
+	started bool
+}
+
+func (w *downloadResponse) Write(p []byte) (int, error) {
+	w.started = true
+	return w.ResponseWriter.Write(p)
+}
+
+// Download reconstructs and verifies one exact target. A basis is optional and
+// remains owned by the caller. No partial output may be installed on error.
+func (c *Client) Download(ctx context.Context, id string, target model.Entry, basis io.ReadSeeker, basisSize int64, dst io.Writer) error {
+	if err := target.Validate(); err != nil {
+		return err
+	}
+	if target.Kind != model.File || target.Size == math.MaxInt64 {
+		return project.ErrInvalid
+	}
+	var body io.ReadCloser
+	useDelta := basis != nil && target.Size >= minDeltaSize && basisSize >= minDeltaSize && basisSize <= transfer.MaxBasisSize
+	if useDelta {
+		if _, err := basis.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		var sig bytes.Buffer
+		if err := transfer.Signature(ctx, basis, basisSize, &sig); err != nil {
+			return err
+		}
+		query := url.Values{"commit": {id}, "path": {target.Path}}
+		resp, err := c.request(ctx, http.MethodPost, "read?"+query.Encode(), &sig, "application/octet-stream")
+		if err != nil {
+			return err
+		}
+		body = resp.Body
+		defer body.Close()
+		if err := c.verify(resp); err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return parseError(resp)
+		}
+		if resp.Header.Get("Lode-Encoding") != "rsync" {
+			return errors.New("unexpected download encoding")
+		}
+	} else {
+		var err error
+		body, err = c.Read(ctx, id, target.Path)
+		if err != nil {
+			return err
+		}
+		defer body.Close()
+	}
+	hash := sha256.New()
+	out := &downloadWriter{out: io.MultiWriter(dst, hash), remaining: target.Size}
+	if useDelta {
+		limited := &io.LimitedReader{R: body, N: deltaLimit(target.Size)}
+		if err := transfer.Patch(ctx, basis, basisSize, limited, target.Size, out); err != nil {
+			return err
+		}
+		if limited.N == 0 {
+			return errors.New("download delta exceeds encoded size limit")
+		}
+	} else if _, err := io.Copy(out, io.LimitReader(body, target.Size+1)); err != nil {
+		return err
+	}
+	if out.remaining != 0 || hex.EncodeToString(hash.Sum(nil)) != target.SHA256 {
+		return fmt.Errorf("download identity mismatch for %s", target.Path)
+	}
+	return nil
+}
+
+type downloadWriter struct {
+	out       io.Writer
+	remaining int64
+}
+
+func (w *downloadWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.remaining {
+		return 0, errors.New("download exceeds declared size")
+	}
+	n, err := w.out.Write(p)
+	w.remaining -= int64(n)
+	return n, err
+}
 
 func deltaLimit(size int64) int64 {
 	if size > (math.MaxInt64-(64<<10))/2 {

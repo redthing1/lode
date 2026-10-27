@@ -312,25 +312,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if len(parts) == 1 && parts[0] == "read" && r.Method == http.MethodGet {
-		// Binary output begins only after Read has resolved the path. Errors are
-		// therefore JSON before headers are committed, never appended to bytes.
-		commitID, filePath := r.URL.Query().Get("commit"), r.URL.Query().Get("path")
-		started := false
-		err := h.p.Read(ctx, commitID, filePath, func(e model.Entry, rd io.Reader) error {
-			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Content-Length", fmt.Sprint(e.Size))
-			w.WriteHeader(http.StatusOK)
-			started = true
-			_, copyErr := io.Copy(w, rd)
-			if copyErr != nil {
-				panic(http.ErrAbortHandler)
-			}
-			return copyErr
-		})
-		if err != nil && !started {
-			h.fail(w, err)
-		}
+	if len(parts) == 1 && parts[0] == "read" && (r.Method == http.MethodGet || r.Method == http.MethodPost) {
+		h.read(w, r)
 		return
 	}
 	if len(parts) == 1 && parts[0] == "signature" && r.Method == http.MethodGet {

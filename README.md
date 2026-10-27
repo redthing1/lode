@@ -95,7 +95,7 @@ bin/lode -C ./work cleanup -keep 20 -apply PREVIEW_TOKEN
 
 Expiry removes the promise of downloadable contents; history and comparison metadata remain, and `log` marks expired versions. Increasing `-keep` later cannot restore expired contents. Expired versions cannot become new branch or tag targets. Local files and baseline facts remain usable after their server base expires, and `update` can preserve local work while advancing to a retained tip.
 
-Applying cleanup records expiry, then requests native collection. `collect` requests collection again without changing retention. Collection reports physical repository blob bytes before and after, excluding caches. Native safety delays can require several runs over hours or days; packed storage overhead can remain. Collection runs explicitly and temporarily blocks other project operations. Logical history metadata is not pruned.
+Applying cleanup records expiry, then requests native collection. `collect` requests collection again without changing retention. Collection reports physical repository blob bytes before and after, excluding caches. Native safety delays can require several runs over hours or days; packed storage overhead can remain. Allow free space for native caches and temporary rewritten packs when saving or collecting. Collection runs explicitly and temporarily blocks other project operations. Logical history metadata is not pruned.
 
 An active file download stays protected until its stream finishes. A version can expire between downloads in a local transition; resume then reports unavailable contents, and cancel restores the preserved local files. Idle workspaces and unfinished local operations do not indefinitely retain server contents.
 
@@ -107,7 +107,7 @@ Stop the server, then copy the complete project into a new directory:
 bin/lode backup ./store ./project-backup
 ```
 
-The copy contains history, branches, tags, retention decisions, operation outcomes and retained contents. It also preserves project identity and credentials; keep it private. Native caches and connection configuration are rebuilt when opened.
+The copy contains history, branches, tags, retention decisions, operation outcomes and retained contents. It also preserves project identity and credentials; keep it private. It needs space for the complete database and native repository, including obsolete bytes not yet collected. Native caches and connection configuration are rebuilt when opened.
 
 To restore, make a working copy and serve it:
 
@@ -130,7 +130,9 @@ Checkout creates a new directory; attach requires an existing folder and an empt
 
 Lode versions file contents and directories. Paths must be UTF-8 without control characters. Symlinks and special files are unsupported; permissions and timestamps are not versioned. `.lode` is reserved for workspace state and credentials. Other selected files are included. Keep files still while saving: status hashes selected files, and upload validates changed contents again.
 
-Clients store selected baseline metadata and files, without a native storage index or historical payloads. JSON metadata messages are limited to 16 MiB. Transfers stream. Changed files of at least 1 MiB can upload as librsync deltas against their retained base; files without a suitable base upload in full. A basis above about 28 GiB uses full transfer to bound client memory. Signatures use at most 64 MiB of temporary client disk space per save; remaining files upload in full. Delta transfer still reads complete source files, and full rewrites may save no bandwidth. Downloads currently transfer requested files in full.
+Clients store selected baseline metadata and files, without a native storage index or historical payloads. JSON metadata messages are limited to 16 MiB. Transfers stream. Changed files of at least 1 MiB can upload as librsync deltas against their retained base. Updates, switches and restores can similarly reuse an existing local file during download, even if its server version has expired. Files without a suitable basis transfer in full, including initial checkout and newly selected paths with no local file.
+
+A basis above about 28 GiB uses full transfer to bound client memory. Upload signatures use at most 64 MiB of temporary client disk space per save; remaining files upload in full. A download holds at most one 1 MiB signature at a time. Delta transfer still reads complete source files, and full rewrites may save no bandwidth. Updates can reread local files several times for observation, matching and recovery checks. Downloaded files are reconstructed into temporary files and verified before installation.
 
 A transition needs space for preserved replaced files and one incoming file; completed staged files share their installed inode until cleanup. Initial checkout has no replaced files to preserve. Server captures currently examine the complete logical tree.
 
