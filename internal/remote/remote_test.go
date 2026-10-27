@@ -148,24 +148,28 @@ func TestTagsAndCleanupTransport(t *testing.T) {
 	if err != nil || len(tags) != 1 || tags[0] != (project.Tag{Name: "release", Commit: first.ID}) {
 		t.Fatalf("tags %#v: %v", tags, err)
 	}
-	plan, err := c.PreviewCleanup(ctx, 0)
+	var versions []project.RetentionVersion
+	token, err := c.PreviewCleanup(ctx, 0, func(v project.RetentionVersion) error {
+		versions = append(versions, v)
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Keep != 0 || len(plan.Token) == 0 || len(plan.Versions) != 2 {
-		t.Fatalf("cleanup plan %#v", plan)
+	if len(token) == 0 || len(versions) != 2 {
+		t.Fatalf("cleanup preview token %q, versions %#v", token, versions)
 	}
 	if err := c.DeleteTag(ctx, "release", first.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.ApplyCleanup(ctx, 0, plan.Token); !errors.Is(err, project.ErrCleanupChanged) {
+	if _, err := c.ApplyCleanup(ctx, 0, token); !errors.Is(err, project.ErrCleanupChanged) {
 		t.Fatalf("stale cleanup token error = %v", err)
 	}
-	plan, err = c.PreviewCleanup(ctx, 0)
+	token, err = c.PreviewCleanup(ctx, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expired, err := c.ApplyCleanup(ctx, 0, plan.Token)
+	expired, err := c.ApplyCleanup(ctx, 0, token)
 	if err != nil {
 		t.Fatal(err)
 	}

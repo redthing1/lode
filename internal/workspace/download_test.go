@@ -57,7 +57,7 @@ func TestLargeSwitchAndRestoreUseTheirExactContentSource(t *testing.T) {
 	if !bytes.Equal(read(t, localDir, "asset.bin"), target) || w.State().Base != base || w.State().Branch != "old" {
 		t.Fatal("restore did not use its content source while preserving the baseline")
 	}
-	changes, err := w.Status()
+	changes, err := w.Status(context.Background())
 	if err != nil || len(changes) != 1 || changes[0].Path != "asset.bin" {
 		t.Fatalf("restored contents should be local changes: %v, %v", changes, err)
 	}
@@ -115,7 +115,7 @@ func TestUpdateUsesLocalBasisAfterBaseExpiryAndTheirsChoice(t *testing.T) {
 	if deltaReads.Load() == 0 {
 		t.Fatal("large update did not request a delta")
 	}
-	changes, err := w.Status()
+	changes, err := w.Status(context.Background())
 	if err != nil || len(changes) != 0 {
 		t.Fatalf("status after theirs update = %#v, %v", changes, err)
 	}

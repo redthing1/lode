@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/redthing1/lode/internal/content"
 	"github.com/redthing1/lode/internal/model"
@@ -107,8 +108,16 @@ func (p *Project) requireRetained(ctx context.Context, id string) error {
 }
 
 type RetentionVersion struct {
-	Commit  Commit   `json:"commit"`
-	Reasons []string `json:"reasons"`
+	ID       string    `json:"id"`
+	Created  time.Time `json:"created"`
+	Retained bool      `json:"retained"`
+	Branches int       `json:"branches"`
+	Tags     int       `json:"tags"`
+	Recent   int       `json:"recent"`
+}
+
+func (v RetentionVersion) Protected() bool {
+	return v.Branches > 0 || v.Tags > 0 || v.Recent > 0
 }
 
 type CleanupPlan struct {
@@ -128,21 +137,28 @@ func (p *Project) cleanupPlan(ctx context.Context, keep int) (CleanupPlan, error
 	if keep < 0 {
 		return plan, ErrInvalid
 	}
-	rows, err := p.db.QueryContext(ctx, "SELECT "+commitColumns+" FROM commits ORDER BY id")
+	rows, err := p.db.QueryContext(ctx, "SELECT id,parent,created,root<>'' FROM commits ORDER BY id")
 	if err != nil {
 		return plan, err
 	}
 	byID := map[string]int{}
-	var ids []string
+	var parents []string
 	for rows.Next() {
-		c, err := scanCommit(rows)
+		var v RetentionVersion
+		var parent sql.NullString
+		var created string
+		if err := rows.Scan(&v.ID, &parent, &created, &v.Retained); err != nil {
+			rows.Close()
+			return plan, err
+		}
+		v.Created, err = time.Parse(time.RFC3339Nano, created)
 		if err != nil {
 			rows.Close()
 			return plan, err
 		}
-		byID[c.ID] = len(plan.Versions)
-		ids = append(ids, c.ID)
-		plan.Versions = append(plan.Versions, RetentionVersion{Commit: c, Reasons: []string{}})
+		byID[v.ID] = len(plan.Versions)
+		parents = append(parents, parent.String)
+		plan.Versions = append(plan.Versions, v)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return plan, err
@@ -158,19 +174,19 @@ func (p *Project) cleanupPlan(ctx context.Context, keep int) (CleanupPlan, error
 	for _, branch := range branches {
 		id := branch.Tip
 		for n := 0; id != "" && (n == 0 || n < keep); n++ {
+			if err := ctx.Err(); err != nil {
+				return plan, err
+			}
 			i, ok := byID[id]
 			if !ok {
 				return plan, fmt.Errorf("branch history references missing version %s", id)
 			}
-			reason := "recent:" + branch.Name
 			if n == 0 {
-				reason = "branch:" + branch.Name
+				plan.Versions[i].Branches++
+			} else {
+				plan.Versions[i].Recent++
 			}
-			plan.Versions[i].Reasons = append(plan.Versions[i].Reasons, reason)
-			id = ""
-			if parents := plan.Versions[i].Commit.Parents; len(parents) > 0 {
-				id = parents[0]
-			}
+			id = parents[i]
 		}
 	}
 	for _, tag := range tags {
@@ -178,23 +194,27 @@ func (p *Project) cleanupPlan(ctx context.Context, keep int) (CleanupPlan, error
 		if !ok {
 			return plan, fmt.Errorf("tag references missing version %s", tag.Commit)
 		}
-		plan.Versions[i].Reasons = append(plan.Versions[i].Reasons, "tag:"+tag.Name)
+		plan.Versions[i].Tags++
 	}
 	// Availability is intentionally excluded: applying this same decision again
 	// can only find fewer retained candidates. New history or protection changes it.
-	data, err := json.Marshal(struct {
-		Keep     int
-		Versions []string
-		Branches []Branch
-		Tags     []Tag
-	}{keep, ids, branches, tags})
-	if err != nil {
-		return plan, err
+	// Encode one fact at a time instead of allocating a second history-sized
+	// JSON buffer. Input order is canonical; counts delimit the three lists.
+	hash := sha256.New()
+	encoder := json.NewEncoder(hash)
+	_ = encoder.Encode([]int{keep, len(plan.Versions), len(branches), len(tags)})
+	for _, v := range plan.Versions {
+		_ = encoder.Encode(v.ID)
 	}
-	hash := sha256.Sum256(data)
-	plan.Token = hex.EncodeToString(hash[:])
+	for _, branch := range branches {
+		_ = encoder.Encode(branch)
+	}
+	for _, tag := range tags {
+		_ = encoder.Encode(tag)
+	}
+	plan.Token = hex.EncodeToString(hash.Sum(nil))
 	sort.Slice(plan.Versions, func(i, j int) bool {
-		a, b := plan.Versions[i].Commit, plan.Versions[j].Commit
+		a, b := plan.Versions[i], plan.Versions[j]
 		if a.Created.Equal(b.Created) {
 			return a.ID < b.ID
 		}
@@ -226,10 +246,10 @@ func (p *Project) ApplyCleanup(ctx context.Context, keep int, token string) (int
 	defer tx.Rollback()
 	count := 0
 	for _, version := range plan.Versions {
-		if !version.Commit.Retained || len(version.Reasons) > 0 {
+		if !version.Retained || version.Protected() {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE commits SET root='' WHERE id=?", version.Commit.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE commits SET root='' WHERE id=?", version.ID); err != nil {
 			return 0, err
 		}
 		count++

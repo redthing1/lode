@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -32,7 +33,7 @@ func TestCleanupPreservesChangedOldBackupDespiteExternalHardlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := transition{Changes: []model.Change{{Before: w.state.Baseline[0], After: model.Entry{Path: "a", Kind: model.Absent}}}}
-	err := w.cleanTransition(&p)
+	err := w.cleanTransition(context.Background(), &p)
 	if err == nil || !strings.Contains(err.Error(), "0.old") {
 		t.Fatalf("cleanTransition() error = %v, want preserved old-backup conflict", err)
 	}
@@ -56,7 +57,7 @@ func TestCleanupKeepsLastUnexpectedCopyAcrossPrivateHardlinkAliases(t *testing.T
 		t.Fatal(err)
 	}
 	p := transition{Changes: []model.Change{{Before: model.Entry{Path: "a", Kind: model.Absent}, After: reviewFile("a", []byte("expected"))}}}
-	err := w.cleanTransition(&p)
+	err := w.cleanTransition(context.Background(), &p)
 	if err == nil || !strings.Contains(err.Error(), "0.undo") {
 		t.Fatalf("cleanTransition() error = %v, want conflict at last private alias", err)
 	}

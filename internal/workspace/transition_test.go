@@ -188,7 +188,7 @@ func TestUpdateConflictRequiresChoiceAndChoicesKeepWholeFile(t *testing.T) {
 			if got := read(t, localDir, "a"); string(got) != tc.want {
 				t.Fatalf("chosen bytes = %q, want %q", got, tc.want)
 			}
-			changes, err := w.Status()
+			changes, err := w.Status(context.Background())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -725,7 +725,7 @@ func TestTransitionResumePreservesEditMadeAfterInstallBeforeProgress(t *testing.
 	if got := read(t, localDir, "a"); !bytes.Equal(got, later) {
 		t.Fatalf("later edit lost: %q", got)
 	}
-	changesNow, err := w.Status()
+	changesNow, err := w.Status(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

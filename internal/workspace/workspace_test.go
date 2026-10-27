@@ -203,7 +203,7 @@ func TestLostAcceptedReplyResumeKeepsLaterLocalEdit(t *testing.T) {
 	if !bytes.Equal(read(t, dir, "a.bin"), later) {
 		t.Fatal("resume overwrote later local edit")
 	}
-	changes, err := w.Status()
+	changes, err := w.Status(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,13 +381,13 @@ func TestStatusErrorsForSelectedSymlinkButIgnoresOmittedSymlink(t *testing.T) {
 	if err := os.Symlink("../target", filepath.Join(dir, "ignored", "link")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Status(); err != nil {
+	if _, err := w.Status(context.Background()); err != nil {
 		t.Fatalf("omitted symlink affected status: %v", err)
 	}
 	if err := os.Symlink("../target", filepath.Join(dir, "selected-link")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Status(); err == nil {
+	if _, err := w.Status(context.Background()); err == nil {
 		t.Fatal("status accepted a selected symlink")
 	}
 }

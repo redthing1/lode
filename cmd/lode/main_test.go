@@ -33,7 +33,8 @@ func TestBranchAndSwitchCLIWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Save(ctx, "tester", "initial"); err != nil {
+	initial, err := w.Save(ctx, "tester", "initial\n\x1b[2Jclear")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Close(); err != nil {
@@ -48,6 +49,12 @@ func TestBranchAndSwitchCLIWorkflow(t *testing.T) {
 		}
 		return out.String()
 	}
+	if got := invoke("status"); !strings.Contains(got, "Branch: main\nBase: "+initial.ID+"\nSelection: all paths\n") || !strings.Contains(got, "No selected changes.") {
+		t.Fatalf("status lacks workspace context: %q", got)
+	}
+	if got := invoke("log"); strings.Contains(got, "\x1b") || !strings.Contains(got, `"initial\n\x1b[2Jclear"`) {
+		t.Fatalf("log must render message controls as quoted text: %q", got)
+	}
 	if got := invoke("branch", "feature"); !strings.Contains(got, "Created branch feature") {
 		t.Fatalf("branch output: %q", got)
 	}
@@ -61,6 +68,43 @@ func TestBranchAndSwitchCLIWorkflow(t *testing.T) {
 	var out, diagnostics bytes.Buffer
 	if err := run(ctx, []string{"-C", dir, "branch", "-delete", "feature"}, &out, &diagnostics); err == nil || !strings.Contains(err.Error(), "current workspace branch") {
 		t.Fatalf("delete current branch error = %v", err)
+	}
+	invoke("select", "-none")
+	if got := invoke("select"); got != "no paths\n" {
+		t.Fatalf("empty selection output: %q", got)
+	}
+	if got := invoke("status"); !strings.Contains(got, "Branch: feature") || !strings.Contains(got, "Selection: no paths") {
+		t.Fatalf("unloaded workspace context: %q", got)
+	}
+}
+
+func TestCommandHelpExplainsArgumentsWithoutOpeningAWorkspace(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"clone", "-h"}, []string{"URL DIR", "-include", "-exclude", "LODE_TOKEN"}},
+		{[]string{"help", "clone"}, []string{"URL DIR", "-include", "LODE_TOKEN"}},
+		{[]string{"help", "restore"}, []string{"COMMIT [PATH...]", "-force", "local changes"}},
+		{[]string{"cleanup", "-h"}, []string{"-keep N", "-apply TOKEN", "Tips and tags"}},
+		{[]string{"help", "merge"}, []string{"BRANCH", "-ours", "-theirs", "update afterwards", "LODE_AUTHOR"}},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			var out, diagnostics bytes.Buffer
+			args := append([]string{"-C", filepath.Join(t.TempDir(), "missing")}, tc.args...)
+			if err := run(context.Background(), args, &out, &diagnostics); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(diagnostics.String(), want) {
+					t.Fatalf("help missing %q: %s", want, diagnostics.String())
+				}
+			}
+		})
+	}
+	var out, diagnostics bytes.Buffer
+	if err := run(context.Background(), []string{"help", "unknown"}, &out, &diagnostics); err == nil {
+		t.Fatal("unknown command help succeeded")
 	}
 }
 

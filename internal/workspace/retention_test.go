@@ -36,7 +36,7 @@ func TestExpiredBaseStillSupportsPartialUpdateAndSave(t *testing.T) {
 	if _, err := s.p.Collect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	status, err := w.Status()
+	status, err := w.Status(context.Background())
 	if err != nil || len(status) != 1 || status[0].Path != "selected" {
 		t.Fatalf("status with expired base = %v, %v", status, err)
 	}
@@ -108,7 +108,7 @@ func TestRestoreSourceExpiryBetweenReadsCanBeCancelled(t *testing.T) {
 	if string(read(t, localDir, "a")) != "current a" || string(read(t, localDir, "b")) != "current b" || w.State().Base != current {
 		t.Fatal("cancellation did not preserve pre-restore contents and baseline")
 	}
-	if status, err := w.Status(); err != nil || len(status) != 0 {
+	if status, err := w.Status(context.Background()); err != nil || len(status) != 0 {
 		t.Fatalf("cancelled workspace = %v, %v", status, err)
 	}
 }

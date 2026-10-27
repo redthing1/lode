@@ -44,7 +44,7 @@ bin/lode clone -include assets http://127.0.0.1:8473 ./selected
 bin/lode -C ./selected log
 ```
 
-Repeat `-include` to select several files or directories, and use `-exclude` for exceptions. The nearest rule wins. Omit selection rules to download the whole project; exclusions alone select everything except those paths. Options precede positional arguments; `-C` precedes the command. Commands operate on the workspace root, either the current directory or the directory specified by `-C`.
+Repeat `-include` to select several files or directories, and use `-exclude` for exceptions. The nearest rule wins. Omit selection rules to download the whole project; exclusions alone select everything except those paths. Options precede positional arguments; `-C` precedes the command. Commands operate on the workspace root, either the current directory or the directory specified by `-C`. Use `lode help COMMAND` for arguments and options; `status` shows the branch, base and selection before local changes.
 
 Saving from a partial workspace preserves unloaded paths. A save against an outdated branch tip fails without publishing. Use `update` to obtain the latest version while preserving independent local edits:
 
@@ -91,7 +91,7 @@ bin/lode -C ./work cleanup -keep 20
 bin/lode -C ./work cleanup -keep 20 -apply PREVIEW_TOKEN
 ```
 
-`-keep N` protects the latest N first-parent versions of every branch, counting each tip. Branch tips and tagged versions are always protected, including with `-keep 0`. The preview identifies kept, eligible and already expired versions. Apply uses the printed token and rejects changes to history or references since that preview. Repeating an applied token is safe while history and references still match.
+`-keep N` protects the latest N first-parent versions of every branch, counting each tip. Branch tips and tagged versions are always protected, including with `-keep 0`. The preview lists version IDs, timestamps, availability and protection counts; `branch` and `tag` show the named references. It streams the complete list and prints an apply token only after the preview finishes successfully. Apply rejects changes to history or references since that preview. Repeating an applied token is safe while history and references still match.
 
 Expiry removes the promise of downloadable contents; history and comparison metadata remain, and `log` marks expired versions. Increasing `-keep` later cannot restore expired contents. Expired versions cannot become new branch or tag targets. Local files and baseline facts remain usable after their server base expires, and `update` can preserve local work while advancing to a retained tip.
 
@@ -122,6 +122,8 @@ An abrupt interruption may leave an unfinished sibling directory named `.DEST.pa
 
 ## Recovery and limits
 
+Long commands report elapsed activity on an interactive terminal. Ctrl-C interrupts scanning and transfers; an interrupted command exits with status 130. Unfinished operations remain recoverable, and interruption does not automatically roll back local changes.
+
 Use `lode resume` in a workspace after an interrupted operation. A save retry resolves the original request and preserves subsequent local edits. If an unaccepted save's intended files have changed, use `lode cancel` before saving again. Cancelling a save leaves local files intact; an already accepted save must be resumed. A confirmed stale rejection clears its save intent so an update can proceed.
 
 Checkout, update, switch, selection changes and restore share a recovery plan in `.lode`. They preserve replaced files until completion. Resume finishes the planned transition; cancel rolls back an unfinished transition. If files acquired newer edits, recovery preserves them and reports the conflicting path. Move it aside before retrying. After a transition commits, resume completes any remaining cleanup. Cancelled initial checkout leaves an empty-selection workspace that can be populated with `select`. An interrupted merge resumes its original saved source and destination versions; update remains a separate local operation.
@@ -130,7 +132,7 @@ Checkout creates a new directory; attach requires an existing folder and an empt
 
 Lode versions file contents and directories. Paths must be UTF-8 without control characters. Symlinks and special files are unsupported; permissions and timestamps are not versioned. `.lode` is reserved for workspace state and credentials. Other selected files are included. Keep files still while saving: status hashes selected files, and upload validates changed contents again.
 
-Clients store selected baseline metadata and files, without a native storage index or historical payloads. JSON metadata messages are limited to 16 MiB. Transfers stream. Changed files of at least 1 MiB can upload as librsync deltas against their retained base. Updates, switches and restores can similarly reuse an existing local file during download, even if its server version has expired. Files without a suitable basis transfer in full, including initial checkout and newly selected paths with no local file.
+Clients store selected baseline metadata and files, without a native storage index or historical payloads. JSON requests and individual metadata records are limited to 16 MiB; metadata lists stream without that total-response limit. File transfers stream. Changed files of at least 1 MiB can upload as librsync deltas against their retained base. Updates, switches and restores can similarly reuse an existing local file during download, even if its server version has expired. Files without a suitable basis transfer in full, including initial checkout and newly selected paths with no local file.
 
 A basis above about 28 GiB uses full transfer to bound client memory. Upload signatures use at most 64 MiB of temporary client disk space per save; remaining files upload in full. A download holds at most one 1 MiB signature at a time. Delta transfer still reads complete source files, and full rewrites may save no bandwidth. Updates can reread local files several times for observation, matching and recovery checks. Downloaded files are reconstructed into temporary files and verified before installation.
 

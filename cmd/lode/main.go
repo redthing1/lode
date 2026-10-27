@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -21,45 +20,14 @@ import (
 	"github.com/redthing1/lode/internal/workspace"
 )
 
-const usage = `Lode — version large binary projects
-
-Usage: lode [-C workspace] COMMAND [options]
-
-  init DIR                     Create a server project; print its access token
-  backup SOURCE DEST           Copy a stopped project; use the copy to restore
-  serve [-listen HOST:PORT] DIR Serve a project on a loopback address
-  attach [-include PATH] URL [DIR]  Track a folder in an empty project
-  clone [-include PATH] URL DIR    Download a selected workspace
-  status                       Show selected local changes
-  save -m MESSAGE [-author NAME]   Save selected changes
-  update [-ours PATH | -theirs PATH]  Update while preserving local edits
-  select [-include PATH] [-exclude PATH] [-none]  Inspect or replace selection
-  log [-n COUNT]               List versions on the workspace branch
-  branch                       List branches
-  branch NAME [COMMIT]         Create a branch at COMMIT or the workspace base
-  branch -delete NAME          Delete a branch
-  tag                          List retention tags
-  tag NAME [COMMIT]             Tag COMMIT or the workspace base
-  tag -delete NAME              Delete a tag
-  cleanup -keep N               Preview expiry; apply with -apply TOKEN
-  cleanup -keep N -apply TOKEN  Record expiry and collect storage
-  collect                       Collect expired content
-  switch [-ours PATH | -theirs PATH] BRANCH  Change workspace branch
-  merge [-m MESSAGE] [-author NAME] [-base COMMIT] BRANCH
-                               Merge saved versions from another branch
-  restore [-force] COMMIT [PATH...]  Restore selected paths from a version
-  resume                       Finish an interrupted operation
-  cancel                       Cancel a save or roll back a local transition
-
-Use LODE_TOKEN for attach/clone and LODE_AUTHOR for the default author.
-Repeat -include to select multiple paths; omission selects the whole project.
-Options precede positional arguments.
-`
-
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		if errors.Is(err, context.Canceled) {
+			fmt.Fprintln(os.Stderr, "lode: interrupted")
+			os.Exit(130)
+		}
 		fmt.Fprintln(os.Stderr, "lode:", err)
 		os.Exit(1)
 	}
@@ -69,7 +37,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 	global := flag.NewFlagSet("lode", flag.ContinueOnError)
 	global.SetOutput(diagnostics)
 	directory := global.String("C", ".", "workspace directory")
-	global.Usage = func() { fmt.Fprint(diagnostics, usage) }
+	global.Usage = func() { printHelp(diagnostics) }
 	if err := global.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -77,13 +45,34 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	args = global.Args()
-	if len(args) == 0 || args[0] == "help" {
-		fmt.Fprint(out, usage)
+	if len(args) == 0 || len(args) == 1 && args[0] == "help" {
+		printHelp(out)
 		return nil
 	}
+	if args[0] == "help" {
+		if len(args) != 2 {
+			return errors.New("usage: lode help COMMAND")
+		}
+		args = []string{args[1], "-h"}
+	}
 	command := args[0]
+	info, ok := helpFor(command)
+	if !ok {
+		return fmt.Errorf("unknown command %q; use lode help", command)
+	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
+	flags.Usage = func() {
+		fmt.Fprintf(diagnostics, "Usage: lode [-C workspace] %s\n\n%s\n\n", info.usage, info.description)
+		flags.PrintDefaults()
+		fmt.Fprintln(diagnostics, "\nOptions precede positional arguments. Use -C before the command to choose a workspace.")
+		if command == "attach" || command == "clone" {
+			fmt.Fprintln(diagnostics, "Set LODE_TOKEN to the project's access token. Repeat -include/-exclude; no rules selects all paths.")
+		}
+		if command == "save" || command == "merge" {
+			fmt.Fprintln(diagnostics, "LODE_AUTHOR supplies the default author.")
+		}
+	}
 	var selection model.Selection
 	var choices []model.Choice
 	var emptySelection, force, deleteBranch, deleteTag bool
@@ -153,6 +142,8 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	args = flags.Args()
+	finishActivity := showActivity(diagnostics, command)
+	defer finishActivity()
 	if command == "backup" {
 		if len(args) != 2 {
 			return errors.New("usage: lode backup SOURCE DEST")
@@ -241,7 +232,13 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 	defer w.Close()
 	switch command {
 	case "status":
-		changes, err := w.Status()
+		state := w.State()
+		base := state.Base
+		if base == "" {
+			base = "(empty project)"
+		}
+		fmt.Fprintf(out, "Branch: %s\nBase: %s\nSelection: %s\n", state.Branch, base, selectionText(state.Selection))
+		changes, err := w.Status(ctx)
 		if err != nil {
 			return err
 		}
@@ -275,16 +272,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		fmt.Fprintln(out, "Workspace updated.")
 	case "select":
 		if selection == nil && !emptySelection {
-			for _, r := range w.State().Selection {
-				prefix, p := "-", r.Path
-				if r.Include {
-					prefix = "+"
-				}
-				if p == "" {
-					p = "."
-				}
-				fmt.Fprintf(out, "%s %s\n", prefix, p)
-			}
+			fmt.Fprintln(out, selectionText(w.State().Selection))
 			return nil
 		}
 		if emptySelection {
@@ -319,7 +307,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 			if !c.Retained {
 				state = "  [expired]"
 			}
-			fmt.Fprintf(out, "%s  %s  %s%s\n", c.ID, c.Created.Format(time.RFC3339), c.Message, state)
+			fmt.Fprintf(out, "%s  %s  %q%s\n", c.ID, c.Created.Format(time.RFC3339), c.Message, state)
 		}
 	case "branch":
 		state := w.State()
@@ -437,22 +425,27 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 			printCollection(out, collected)
 			return nil
 		}
-		plan, err := client.PreviewCleanup(ctx, keep)
+		fmt.Fprintf(out, "Protect branch tips and tags; keep %d first-parent versions per branch, counting its tip.\n", keep)
+		var kept, eligible, expired int
+		token, err := client.PreviewCleanup(ctx, keep, func(version project.RetentionVersion) error {
+			label := "release"
+			switch {
+			case !version.Retained:
+				label = "expired"
+				expired++
+			case version.Protected():
+				label = "keep"
+				kept++
+			default:
+				eligible++
+			}
+			_, err := fmt.Fprintf(out, "%s %s  %s  protection: %d branch tips, %d tags, %d recent-history rules\n", label, version.ID, version.Created.Format(time.RFC3339), version.Branches, version.Tags, version.Recent)
+			return err
+		})
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "Protect branch tips and tags; keep %d first-parent versions per branch, counting its tip.\n", plan.Keep)
-		for _, version := range plan.Versions {
-			label := "release"
-			if !version.Commit.Retained {
-				label = "expired"
-			}
-			if version.Commit.Retained && len(version.Reasons) > 0 {
-				label = "keep"
-			}
-			fmt.Fprintf(out, "%s %s  %s  reasons: %s\n", label, version.Commit.ID, version.Commit.Message, strings.Join(version.Reasons, ", "))
-		}
-		fmt.Fprintf(out, "Token: %s\nApply with: lode cleanup -keep %d -apply %s (from this workspace)\n", plan.Token, keep, plan.Token)
+		fmt.Fprintf(out, "%d protected, %d eligible for expiry, %d already expired.\nToken: %s\nApply with: lode cleanup -keep %d -apply %s (from this workspace)\n", kept, eligible, expired, token, keep, token)
 	case "collect":
 		state := w.State()
 		client, err := remote.New(state.URL, state.Token, state.Project)

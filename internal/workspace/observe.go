@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -16,11 +17,14 @@ import (
 
 // Status observes only the selection. Any observation error aborts the whole
 // result; a failed read cannot become an inferred deletion.
-func (w *Workspace) Status() ([]model.Entry, error) {
+func (w *Workspace) Status(ctx context.Context) ([]model.Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := w.pending(); err != nil {
 		return nil, err
 	}
-	current, err := w.observe(w.state.Selection)
+	current, err := w.observe(ctx, w.state.Selection)
 	if err != nil {
 		return nil, err
 	}
@@ -28,12 +32,21 @@ func (w *Workspace) Status() ([]model.Entry, error) {
 	for _, change := range model.Diff(w.state.Baseline, current) {
 		changes = append(changes, change.After)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return changes, nil
 }
 
-func (w *Workspace) observe(selections ...model.Selection) ([]model.Entry, error) {
+func (w *Workspace) observe(ctx context.Context, selections ...model.Selection) ([]model.Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var current []model.Entry
 	err := fs.WalkDir(w.root.FS(), ".", func(name string, d fs.DirEntry, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return err
 		}
@@ -63,7 +76,7 @@ func (w *Workspace) observe(selections ...model.Selection) ([]model.Entry, error
 				return fmt.Errorf("symlink is not supported: %s", name)
 			}
 			var err error
-			e, err = w.identify(name)
+			e, err = w.identify(ctx, name)
 			if err != nil {
 				return err
 			}
@@ -78,8 +91,8 @@ func (w *Workspace) observe(selections ...model.Selection) ([]model.Entry, error
 	return current, nil
 }
 
-func (w *Workspace) identify(name string) (model.Entry, error) {
-	e, err := w.identity(name, name)
+func (w *Workspace) identify(ctx context.Context, name string) (model.Entry, error) {
+	e, err := w.identity(ctx, name, name)
 	if err == nil && e.Kind != model.File {
 		err = fmt.Errorf("%s changed during observation; retry", name)
 	}
@@ -87,7 +100,10 @@ func (w *Workspace) identify(name string) (model.Entry, error) {
 }
 
 // identity can also inspect a private staged/backup file under its logical name.
-func (w *Workspace) identity(name, logical string) (model.Entry, error) {
+func (w *Workspace) identity(ctx context.Context, name, logical string) (model.Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Entry{}, err
+	}
 	info, err := w.root.Lstat(name)
 	if errors.Is(err, os.ErrNotExist) {
 		return model.Entry{Path: logical, Kind: model.Absent}, nil
@@ -108,7 +124,10 @@ func (w *Workspace) identity(name, logical string) (model.Entry, error) {
 		return model.Entry{}, err
 	}
 	hash := sha256.New()
-	n, err := io.Copy(hash, f)
+	n, err := io.Copy(hash, contextReader{ctx: ctx, reader: f})
+	if err == nil {
+		err = ctx.Err()
+	}
 	after, statErr := f.Stat()
 	err = errors.Join(err, statErr, f.Close())
 	if err != nil {
@@ -118,6 +137,18 @@ func (w *Workspace) identity(name, logical string) (model.Entry, error) {
 		return model.Entry{}, fmt.Errorf("%s changed during observation; retry", name)
 	}
 	return model.Entry{Path: logical, Kind: model.File, Size: n, SHA256: hex.EncodeToString(hash.Sum(nil))}, nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
 
 func (w *Workspace) openRegular(name string) (*os.File, error) {

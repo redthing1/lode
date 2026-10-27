@@ -193,12 +193,15 @@ func (w *Workspace) Save(ctx context.Context, author, message string) (project.C
 	if err := w.pending(); err != nil {
 		return project.Commit{}, err
 	}
-	changes, err := w.Status()
+	changes, err := w.Status(ctx)
 	if err != nil {
 		return project.Commit{}, err
 	}
 	if len(changes) == 0 {
 		return project.Commit{}, errors.New("no selected changes")
+	}
+	if err := ctx.Err(); err != nil {
+		return project.Commit{}, err
 	}
 	r := project.Request{ID: project.NewID(), Branch: w.state.Branch, Base: w.state.Base, Author: author, Message: message, Changes: changes}
 	if err := w.store("save.json", r); err != nil {

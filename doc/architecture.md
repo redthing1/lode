@@ -40,7 +40,7 @@ Startup checks retained snapshot protection and releases unaccepted or expired r
 
 ## Retention and collection
 
-Cleanup protects branch tips, tags and a requested number of first-parent versions per branch. Preview explains those reasons. Its token binds the count, immutable version identities and current references. Apply recomputes that decision under the exclusive project gate and rejects a changed token. Availability is excluded from the token, so repeating the same expiry decision is idempotent.
+Cleanup protects branch tips, tags and a requested number of first-parent versions per branch. Preview reports compact version identities, timestamps, availability and counts of each protection reason. Commit messages and reference-name lists are not needed to compute or transmit that decision. Its token binds the count, immutable version identities and current references. Apply recomputes that decision under the exclusive project gate and rejects a changed token. Availability is excluded from the token, so repeating the same expiry decision is idempotent.
 
 One SQLite transaction clears the native root reference of each eligible version. An empty root is the durable payload-availability fact; logical entries, parents and publication outcomes remain. Native manifests are released by collection or startup reconciliation only after that decision. Interrupted cleanup can leave extra protection temporarily, but cannot release contents still promised by SQLite.
 
@@ -60,6 +60,8 @@ Initial progress is durable before the plan appears. The cursor advances only af
 
 Initial checkout starts with a valid empty-selection workspace and uses the same transition to populate it. A metadata-only transition needs only an atomic baseline update. These operations require applications to stop writing affected files; process locking excludes other Lode commands, not external writers.
 
+Observation and recovery hashing check cancellation between reads; directory scans and operation boundaries also observe it. File mutations retain their synchronization ordering, and a cancelled operation leaves its existing recovery state for resume or cancellation. The CLI reports elapsed activity without storing progress facts in the application model.
+
 Save recovery uses the original request. Later file edits remain changes against the accepted baseline.
 
 ## Storage and transport
@@ -67,6 +69,8 @@ Save recovery uses the original request. Later file edits remain changes against
 The service serializes mutations. Reads hold shared protection while streaming. A local ownership lock excludes a second service process. SQLite uses durable transactions. The filesystem content adapter synchronizes Kopia's blob directory chain after writes and deletions; Kopia synchronizes blob file contents before rename. These contracts require Linux local filesystems that honor synchronization.
 
 The server directory contains project identity and secrets, SQLite metadata, and the native content repository. Native connection configuration and bounded caches live there and are derived from its current location. Clients receive selected metadata and requested file bytes. HTTP requires a project token and expected project identity; plaintext client connections are limited to loopback addresses.
+
+Metadata lists use newline-delimited JSON with an expected record count. Clients bound each record, check the count and require a complete response. Cleanup visits records as they arrive and returns its apply token only after validation; selected inventories are collected into the workspace baseline. This adds no saved previews, paging cursors or server leases.
 
 For eligible changed-file uploads, the client fetches signatures of exact retained base paths before starting publication. Signatures are bounded and spooled to one unlinked temporary file; none become workspace state. Each file part carries either full bytes or a librsync delta. Under the publication gate, the service resolves the basis from the request's base/path, decodes directly into capture's bounded size/hash writer, and closes the basis before returning. Transfer encoding does not change operation identity or add an acceptance path. Native object identifiers stay private. Signature expiry between preflight and publication is handled by the existing branch/base checks; an accepted retry needs no payload decoding.
 

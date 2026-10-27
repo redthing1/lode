@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -160,7 +161,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				h.fail(w, err)
 				return
 			}
-			h.json(w, items)
+			writeList(w, items)
 			return
 		case http.MethodPost:
 			var req project.Branch
@@ -193,7 +194,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				h.fail(w, err)
 				return
 			}
-			h.json(w, items)
+			writeList(w, items)
 			return
 		case http.MethodPost:
 			var req project.Tag
@@ -239,7 +240,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				h.fail(w, err)
 				return
 			}
-			h.json(w, plan)
+			w.Header().Set(cleanupTokenHeader, plan.Token)
+			writeList(w, plan.Versions)
 			return
 		case "apply":
 			if r.Method != http.MethodPost {
@@ -286,7 +288,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, err)
 			return
 		}
-		h.json(w, entries)
+		writeList(w, entries)
 		return
 	}
 	if len(parts) == 1 && parts[0] == "history" && r.Method == http.MethodGet {
@@ -297,7 +299,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, err)
 			return
 		}
-		h.json(w, items)
+		writeList(w, items)
 		return
 	}
 	if len(parts) == 2 && parts[0] == "cancel" && r.Method == http.MethodPost {
@@ -580,9 +582,7 @@ func (c *Client) Branches(ctx context.Context) ([]project.Branch, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []project.Branch
-	err = c.result(resp, &out)
-	return out, err
+	return collectList[project.Branch](c, resp)
 }
 func (c *Client) CreateBranch(ctx context.Context, name, tip string) error {
 	body, _ := json.Marshal(project.Branch{Name: name, Tip: tip})
@@ -605,9 +605,7 @@ func (c *Client) Tags(ctx context.Context) ([]project.Tag, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []project.Tag
-	err = c.result(resp, &out)
-	return out, err
+	return collectList[project.Tag](c, resp)
 }
 func (c *Client) CreateTag(ctx context.Context, name, commit string) error {
 	body, _ := json.Marshal(project.Tag{Name: name, Commit: commit})
@@ -628,17 +626,26 @@ func (c *Client) DeleteTag(ctx context.Context, name, expected string) error {
 	}
 	return c.result(resp, nil)
 }
-func (c *Client) PreviewCleanup(ctx context.Context, keep int) (project.CleanupPlan, error) {
+
+// PreviewCleanup visits every decision and returns an apply token only after
+// the complete response has been validated. A failed preview changes no state.
+func (c *Client) PreviewCleanup(ctx context.Context, keep int, visit func(project.RetentionVersion) error) (string, error) {
 	body, _ := json.Marshal(struct {
 		Keep int `json:"keep"`
 	}{keep})
 	resp, err := c.request(ctx, http.MethodPost, "cleanup/preview", bytes.NewReader(body), "application/json")
 	if err != nil {
-		return project.CleanupPlan{}, err
+		return "", err
 	}
-	var out project.CleanupPlan
-	err = c.result(resp, &out)
-	return out, err
+	if err := readList(c, resp, visit); err != nil {
+		return "", fmt.Errorf("cleanup preview incomplete: %w", err)
+	}
+	token := resp.Header.Get(cleanupTokenHeader)
+	decoded, err := hex.DecodeString(token)
+	if err != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != token {
+		return "", errors.New("invalid cleanup preview token")
+	}
+	return token, nil
 }
 func (c *Client) ApplyCleanup(ctx context.Context, keep int, token string) (int, error) {
 	body, _ := json.Marshal(struct {
@@ -680,9 +687,7 @@ func (c *Client) Entries(ctx context.Context, id string, s model.Selection) ([]m
 	if e != nil {
 		return nil, e
 	}
-	var x []model.Entry
-	e = c.result(resp, &x)
-	return x, e
+	return collectList[model.Entry](c, resp)
 }
 func (c *Client) History(ctx context.Context, branch string, limit int) ([]project.Commit, error) {
 	q := "history?branch=" + url.QueryEscape(branch) + "&limit=" + fmt.Sprint(limit)
@@ -690,9 +695,7 @@ func (c *Client) History(ctx context.Context, branch string, limit int) ([]proje
 	if e != nil {
 		return nil, e
 	}
-	var x []project.Commit
-	e = c.result(resp, &x)
-	return x, e
+	return collectList[project.Commit](c, resp)
 }
 func (c *Client) Cancel(ctx context.Context, id string) error {
 	resp, e := c.request(ctx, "POST", "cancel/"+id, bytes.NewReader([]byte("{}")), "application/json")

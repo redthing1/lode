@@ -63,20 +63,20 @@ func TestCleanupKeepNPreservesTipsTagsAndFirstParentHistory(t *testing.T) {
 	}
 	byID := map[string]RetentionVersion{}
 	for _, v := range plan.Versions {
-		byID[v.Commit.ID] = v
+		byID[v.ID] = v
 	}
 	// Keep counts the tip: Keep=2 retains the tip and one first-parent version.
 	for _, id := range []string{versions[5].ID, versions[4].ID, versions[1].ID, versions[0].ID} {
-		if len(byID[id].Reasons) == 0 {
-			t.Errorf("expected %s protected, reasons=%v", id, byID[id].Reasons)
+		if !byID[id].Protected() {
+			t.Errorf("expected %s protected: %+v", id, byID[id])
 		}
 	}
-	if len(byID[versions[0].ID].Reasons) < 2 {
-		t.Errorf("side branch history and tag reasons missing: %v", byID[versions[0].ID].Reasons)
+	if v := byID[versions[0].ID]; v.Tags != 1 || v.Recent != 1 {
+		t.Errorf("side branch history and tag protection missing: %+v", byID[versions[0].ID])
 	}
 	for _, id := range []string{versions[3].ID, versions[2].ID} {
-		if len(byID[id].Reasons) != 0 {
-			t.Errorf("version outside tips, tags, and KeepN ancestry is protected: %v", byID[id].Reasons)
+		if byID[id].Protected() {
+			t.Errorf("version outside tips, tags, and KeepN ancestry is protected: %+v", byID[id])
 		}
 	}
 	if _, err := tp.p.ApplyCleanup(ctx, 2, plan.Token); err != nil {
@@ -97,11 +97,11 @@ func TestCleanupKeepNPreservesTipsTagsAndFirstParentHistory(t *testing.T) {
 		t.Fatalf("versions listed=%d", len(plan.Versions))
 	}
 	for _, v := range plan.Versions {
-		if v.Commit.ID == versions[5].ID && len(v.Reasons) == 0 {
+		if v.ID == versions[5].ID && !v.Protected() {
 			t.Fatal("main tip is not protected")
 		}
-		if v.Commit.ID != versions[5].ID && len(v.Reasons) != 0 {
-			t.Fatalf("non-tip %s unexpectedly protected: %v", v.Commit.ID, v.Reasons)
+		if v.ID != versions[5].ID && v.Protected() {
+			t.Fatalf("non-tip %s unexpectedly protected: %+v", v.ID, v)
 		}
 	}
 }

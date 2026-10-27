@@ -77,13 +77,16 @@ func (w *Workspace) Select(ctx context.Context, selection model.Selection) error
 }
 
 func (w *Workspace) transitionTo(ctx context.Context, target State, choices []model.Choice) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := w.pending(); err != nil {
 		return err
 	}
 	if err := target.validate(); err != nil {
 		return err
 	}
-	local, err := w.observe(w.state.Selection, target.Selection)
+	local, err := w.observe(ctx, w.state.Selection, target.Selection)
 	if err != nil {
 		return err
 	}
@@ -97,12 +100,18 @@ func (w *Workspace) transitionTo(ctx context.Context, target State, choices []mo
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return w.applyView(ctx, target, local, merged, "", w.state.Selection, target.Selection)
 }
 
 // Restore changes selected files while keeping the current branch baseline.
 // Its source version is persisted with the same local transition used by update.
 func (w *Workspace) Restore(ctx context.Context, version string, requested model.Selection, force bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := w.pending(); err != nil {
 		return err
 	}
@@ -129,8 +138,11 @@ func (w *Workspace) Restore(ctx context.Context, version string, requested model
 	if err != nil {
 		return err
 	}
-	local, err := w.observe(scope)
+	local, err := w.observe(ctx, scope)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	var baseline []model.Entry
@@ -146,6 +158,9 @@ func (w *Workspace) Restore(ctx context.Context, version string, requested model
 }
 
 func (w *Workspace) applyView(ctx context.Context, target State, local, merged []model.Entry, source string, scopes ...model.Selection) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	inScope := func(p string) bool {
 		for _, s := range scopes {
 			if s.Includes(p) {
@@ -176,7 +191,7 @@ func (w *Workspace) applyView(ctx context.Context, target State, local, merged [
 	// unselected containers remain in place when their selected children leave.
 	for _, e := range desired {
 		if !inScope(e.Path) {
-			actual, err := w.identity(e.Path, e.Path)
+			actual, err := w.identity(ctx, e.Path, e.Path)
 			if err != nil {
 				return err
 			}
@@ -231,19 +246,35 @@ func (w *Workspace) applyView(ctx context.Context, target State, local, merged [
 			if err != nil {
 				return err
 			}
-			entries, readErr := f.ReadDir(-1)
-			err = errors.Join(readErr, f.Close())
-			if err != nil {
-				return err
-			}
-			for _, e := range entries {
-				if !removed[path.Join(c.Before.Path, e.Name())] {
-					if c.After.Kind == model.Absent && !target.Selection.Includes(c.After.Path) {
-						keepContainer = true
-						break
-					}
-					return fmt.Errorf("directory %s contains an unselected or changed entry: %s", c.Before.Path, e.Name())
+			for !keepContainer {
+				if err := ctx.Err(); err != nil {
+					_ = f.Close()
+					return err
 				}
+				entries, readErr := f.ReadDir(128)
+				for _, e := range entries {
+					if err := ctx.Err(); err != nil {
+						_ = f.Close()
+						return err
+					}
+					if !removed[path.Join(c.Before.Path, e.Name())] {
+						if c.After.Kind == model.Absent && !target.Selection.Includes(c.After.Path) {
+							keepContainer = true
+							break
+						}
+						_ = f.Close()
+						return fmt.Errorf("directory %s contains an unselected or changed entry: %s", c.Before.Path, e.Name())
+					}
+				}
+				if errors.Is(readErr, io.EOF) || keepContainer {
+					break
+				}
+				if readErr != nil {
+					return errors.Join(readErr, f.Close())
+				}
+			}
+			if err := f.Close(); err != nil {
+				return err
 			}
 		}
 		if keepContainer {
@@ -254,11 +285,17 @@ func (w *Workspace) applyView(ctx context.Context, target State, local, merged [
 	}
 	changes = physical
 	if len(changes) == 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := w.store("state.json", target); err != nil {
 			return err
 		}
 		w.state = target
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := w.root.Mkdir(".lode/transition", 0700); err != nil {
 		if !errors.Is(err, os.ErrExist) {
@@ -281,6 +318,9 @@ func (w *Workspace) applyView(ctx context.Context, target State, local, merged [
 	plan := transition{Target: target, Changes: changes, Source: source}
 	// Initialize progress before the immutable plan. A crash here leaves only
 	// harmless orphan progress; a plan is never authoritative without it.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := w.storeTransitionProgress(&plan); err != nil {
 		return err
 	}

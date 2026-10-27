@@ -58,6 +58,9 @@ func (w *Workspace) runTransition(ctx context.Context, p *transition) error {
 	if p.Source != "" && !project.ValidID(p.Source) {
 		return errors.New("invalid transition content source")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	version := p.Source
 	if version == "" {
 		version = p.Target.Base
@@ -79,7 +82,7 @@ func (w *Workspace) runTransition(ctx context.Context, p *transition) error {
 				return err
 			}
 			i := p.Next - 1
-			if err := w.undoChange(p.Changes[i], i); err != nil {
+			if err := w.undoChange(ctx, p.Changes[i], i); err != nil {
 				return err
 			}
 			p.Next--
@@ -101,12 +104,15 @@ func (w *Workspace) runTransition(ctx context.Context, p *transition) error {
 				return err
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := w.store("state.json", p.Target); err != nil {
 			return err
 		}
 		w.state = p.Target
 	}
-	if err := w.cleanTransition(p); err != nil {
+	if err := w.cleanTransition(ctx, p); err != nil {
 		return err
 	}
 	if err := w.remove("transition.json"); err != nil {
@@ -116,6 +122,9 @@ func (w *Workspace) runTransition(ctx context.Context, p *transition) error {
 }
 
 func (w *Workspace) cancelTransition(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	p, err := w.loadTransition()
 	if err != nil {
 		return err
@@ -134,18 +143,21 @@ func (w *Workspace) cancelTransition(ctx context.Context) error {
 }
 
 func (w *Workspace) applyChange(ctx context.Context, version string, c model.Change, i int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	name, old, new := c.After.Path, recoveryName(i, "old"), recoveryName(i, "new")
 	if c.After.Kind == model.File {
 		if err := w.stage(ctx, version, c, i); err != nil {
 			return err
 		}
 	}
-	backup, err := w.identity(old, name)
+	backup, err := w.identity(ctx, old, name)
 	if err != nil {
 		return err
 	}
 	if c.Before.Kind != model.Absent && backup.Kind == model.Absent {
-		actual, err := w.identity(name, name)
+		actual, err := w.identity(ctx, name, name)
 		if err != nil {
 			return err
 		}
@@ -157,10 +169,13 @@ func (w *Workspace) applyChange(ctx context.Context, version string, c model.Cha
 				return err
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := renameNoReplace(w.root, name, old); err != nil {
 			return err
 		}
-		backup, err = w.identity(old, name)
+		backup, err = w.identity(ctx, old, name)
 		if err != nil {
 			return err
 		}
@@ -182,6 +197,9 @@ func (w *Workspace) applyChange(ctx context.Context, version string, c model.Cha
 			return err
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	info, statErr := w.root.Lstat(name)
 	missing := errors.Is(statErr, os.ErrNotExist)
 	if statErr != nil && !missing {
@@ -202,11 +220,14 @@ func (w *Workspace) applyChange(ctx context.Context, version string, c model.Cha
 		}
 	case model.File:
 		if missing {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if err := w.root.Link(new, name); err != nil {
 				return err
 			}
 		} else if !w.sameFile(new, name) {
-			actual, err := w.identity(name, name)
+			actual, err := w.identity(ctx, name, name)
 			if err != nil {
 				return err
 			}
@@ -219,12 +240,15 @@ func (w *Workspace) applyChange(ctx context.Context, version string, c model.Cha
 }
 
 func (w *Workspace) stage(ctx context.Context, version string, change model.Change, i int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	e := change.After
 	new, part := recoveryName(i, "new"), recoveryName(i, "part")
 	if w.sameFile(new, e.Path) {
 		return nil
 	} // An installed inode may have newer edits.
-	entry, err := w.identity(new, e.Path)
+	entry, err := w.identity(ctx, new, e.Path)
 	if err != nil {
 		return err
 	}
@@ -233,6 +257,9 @@ func (w *Workspace) stage(ctx context.Context, version string, change model.Chan
 	}
 	if entry.Kind != model.Absent {
 		return fmt.Errorf("staged contents changed; preserve %s before resuming", new)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := w.root.Remove(part); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -264,12 +291,18 @@ func (w *Workspace) stage(ctx context.Context, version string, change model.Chan
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return renameNoReplace(w.root, part, new)
 }
 
-func (w *Workspace) undoChange(c model.Change, i int) error {
+func (w *Workspace) undoChange(ctx context.Context, c model.Change, i int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	name, old, new, undo := c.After.Path, recoveryName(i, "old"), recoveryName(i, "new"), recoveryName(i, "undo")
-	backup, err := w.identity(old, name)
+	backup, err := w.identity(ctx, old, name)
 	if err != nil {
 		return err
 	}
@@ -278,7 +311,7 @@ func (w *Workspace) undoChange(c model.Change, i int) error {
 		// restored it before its progress write. Preserve the current entry.
 		return errors.Join(syncDirectory(w.root, path.Dir(name)), syncDirectory(w.root, ".lode/transition"))
 	}
-	removed, err := w.identity(undo, name)
+	removed, err := w.identity(ctx, undo, name)
 	if err != nil {
 		return err
 	}
@@ -290,7 +323,7 @@ func (w *Workspace) undoChange(c model.Change, i int) error {
 			return fmt.Errorf("changed contents preserved at %s or %s; move them aside before cancelling", name, undo)
 		}
 	} else {
-		current, err := w.identity(name, name)
+		current, err := w.identity(ctx, name, name)
 		if err != nil {
 			return err
 		}
@@ -306,10 +339,13 @@ func (w *Workspace) undoChange(c model.Change, i int) error {
 					return err
 				}
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if err := renameNoReplace(w.root, name, undo); err != nil {
 				return err
 			}
-			removed, err = w.identity(undo, name)
+			removed, err = w.identity(ctx, undo, name)
 			if err != nil {
 				return err
 			}
@@ -320,13 +356,19 @@ func (w *Workspace) undoChange(c model.Change, i int) error {
 		}
 	}
 	if backup.Kind != model.Absent {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return renameNoReplace(w.root, old, name)
 	}
 	return syncDirectory(w.root, path.Dir(name))
 }
 
-func (w *Workspace) cleanTransition(p *transition) error {
+func (w *Workspace) cleanTransition(ctx context.Context, p *transition) error {
 	for i, c := range p.Changes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		for _, suffix := range []string{"old", "new", "undo", "part"} {
 			name := recoveryName(i, suffix)
 			info, err := w.root.Lstat(name)
@@ -341,7 +383,7 @@ func (w *Workspace) cleanTransition(p *transition) error {
 				// remove the only named copy of a user's subsequent edit.
 				linked := suffix != "old" && info.Mode().IsRegular() && info.Sys().(*syscall.Stat_t).Nlink > 1
 				if !linked {
-					actual, err := w.identity(name, c.After.Path)
+					actual, err := w.identity(ctx, name, c.After.Path)
 					if err != nil {
 						return err
 					}
@@ -359,10 +401,16 @@ func (w *Workspace) cleanTransition(p *transition) error {
 					}
 				}
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if err := w.root.Remove(name); err != nil {
 				return err
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := w.root.Remove(".lode/transition"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err

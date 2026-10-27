@@ -57,7 +57,7 @@ func TestSwitchKeepsIndependentEditAndReportsConflict(t *testing.T) {
 	if got := string(read(t, localDir, "remote")); got != "remote only" {
 		t.Fatalf("remote-only file = %q", got)
 	}
-	changes, err := w.Status()
+	changes, err := w.Status(context.Background())
 	if err != nil || len(changes) != 2 {
 		t.Fatalf("status after switch = %#v, %v", changes, err)
 	}
@@ -239,7 +239,7 @@ func TestRestoreSelectedHistoricalPathKeepsCurrentBase(t *testing.T) {
 	if w.State().Base != base || base != current {
 		t.Fatalf("restore changed base: got %q, current version %q", w.State().Base, current)
 	}
-	changes, err := w.Status()
+	changes, err := w.Status(context.Background())
 	if err != nil || len(changes) != 1 || changes[0].Path != "a" {
 		t.Fatalf("restore status = %#v, %v", changes, err)
 	}
