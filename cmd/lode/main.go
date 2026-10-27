@@ -6,8 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -144,15 +142,8 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 	args = flags.Args()
 	finishActivity := showActivity(diagnostics, command)
 	defer finishActivity()
-	if command == "backup" {
-		if len(args) != 2 {
-			return errors.New("usage: lode backup SOURCE DEST")
-		}
-		if err := project.Backup(ctx, args[0], args[1]); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Backup created: %s\n", args[1])
-		return nil
+	if command == "init" || command == "serve" || command == "backup" {
+		return runServer(ctx, command, args, listen, out, diagnostics)
 	}
 	if emptySelection && len(selection) > 0 {
 		return errors.New("-none cannot be combined with selection rules")
@@ -168,19 +159,6 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		}
 	}
 	switch command {
-	case "init", "serve":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: lode %s [options] DIR", command)
-		}
-		if command == "serve" {
-			return serve(ctx, args[0], listen, diagnostics)
-		}
-		p, err := project.Create(ctx, args[0])
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Project: %s\nToken: %s\n", p.ID(), p.Token())
-		return p.Close()
 	case "attach", "clone":
 		if len(args) < 1 || len(args) > 2 || (command == "clone" && len(args) != 2) {
 			return fmt.Errorf("usage: lode %s [-include PATH] URL DIR", command)
@@ -499,44 +477,6 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		fmt.Fprintln(out, "Workspace restored.")
 	}
 	return nil
-}
-
-func serve(ctx context.Context, directory, address string, out io.Writer) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return err
-	}
-	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return errors.New("serve requires a loopback address; use a TLS reverse proxy for remote access")
-	}
-	p, err := project.Open(ctx, directory)
-	if err != nil {
-		return err
-	}
-	defer p.Close()
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return err
-	}
-	server := &http.Server{Handler: remote.Handler(p), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute, BaseContext: func(net.Listener) context.Context { return ctx }}
-	result := make(chan error, 1)
-	go func() { result <- server.Serve(listener) }()
-	fmt.Fprintf(out, "Serving on %s\n", listener.Addr())
-	select {
-	case err := <-result:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
-	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdown); err != nil {
-			_ = server.Close()
-			return err
-		}
-		return nil
-	}
 }
 
 func printCollection(out io.Writer, result content.Collection) {

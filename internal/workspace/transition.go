@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"syscall"
 
 	"github.com/redthing1/lode/internal/model"
 	"github.com/redthing1/lode/internal/project"
@@ -189,7 +188,7 @@ func (w *Workspace) applyChange(ctx context.Context, version string, c model.Cha
 		}
 	}
 	if backup.Kind == model.File {
-		f, err := w.openRegular(old)
+		f, err := openRegular(w.root, old)
 		if err != nil {
 			return err
 		}
@@ -278,7 +277,7 @@ func (w *Workspace) stage(ctx context.Context, version string, change model.Chan
 			defer basis.Close()
 		}
 	}
-	f, err := w.root.OpenFile(part, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0600)
+	f, err := openNoFollow(w.root, part, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -381,7 +380,7 @@ func (w *Workspace) cleanTransition(ctx context.Context, p *transition) error {
 			if suffix != "part" {
 				// An extra hard link means removing this private name cannot
 				// remove the only named copy of a user's subsequent edit.
-				linked := suffix != "old" && info.Mode().IsRegular() && info.Sys().(*syscall.Stat_t).Nlink > 1
+				linked := suffix != "old" && info.Mode().IsRegular() && hasMultipleLinks(info)
 				if !linked {
 					actual, err := w.identity(ctx, name, c.After.Path)
 					if err != nil {

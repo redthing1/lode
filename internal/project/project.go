@@ -1,9 +1,10 @@
+//go:build linux
+
 // Package project owns shared history and publication decisions.
 package project
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -18,53 +19,11 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/redthing1/lode/internal/content"
 	"github.com/redthing1/lode/internal/model"
 	_ "modernc.org/sqlite"
 )
-
-var (
-	ErrNotFound          = errors.New("not found")
-	ErrStale             = errors.New("branch changed; update the workspace before saving")
-	ErrCancelled         = errors.New("operation was cancelled")
-	ErrOperationConflict = errors.New("operation ID is bound to a different request")
-	ErrInvalid           = errors.New("invalid request")
-	ErrAlreadyAccepted   = errors.New("operation was already accepted; resume it")
-	ErrExists            = errors.New("name already exists")
-	ErrAlreadyMerged     = errors.New("source version is already merged")
-	ErrExpired           = errors.New("version contents have expired")
-	ErrCleanupChanged    = errors.New("history or protection changed; preview cleanup again")
-	ErrReferenceChanged  = errors.New("reference changed; list references again")
-)
-
-type Commit struct {
-	ID       string    `json:"id"`
-	Parents  []string  `json:"parents"`
-	Author   string    `json:"author"`
-	Message  string    `json:"message"`
-	Created  time.Time `json:"created"`
-	Retained bool      `json:"retained"`
-}
-
-type Request struct {
-	ID           string         `json:"id"`
-	Branch       string         `json:"branch"`
-	Base         string         `json:"base"`
-	Author       string         `json:"author"`
-	Message      string         `json:"message"`
-	Changes      []model.Entry  `json:"changes"`
-	SecondParent string         `json:"second_parent,omitempty"`
-	MergeBase    string         `json:"merge_base,omitempty"`
-	Choices      []model.Choice `json:"choices,omitempty"`
-}
-
-type MergeBaseConflict struct{ Bases []string }
-
-func (e *MergeBaseConflict) Error() string {
-	return "multiple best merge bases: " + strings.Join(e.Bases, ", ")
-}
 
 // Basis opens the previous file while publication already holds protection.
 // The source closes any returned reader before Write returns.
@@ -90,19 +49,6 @@ type Project struct {
 	owner    *os.File
 	config   Config
 	closed   bool
-}
-
-func NewID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
-	return hex.EncodeToString(b[:])
-}
-
-func ValidID(id string) bool {
-	b, err := hex.DecodeString(id)
-	return err == nil && len(b) == 16 && hex.EncodeToString(b) == id
 }
 
 func Create(ctx context.Context, directory string) (*Project, error) {

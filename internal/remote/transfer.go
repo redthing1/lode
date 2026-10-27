@@ -21,52 +21,6 @@ import (
 const minDeltaSize = 1 << 20
 const signatureBudget = 64 << 20
 
-// read holds the normal project read protection for either representation.
-// POST supplies a bounded client signature; GET requests the complete file.
-func (h *handler) read(w http.ResponseWriter, r *http.Request) {
-	var sig []byte
-	if r.Method == http.MethodPost {
-		var err error
-		sig, err = io.ReadAll(http.MaxBytesReader(w, r.Body, transfer.MaxSignatureSize))
-		if err != nil || len(sig) == 0 {
-			h.fail(w, project.ErrInvalid)
-			return
-		}
-	}
-	out := &downloadResponse{ResponseWriter: w}
-	err := h.p.Read(r.Context(), r.URL.Query().Get("commit"), r.URL.Query().Get("path"), func(e model.Entry, rd io.Reader) error {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		if sig != nil {
-			w.Header().Set("Lode-Encoding", "rsync")
-			if err := transfer.Delta(r.Context(), bytes.NewReader(sig), rd, out); err != nil {
-				return fmt.Errorf("%w: delta download: %v", project.ErrInvalid, err)
-			}
-			return nil
-		}
-		w.Header().Set("Content-Length", fmt.Sprint(e.Size))
-		_, err := io.Copy(out, rd)
-		return err
-	})
-	if err != nil {
-		if out.started {
-			panic(http.ErrAbortHandler)
-		}
-		w.Header().Del("Lode-Encoding")
-		w.Header().Del("Content-Length")
-		h.fail(w, err)
-	}
-}
-
-type downloadResponse struct {
-	http.ResponseWriter
-	started bool
-}
-
-func (w *downloadResponse) Write(p []byte) (int, error) {
-	w.started = true
-	return w.ResponseWriter.Write(p)
-}
-
 // Download reconstructs and verifies one exact target. A basis is optional and
 // remains owned by the caller. No partial output may be installed on error.
 func (c *Client) Download(ctx context.Context, id string, target model.Entry, basis io.ReadSeeker, basisSize int64, dst io.Writer) error {
@@ -148,27 +102,6 @@ func deltaLimit(size int64) int64 {
 		return math.MaxInt64
 	}
 	return 2*size + (64 << 10)
-}
-
-func (h *handler) signature(w http.ResponseWriter, r *http.Request) {
-	var sig bytes.Buffer
-	err := h.p.Read(r.Context(), r.URL.Query().Get("commit"), r.URL.Query().Get("path"), func(e model.Entry, rd io.Reader) error {
-		if e.Size < minDeltaSize || e.Size > transfer.MaxBasisSize {
-			return nil
-		}
-		return transfer.Signature(r.Context(), rd, e.Size, &sig)
-	})
-	if err != nil {
-		h.fail(w, err)
-		return
-	}
-	if sig.Len() == 0 {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", fmt.Sprint(sig.Len()))
-	_, _ = w.Write(sig.Bytes())
 }
 
 // Signatures are fetched before Save holds the exclusive project gate. One

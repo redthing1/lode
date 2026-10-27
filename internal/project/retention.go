@@ -1,3 +1,5 @@
+//go:build linux
+
 package project
 
 import (
@@ -14,11 +16,6 @@ import (
 	"github.com/redthing1/lode/internal/content"
 	"github.com/redthing1/lode/internal/model"
 )
-
-type Tag struct {
-	Name   string `json:"name"`
-	Commit string `json:"commit"`
-}
 
 func (p *Project) Tags(ctx context.Context) ([]Tag, error) {
 	p.mu.RLock()
@@ -105,25 +102,6 @@ func (p *Project) requireRetained(ctx context.Context, id string) error {
 		return fmt.Errorf("%s: %w", id, ErrExpired)
 	}
 	return nil
-}
-
-type RetentionVersion struct {
-	ID       string    `json:"id"`
-	Created  time.Time `json:"created"`
-	Retained bool      `json:"retained"`
-	Branches int       `json:"branches"`
-	Tags     int       `json:"tags"`
-	Recent   int       `json:"recent"`
-}
-
-func (v RetentionVersion) Protected() bool {
-	return v.Branches > 0 || v.Tags > 0 || v.Recent > 0
-}
-
-type CleanupPlan struct {
-	Keep     int                `json:"keep"`
-	Token    string             `json:"token"`
-	Versions []RetentionVersion `json:"versions"`
 }
 
 func (p *Project) PreviewCleanup(ctx context.Context, keep int) (CleanupPlan, error) {

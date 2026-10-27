@@ -12,6 +12,8 @@ Lode is one Go module and executable. The project service owns shared history an
 | `workspace` | Local observation, selected transitions, baseline, and recovery |
 | `cmd/lode` | CLI presentation and server lifecycle |
 
+Server commands, HTTP handlers, SQLite, and Kopia implementations are built only on Linux. Non-Linux client builds include shared project types and HTTP client code without SQLite or Kopia. Workspace filesystem operations and terminal detection live in platform-specific files; the transition algorithm is shared. Platform implementations must preserve locking, no-follow access, exclusive rename, and synchronization ordering. The transfer codec requires native librsync and cgo.
+
 ## Versions and presence
 
 Every version describes a complete directory tree. Workspace selection controls local presence, while retention controls downloadable contents. Saving exact path changes preserves omitted entries. Directory deletion cannot implicitly erase unseen descendants; failed observation cannot become an inferred deletion.

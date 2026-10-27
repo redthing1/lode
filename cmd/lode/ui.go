@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/redthing1/lode/internal/model"
-	"golang.org/x/sys/unix"
 )
 
 // The same descriptions serve the command list and each command's help.
@@ -84,7 +83,7 @@ func showActivity(out io.Writer, command string) func() {
 	if !ok || command == "serve" || os.Getenv("TERM") == "dumb" {
 		return func() {}
 	}
-	if _, err := unix.IoctlGetTermios(int(file.Fd()), unix.TCGETS); err != nil {
+	if !isTerminal(file) {
 		return func() {}
 	}
 	done, stopped := make(chan struct{}), make(chan struct{})

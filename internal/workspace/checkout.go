@@ -25,11 +25,11 @@ func Clone(ctx context.Context, url, token, directory string, selection model.Se
 	if err := os.Mkdir(directory, 0700); err != nil {
 		return nil, err
 	}
-	parent, err := os.Open(filepath.Dir(directory))
+	parent, err := os.OpenRoot(filepath.Dir(directory))
 	if err != nil {
 		return nil, err
 	}
-	if err := errors.Join(parent.Sync(), parent.Close()); err != nil {
+	if err := errors.Join(syncDirectory(parent, "."), parent.Close()); err != nil {
 		return nil, err
 	}
 	w, err := initialize(directory)

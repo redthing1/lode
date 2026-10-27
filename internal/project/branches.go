@@ -1,3 +1,5 @@
+//go:build linux
+
 package project
 
 import (
@@ -8,11 +10,6 @@ import (
 
 	"github.com/redthing1/lode/internal/model"
 )
-
-type Branch struct {
-	Name string `json:"name"`
-	Tip  string `json:"tip"`
-}
 
 func (p *Project) Branches(ctx context.Context) ([]Branch, error) {
 	p.mu.RLock()

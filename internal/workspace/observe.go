@@ -10,8 +10,6 @@ import (
 	"io/fs"
 	"os"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/redthing1/lode/internal/model"
 )
 
@@ -114,7 +112,7 @@ func (w *Workspace) identity(ctx context.Context, name, logical string) (model.E
 	if info.IsDir() {
 		return model.Entry{Path: logical, Kind: model.Directory}, nil
 	}
-	f, err := w.openRegular(name)
+	f, err := openRegular(w.root, name)
 	if err != nil {
 		return model.Entry{}, err
 	}
@@ -149,26 +147,4 @@ func (r contextReader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	return r.reader.Read(p)
-}
-
-func (w *Workspace) openRegular(name string) (*os.File, error) {
-	parent, base, err := openRenameParent(w.root, name)
-	if err != nil {
-		return nil, err
-	}
-	defer parent.Close()
-	fd, err := unix.Openat(int(parent.Fd()), base, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, err
-	}
-	f := os.NewFile(uintptr(fd), name)
-	info, err := f.Stat()
-	if err == nil && !info.Mode().IsRegular() {
-		err = fmt.Errorf("%s is not a regular file", name)
-	}
-	if err != nil {
-		f.Close()
-		return nil, err
-	}
-	return f, nil
 }

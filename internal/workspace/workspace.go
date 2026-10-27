@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"syscall"
 
 	"github.com/redthing1/lode/internal/model"
 	"github.com/redthing1/lode/internal/project"
@@ -65,10 +64,7 @@ func lock(directory string) (*Workspace, error) {
 		root.Close()
 		return nil, err
 	}
-	w.lock, err = root.OpenFile(".lode/lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
-	if err == nil {
-		err = syscall.Flock(int(w.lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-	}
+	w.lock, err = openWorkspaceLock(root)
 	if err != nil {
 		w.Close()
 		return nil, fmt.Errorf("lock workspace: %w", err)
@@ -331,7 +327,7 @@ func (w *Workspace) Cancel(ctx context.Context) error {
 }
 
 func (w *Workspace) load(name string, v any) error {
-	f, err := w.root.OpenFile(".lode/"+name, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := openNoFollow(w.root, ".lode/"+name, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
@@ -351,7 +347,7 @@ func (w *Workspace) load(name string, v any) error {
 // store replaces one durable fact atomically. The fixed temporary name avoids
 // accumulating files after repeated interruptions; the workspace lock owns it.
 func (w *Workspace) store(name string, v any) error {
-	f, err := w.root.OpenFile(".lode/write.tmp", os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NOFOLLOW, 0600)
+	f, err := openNoFollow(w.root, ".lode/write.tmp", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -373,17 +369,9 @@ func (w *Workspace) remove(name string) error {
 	return syncDirectory(w.root, ".lode")
 }
 
-func syncDirectory(root *os.Root, name string) error {
-	f, err := root.Open(name)
-	if err != nil {
-		return err
-	}
-	return errors.Join(f.Sync(), f.Close())
-}
-
 func (w *Workspace) openFile(name string) (*os.File, error) {
 	if !model.ValidPath(name) {
 		return nil, errors.New("invalid workspace path")
 	}
-	return w.openRegular(name)
+	return openRegular(w.root, name)
 }

@@ -1,3 +1,5 @@
+//go:build linux
+
 package content
 
 import (
@@ -10,13 +12,6 @@ import (
 	"github.com/kopia/kopia/repo/maintenance"
 	"github.com/kopia/kopia/snapshot/snapshotmaintenance"
 )
-
-// Collection reports physical bytes in the native repository before and after
-// a full native maintenance pass. It excludes the Kopia config and caches.
-type Collection struct {
-	BeforeBytes int64 `json:"before_bytes"`
-	AfterBytes  int64 `json:"after_bytes"`
-}
 
 // Collect runs Kopia's full snapshot GC and repository maintenance. Lode's
 // project gate must exclude concurrent project operations.

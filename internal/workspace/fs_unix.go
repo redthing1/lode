@@ -1,13 +1,66 @@
+//go:build linux || darwin
+
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
+
+func openWorkspaceLock(root *os.Root) (*os.File, error) {
+	f, err := openNoFollow(root, ".lode/lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
+	return f, nil
+}
+
+func openNoFollow(root *os.Root, name string, flags int, perm os.FileMode) (*os.File, error) {
+	return root.OpenFile(name, flags|syscall.O_NOFOLLOW, perm)
+}
+
+func openRegular(root *os.Root, name string) (*os.File, error) {
+	parent, base, err := openRenameParent(root, name)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	fd, err := unix.Openat(int(parent.Fd()), base, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(fd), name)
+	info, err := f.Stat()
+	if err == nil && !info.Mode().IsRegular() {
+		err = fmt.Errorf("%s is not a regular file", name)
+	}
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+func hasMultipleLinks(info os.FileInfo) bool {
+	return info.Sys().(*syscall.Stat_t).Nlink > 1
+}
+
+func syncDirectory(root *os.Root, name string) error {
+	f, err := root.Open(name)
+	if err != nil {
+		return err
+	}
+	return errors.Join(f.Sync(), f.Close())
+}
 
 // renameNoReplace atomically moves one workspace entry without replacing a
 // destination. Both names are slash-separated paths relative to root.
@@ -22,7 +75,7 @@ func renameNoReplace(root *os.Root, oldname, newname string) error {
 		return fmt.Errorf("open destination parent: %w", err)
 	}
 	defer newParent.Close()
-	if err := unix.Renameat2(int(oldParent.Fd()), oldBase, int(newParent.Fd()), newBase, unix.RENAME_NOREPLACE); err != nil {
+	if err := renameAtNoReplace(oldParent, oldBase, newParent, newBase); err != nil {
 		return fmt.Errorf("rename %s to %s: %w", oldname, newname, err)
 	}
 	if err := oldParent.Sync(); err != nil {
