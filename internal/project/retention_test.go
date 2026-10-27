@@ -168,7 +168,7 @@ func TestCleanupExpiryKeepsLogicalHistoryAndAcceptedRetry(t *testing.T) {
 	if err := tp.p.CreateTag(tp.ctx, "old", commit.ID); !errors.Is(err, ErrExpired) {
 		t.Fatalf("tag expired = %v", err)
 	}
-	retried, err := tp.p.Save(tp.ctx, r, Source{Open: func(string) (io.ReadCloser, error) { return nil, errors.New("must not read") }})
+	retried, err := tp.p.Save(tp.ctx, r, Source{Write: func(model.Entry, Basis, io.Writer) error { return errors.New("must not read") }})
 	if err != nil || retried.ID != commit.ID || retried.Retained || retried.Retained == commit.Retained {
 		t.Fatalf("accepted expired retry = %#v, %v", retried, err)
 	}

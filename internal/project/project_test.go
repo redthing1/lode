@@ -59,12 +59,13 @@ func fileEntry(name string, data []byte) model.Entry {
 }
 
 func sourceFor(files map[string][]byte) Source {
-	return Source{Open: func(name string) (io.ReadCloser, error) {
-		data, ok := files[name]
+	return Source{Write: func(entry model.Entry, _ Basis, out io.Writer) error {
+		data, ok := files[entry.Path]
 		if !ok {
-			return nil, os.ErrNotExist
+			return os.ErrNotExist
 		}
-		return io.NopCloser(bytes.NewReader(data)), nil
+		_, err := io.Copy(out, bytes.NewReader(data))
+		return err
 	}}
 }
 
@@ -121,7 +122,7 @@ func TestAcceptedRetryIsStableAndDoesNotReadSource(t *testing.T) {
 	newerData := []byte("second")
 	save(t, tp.p, func() Request { q := request(fileEntry("b", newerData)); q.Base = accepted.ID; return q }(), map[string][]byte{"b": newerData})
 	calls := 0
-	retried, err := tp.p.Save(tp.ctx, r, Source{Open: func(string) (io.ReadCloser, error) { calls++; return nil, errors.New("unexpected source read") }, Finish: func() error { calls++; return errors.New("unexpected finish") }})
+	retried, err := tp.p.Save(tp.ctx, r, Source{Write: func(model.Entry, Basis, io.Writer) error { calls++; return errors.New("unexpected source read") }, Finish: func() error { calls++; return errors.New("unexpected finish") }})
 	if err != nil {
 		t.Fatalf("accepted retry: %v", err)
 	}
@@ -183,7 +184,7 @@ func TestCancelPendingOperationPreventsDelayedSave(t *testing.T) {
 	data := []byte("partial")
 	r := request(fileEntry("a", data))
 	_, err := tp.p.Save(tp.ctx, r, Source{
-		Open:   sourceFor(map[string][]byte{"a": data}).Open,
+		Write:  sourceFor(map[string][]byte{"a": data}).Write,
 		Finish: func() error { return errors.New("interrupted upload") },
 	})
 	if err == nil {
@@ -201,7 +202,7 @@ func TestFailedFinishIsNotAcceptedAndRestartAllowsExactRetry(t *testing.T) {
 	tp := newTestProject(t)
 	data := []byte("retry")
 	r := request(fileEntry("a", data))
-	_, err := tp.p.Save(tp.ctx, r, Source{Open: sourceFor(map[string][]byte{"a": data}).Open, Finish: func() error { return errors.New("truncated request") }})
+	_, err := tp.p.Save(tp.ctx, r, Source{Write: sourceFor(map[string][]byte{"a": data}).Write, Finish: func() error { return errors.New("truncated request") }})
 	if err == nil {
 		t.Fatal("save accepted a source whose Finish failed")
 	}

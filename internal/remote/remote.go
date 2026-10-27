@@ -19,6 +19,7 @@ import (
 	"github.com/redthing1/lode/internal/content"
 	"github.com/redthing1/lode/internal/model"
 	"github.com/redthing1/lode/internal/project"
+	"github.com/redthing1/lode/internal/transfer"
 )
 
 const maxMetadata = 16 << 20
@@ -332,6 +333,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if len(parts) == 1 && parts[0] == "signature" && r.Method == http.MethodGet {
+		h.signature(w, r)
+		return
+	}
 	if len(parts) == 1 && parts[0] == "save" && r.Method == http.MethodPost {
 		h.save(w, r)
 		return
@@ -388,17 +393,37 @@ func (h *handler) save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = first.Close()
-	source := project.Source{Open: func(name string) (io.ReadCloser, error) {
+	source := project.Source{Write: func(entry model.Entry, basis project.Basis, out io.Writer) error {
 		p, err := mr.NextPart()
 		if err != nil {
-			return nil, fmt.Errorf("%w: missing file part", project.ErrInvalid)
+			return fmt.Errorf("%w: missing file part", project.ErrInvalid)
 		}
-		if p.FormName() != "file" || p.Header.Get("Lode-Path") != name {
+		name, err := url.PathUnescape(p.Header.Get("Lode-Path"))
+		if err != nil || p.FormName() != "file" || name != entry.Path {
 			panic(http.ErrAbortHandler)
 		}
-		// Capture consumes and validates the complete part. A failed capture
-		// must not drain an arbitrarily long upload through Part.Close.
-		return io.NopCloser(p), nil
+		switch p.Header.Get("Lode-Encoding") {
+		case "":
+		case "rsync":
+			previous, rd, err := basis()
+			if err != nil {
+				return err
+			}
+			defer rd.Close()
+			limited := &io.LimitedReader{R: p, N: deltaLimit(entry.Size)}
+			if err := transfer.Patch(r.Context(), rd, previous.Size, limited, entry.Size, out); err != nil {
+				return err
+			}
+			if limited.N == 0 {
+				return fmt.Errorf("%w: delta exceeds encoded size limit", project.ErrInvalid)
+			}
+			return nil
+		default:
+			return project.ErrInvalid
+		}
+		// Do not use Part.Close: a failed capture must not drain an unbounded body.
+		_, err = io.Copy(out, io.LimitReader(p, entry.Size+1))
+		return err
 	}, Finish: func() error {
 		_, err := mr.NextPart()
 		if err == nil {
@@ -710,7 +735,12 @@ func (c *Client) Read(ctx context.Context, id, name string) (io.ReadCloser, erro
 	}
 	return resp.Body, nil
 }
-func (c *Client) Save(ctx context.Context, req project.Request, src project.Source) (project.Commit, error) {
+func (c *Client) Save(ctx context.Context, req project.Request, open func(string) (io.ReadCloser, error)) (project.Commit, error) {
+	signatures, err := c.saveSignatures(ctx, req)
+	if err != nil {
+		return project.Commit{}, err
+	}
+	defer signatures.close()
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
 	done := make(chan error, 1)
@@ -732,28 +762,33 @@ func (c *Client) Save(ctx context.Context, req project.Request, src project.Sour
 				if entry.Kind != model.File {
 					continue
 				}
-				if src.Open == nil {
-					return errors.New("save source has no Open function")
+				if open == nil {
+					return errors.New("save source has no open function")
 				}
-				r, e := src.Open(entry.Path)
+				r, e := open(entry.Path)
 				if e != nil {
 					return e
 				}
 				fh := make(textproto.MIMEHeader)
 				fh.Set("Content-Disposition", `form-data; name="file"; filename="payload"`)
-				fh.Set("Lode-Path", entry.Path)
+				fh.Set("Lode-Path", url.PathEscape(entry.Path))
 				fh.Set("Content-Type", "application/octet-stream")
+				sig := signatures.reader(entry.Path)
+				if sig != nil {
+					fh.Set("Lode-Encoding", "rsync")
+				}
 				fp, e := mw.CreatePart(fh)
 				if e == nil {
-					_, e = io.Copy(fp, r)
+					if sig != nil {
+						e = transfer.Delta(ctx, sig, io.LimitReader(r, entry.Size+1), fp)
+					} else {
+						_, e = io.Copy(fp, r)
+					}
 				}
 				e = errors.Join(e, r.Close())
 				if e != nil {
 					return e
 				}
-			}
-			if src.Finish != nil {
-				return src.Finish()
 			}
 			return nil
 		}()

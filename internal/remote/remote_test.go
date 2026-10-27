@@ -21,6 +21,10 @@ import (
 	"github.com/redthing1/lode/internal/project"
 )
 
+func readerSource(data []byte) func(string) (io.ReadCloser, error) {
+	return func(string) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
+}
+
 func TestStreamSaveAndRead(t *testing.T) {
 	ctx := context.Background()
 	p, err := project.Create(ctx, t.TempDir()+"/project")
@@ -53,9 +57,9 @@ func TestStreamSaveAndRead(t *testing.T) {
 	}
 	data := []byte("opaque file bytes")
 	hash := sha256.Sum256(data)
-	e := model.Entry{Path: "nested/é%data.bin", Kind: model.File, Size: int64(len(data)), SHA256: hex.EncodeToString(hash[:])}
+	e := model.Entry{Path: " nested/é%data.bin ", Kind: model.File, Size: int64(len(data)), SHA256: hex.EncodeToString(hash[:])}
 	req := project.Request{ID: project.NewID(), Branch: "main", Author: "test", Message: "save", Changes: []model.Entry{e}}
-	commit, err := c.Save(ctx, req, project.Source{Open: func(string) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }})
+	commit, err := c.Save(ctx, req, readerSource(data))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,10 +85,10 @@ func TestStreamSaveAndRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit=%#v err=%v", commit, err)
 	}
-	if len(entries) != 2 || entries[1].Path != "nested/é%data.bin" {
+	if len(entries) != 2 || entries[1].Path != e.Path {
 		t.Fatalf("entries: %#v", entries)
 	}
-	r, err := c.Read(ctx, commit.ID, "nested/é%data.bin")
+	r, err := c.Read(ctx, commit.ID, e.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,13 +102,13 @@ func TestStreamSaveAndRead(t *testing.T) {
 	}
 	acceptedCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	accepted, err := c.Save(acceptedCtx, req, project.Source{Open: func(string) (io.ReadCloser, error) { return io.NopCloser(&endlessReader{}), nil }})
+	accepted, err := c.Save(acceptedCtx, req, func(string) (io.ReadCloser, error) { return io.NopCloser(&endlessReader{}), nil })
 	if err != nil || accepted.ID != commit.ID {
 		t.Fatalf("accepted retry %#v: %v", accepted, err)
 	}
 	stale := req
 	stale.ID = project.NewID()
-	if _, err := c.Save(ctx, stale, project.Source{Open: func(string) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }}); !errors.Is(err, project.ErrStale) {
+	if _, err := c.Save(ctx, stale, readerSource(data)); !errors.Is(err, project.ErrStale) {
 		t.Fatalf("stale save error: %v", err)
 	}
 	if head, err := c.Head(ctx, "main"); err != nil || head != commit.ID {
@@ -126,11 +130,11 @@ func TestTagsAndCleanupTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := c.Save(ctx, project.Request{ID: project.NewID(), Branch: "main", Author: "test", Message: "first", Changes: []model.Entry{{Path: "folder", Kind: model.Directory}}}, project.Source{})
+	first, err := c.Save(ctx, project.Request{ID: project.NewID(), Branch: "main", Author: "test", Message: "first", Changes: []model.Entry{{Path: "folder", Kind: model.Directory}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := c.Save(ctx, project.Request{ID: project.NewID(), Branch: "main", Base: first.ID, Author: "test", Message: "second", Changes: []model.Entry{{Path: "folder", Kind: model.Absent}}}, project.Source{})
+	second, err := c.Save(ctx, project.Request{ID: project.NewID(), Branch: "main", Base: first.ID, Author: "test", Message: "second", Changes: []model.Entry{{Path: "folder", Kind: model.Absent}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +204,7 @@ func TestSaveRejectsUnrelatedSuccessfulReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = c.Save(context.Background(), project.Request{ID: project.NewID(), Branch: "main", Message: "mkdir", Changes: []model.Entry{{Path: "empty", Kind: model.Directory}}}, project.Source{})
+	_, err = c.Save(context.Background(), project.Request{ID: project.NewID(), Branch: "main", Message: "mkdir", Changes: []model.Entry{{Path: "empty", Kind: model.Directory}}}, nil)
 	if err == nil {
 		t.Fatal("accepted a successful reply without the original operation identity")
 	}
@@ -239,7 +243,7 @@ func TestBoundIdentityMismatchCannotPublish(t *testing.T) {
 	hash := sha256.Sum256(data)
 	e := model.Entry{Path: "file.bin", Kind: model.File, Size: int64(len(data)), SHA256: hex.EncodeToString(hash[:])}
 	req := project.Request{ID: project.NewID(), Branch: "main", Author: "test", Message: "wrong project", Changes: []model.Entry{e}}
-	_, err = c.Save(context.Background(), req, project.Source{Open: func(string) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }})
+	_, err = c.Save(context.Background(), req, readerSource(data))
 	if err == nil {
 		t.Fatal("wrong project identity was accepted")
 	}

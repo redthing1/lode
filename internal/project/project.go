@@ -66,10 +66,14 @@ func (e *MergeBaseConflict) Error() string {
 	return "multiple best merge bases: " + strings.Join(e.Bases, ", ")
 }
 
+// Basis opens the previous file while publication already holds protection.
+// The source closes any returned reader before Write returns.
+type Basis func() (model.Entry, io.ReadSeekCloser, error)
+
 // Source supplies only changed files. Finish validates the end of a streamed
 // request before acceptance; neither method is called for an accepted retry.
 type Source struct {
-	Open   func(string) (io.ReadCloser, error)
+	Write  func(model.Entry, Basis, io.Writer) error
 	Finish func() error
 }
 
@@ -381,7 +385,24 @@ func (p *Project) Save(ctx context.Context, request Request, source Source) (Com
 	if err != nil {
 		return Commit{}, err
 	}
-	root, captured, err := p.contents.Capture(ctx, r.ID, entries, source.Open)
+	write := func(entry model.Entry, out io.Writer) error {
+		if source.Write == nil {
+			return fmt.Errorf("no source for %q", entry.Path)
+		}
+		return source.Write(entry, func() (model.Entry, io.ReadSeekCloser, error) {
+			name := entry.Path
+			i := sort.Search(len(base), func(i int) bool { return base[i].Path >= name })
+			if i == len(base) || base[i].Path != name || base[i].Kind != model.File {
+				return model.Entry{}, nil, ErrNotFound
+			}
+			if err := p.requireRetained(ctx, r.Base); err != nil {
+				return model.Entry{}, nil, err
+			}
+			rd, err := p.contents.Read(ctx, base[i].Object)
+			return base[i].Entry, rd, err
+		}, out)
+	}
+	root, captured, err := p.contents.Capture(ctx, r.ID, entries, write)
 	if err != nil {
 		return Commit{}, err
 	}

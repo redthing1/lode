@@ -134,7 +134,7 @@ func (s *Store) Close(ctx context.Context) error { return s.repository.Close(ctx
 
 // Capture persists changed file objects, composes the complete tree and protects it
 // with a native snapshot tagged by operationID. The caller supplies the complete tree.
-func (s *Store) Capture(ctx context.Context, operationID string, entries []Entry, open func(string) (io.ReadCloser, error)) (string, []Entry, error) {
+func (s *Store) Capture(ctx context.Context, operationID string, entries []Entry, write func(model.Entry, io.Writer) error) (string, []Entry, error) {
 	if operationID == "" {
 		return "", nil, errors.New("empty operation ID")
 	}
@@ -153,29 +153,17 @@ func (s *Store) Capture(ctx context.Context, operationID string, entries []Entry
 			if e.Size < 0 || e.Size == math.MaxInt64 {
 				return fmt.Errorf("invalid or unsupported file size for %q", e.Path)
 			}
-			if open == nil {
-				return fmt.Errorf("no content reader for %q", e.Path)
-			}
-			r, err := open(e.Path)
-			if err != nil {
-				return err
-			}
-			if r == nil {
-				return fmt.Errorf("content reader for %q is nil", e.Path)
+			if write == nil {
+				return fmt.Errorf("no content source for %q", e.Path)
 			}
 			ow := w.NewObjectWriter(ctx, object.WriterOptions{Compressor: compression.Name("zstd-fastest")})
 			h := sha256.New()
-			n, copyErr := io.Copy(io.MultiWriter(ow, h), io.LimitReader(r, e.Size+1))
-			closeErr := r.Close()
-			if copyErr != nil {
+			sink := &captureWriter{out: io.MultiWriter(ow, h), remaining: e.Size}
+			if err := write(e.Entry, sink); err != nil {
 				_ = ow.Close()
-				return copyErr
+				return err
 			}
-			if closeErr != nil {
-				_ = ow.Close()
-				return closeErr
-			}
-			if n != e.Size || hex.EncodeToString(h.Sum(nil)) != e.SHA256 {
+			if sink.remaining != 0 || hex.EncodeToString(h.Sum(nil)) != e.SHA256 {
 				_ = ow.Close()
 				return fmt.Errorf("content identity mismatch for %q", e.Path)
 			}
@@ -205,6 +193,20 @@ func (s *Store) Capture(ctx context.Context, operationID string, entries []Entry
 		return "", nil, err
 	}
 	return string(rootID), captured, nil
+}
+
+type captureWriter struct {
+	out       io.Writer
+	remaining int64
+}
+
+func (w *captureWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.remaining {
+		return 0, errors.New("file exceeds declared size")
+	}
+	n, err := w.out.Write(p)
+	w.remaining -= int64(n)
+	return n, err
 }
 
 type treeNode struct {
@@ -297,7 +299,7 @@ func (s *Store) Release(ctx context.Context, root string) error {
 	}
 	return repo.WriteSession(ctx, s.repository, repo.WriteSessionOptions{Purpose: "lode release"}, func(ctx context.Context, w repo.RepositoryWriter) error { return w.DeleteManifest(ctx, id) })
 }
-func (s *Store) Read(ctx context.Context, objectRef string) (io.ReadCloser, error) {
+func (s *Store) Read(ctx context.Context, objectRef string) (io.ReadSeekCloser, error) {
 	id, err := object.ParseID(objectRef)
 	if err != nil {
 		return nil, fmt.Errorf("invalid native object reference: %w", err)

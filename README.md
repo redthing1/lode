@@ -6,7 +6,9 @@ The current implementation supports connected saves, branches, whole-file merges
 
 ## Build
 
-Use Go 1.27.2 or later on Linux. Storage must be local filesystems supporting file and directory synchronization; workspace transitions also require atomic rename without replacement.
+Use Go 1.27.2 or later on Linux, with cgo enabled, a C compiler, and the development headers/library for [librsync 2.3.4](https://github.com/librsync/librsync/releases/tag/v2.3.4). The executable links to the system librsync shared library, which must also be installed on machines running Lode. Librsync is distributed under [LGPL-2.1](https://github.com/librsync/librsync/blob/v2.3.4/COPYING).
+
+Storage must be local filesystems supporting file and directory synchronization; workspace transitions also require atomic rename without replacement.
 
 ```sh
 make fmt
@@ -126,8 +128,10 @@ Checkout, update, switch, selection changes and restore share a recovery plan in
 
 Checkout creates a new directory; attach requires an existing folder and an empty server project. Stop applications writing affected files before any local transition. Recovery detects many intervening changes, but does not provide a simultaneous snapshot of other processes' writes.
 
-Lode versions file contents and directories. Symlinks and special files are unsupported; permissions and timestamps are not versioned. `.lode` is reserved for workspace state and credentials. Other selected files are included. Keep files still while saving: status hashes selected files, and upload validates changed contents again.
+Lode versions file contents and directories. Paths must be UTF-8 without control characters. Symlinks and special files are unsupported; permissions and timestamps are not versioned. `.lode` is reserved for workspace state and credentials. Other selected files are included. Keep files still while saving: status hashes selected files, and upload validates changed contents again.
 
-Clients store selected baseline metadata and files, without a native storage index or historical payloads. JSON metadata messages are limited to 16 MiB. Transfers stream; changed files currently upload in full even when native storage reuses most chunks. A transition needs space for preserved replaced files and one incoming file; completed staged files share their installed inode until cleanup. Initial checkout has no replaced files to preserve. Server captures currently examine the complete logical tree.
+Clients store selected baseline metadata and files, without a native storage index or historical payloads. JSON metadata messages are limited to 16 MiB. Transfers stream. Changed files of at least 1 MiB can upload as librsync deltas against their retained base; files without a suitable base upload in full. A basis above about 28 GiB uses full transfer to bound client memory. Signatures use at most 64 MiB of temporary client disk space per save; remaining files upload in full. Delta transfer still reads complete source files, and full rewrites may save no bandwidth. Downloads currently transfer requested files in full.
+
+A transition needs space for preserved replaced files and one incoming file; completed staged files share their installed inode until cleanup. Initial checkout has no replaced files to preserve. Server captures currently examine the complete logical tree.
 
 See [architecture](doc/architecture.md) for ownership and persistence contracts.

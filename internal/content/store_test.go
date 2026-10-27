@@ -26,13 +26,14 @@ func fileEntry(path string, data []byte) Entry {
 	h := sha256.Sum256(data)
 	return Entry{Entry: model.Entry{Path: path, Kind: model.File, Size: int64(len(data)), SHA256: hex.EncodeToString(h[:])}}
 }
-func source(data map[string][]byte) func(string) (io.ReadCloser, error) {
-	return func(path string) (io.ReadCloser, error) {
-		b, ok := data[path]
+func source(data map[string][]byte) func(model.Entry, io.Writer) error {
+	return func(entry model.Entry, out io.Writer) error {
+		b, ok := data[entry.Path]
 		if !ok {
-			return nil, os.ErrNotExist
+			return os.ErrNotExist
 		}
-		return io.NopCloser(bytes.NewReader(b)), nil
+		_, err := io.Copy(out, bytes.NewReader(b))
+		return err
 	}
 }
 

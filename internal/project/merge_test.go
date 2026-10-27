@@ -45,9 +45,9 @@ func TestMergePublishesCompleteTreeWithReusedParentObjects(t *testing.T) {
 	opened := 0
 	r := mergeRequest("main", ours.ID, theirs.ID)
 	commit, err := tp.p.Save(ctx, r, Source{
-		Open: func(string) (io.ReadCloser, error) {
+		Write: func(model.Entry, Basis, io.Writer) error {
 			opened++
-			return nil, errors.New("merge must reuse parent objects")
+			return errors.New("merge must reuse parent objects")
 		},
 	})
 	if err != nil {
@@ -82,9 +82,9 @@ func TestMergePublishesCompleteTreeWithReusedParentObjects(t *testing.T) {
 	if err := tp.p.DeleteBranch(ctx, "topic", theirs.ID); err != nil {
 		t.Fatalf("delete source branch: %v", err)
 	}
-	retried, err := tp.p.Save(ctx, r, Source{Open: func(string) (io.ReadCloser, error) {
+	retried, err := tp.p.Save(ctx, r, Source{Write: func(model.Entry, Basis, io.Writer) error {
 		opened++
-		return nil, errors.New("accepted retry reopened source")
+		return errors.New("accepted retry reopened source")
 	}})
 	if err != nil || retried.ID != commit.ID || opened != 0 {
 		t.Fatalf("accepted merge retry = %#v, %v; source callbacks=%d", retried, err, opened)
@@ -139,9 +139,9 @@ func TestMergeConflictChoicesCanForceFileAndWholeSubtree(t *testing.T) {
 		model.Choice{Path: "conflict", Ours: true},
 		model.Choice{Path: "assets", Ours: true},
 	)
-	commit, err := tp.p.Save(tp.ctx, r, Source{Open: func(string) (io.ReadCloser, error) {
+	commit, err := tp.p.Save(tp.ctx, r, Source{Write: func(model.Entry, Basis, io.Writer) error {
 		t.Fatal("merge choice must reuse parent object references")
-		return nil, nil
+		return nil
 	}})
 	if err != nil {
 		t.Fatalf("chosen merge: %v", err)

@@ -212,7 +212,7 @@ func (w *Workspace) finishSave(ctx context.Context, r project.Request) (project.
 	if err != nil {
 		return project.Commit{}, err
 	}
-	commit, err := client.Save(ctx, r, project.Source{Open: func(name string) (io.ReadCloser, error) { return w.openFile(name) }})
+	commit, err := client.Save(ctx, r, func(name string) (io.ReadCloser, error) { return w.openFile(name) })
 	if err != nil {
 		var conflicts *model.Conflicts
 		var bases *project.MergeBaseConflict

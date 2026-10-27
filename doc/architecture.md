@@ -7,6 +7,7 @@ Lode is one Go module and executable. The server owns shared history and content
 | `model` | Pure path, selection, entry, comparison and whole-entry merge rules |
 | `project` | Publication, SQLite history, references, and retention authority |
 | `content` | Kopia objects, snapshot roots, retrieval, release, and collection |
+| `transfer` | Bounded streaming signature, delta and patch calls to librsync |
 | `remote` | Authenticated HTTP requests and streamed file transfers |
 | `workspace` | Local observation, selected transitions, baseline, and recovery |
 | `cmd/lode` | CLI and server lifecycle |
@@ -66,5 +67,9 @@ Save recovery uses the original request. Later file edits remain changes against
 The service serializes mutations. Reads hold shared protection while streaming. A local ownership lock excludes a second service process. SQLite uses durable transactions. The filesystem content adapter synchronizes Kopia's blob directory chain after writes and deletions; Kopia synchronizes blob file contents before rename. These contracts require Linux local filesystems that honor synchronization.
 
 The server directory contains project identity and secrets, SQLite metadata, and the native content repository. Native connection configuration and bounded caches live there and are derived from its current location. Clients receive selected metadata and requested file bytes. HTTP requires a project token and expected project identity; plaintext client connections are limited to loopback addresses.
+
+For eligible changed-file uploads, the client fetches signatures of exact retained base paths before starting publication. Signatures are bounded and spooled to one unlinked temporary file; none become workspace state. Each file part carries either full bytes or a librsync delta. Under the publication gate, the service resolves the basis from the request's base/path, decodes directly into capture's bounded size/hash writer, and closes the basis before returning. Transfer encoding does not change operation identity or add an acceptance path. Native object identifiers stay private. Signature expiry between preflight and publication is handled by the existing branch/base checks; an accepted retry needs no payload decoding.
+
+The cgo adapter uses upstream librsync jobs, fixed IO buffers, bounded signature records and block sizes, exact reconstructed sizes, basis-range checks and strict input exhaustion. Full-file transfer remains available for new, small or unsupported bases and above the signature spool budget. Downloads still stream requested files in full.
 
 Backup uses the same ownership lock as the service. It opens and reconciles the source, closes SQLite and Kopia while retaining that lock, then copies the cold database and native repository into a private staging directory. It preserves file modification times used by native maintenance and excludes derived configuration/caches. Reopening the independent copy verifies its retained roots and SQLite consistency before a synchronized no-replace rename publishes it. Restoration is the same operation applied to a backup; no separate archive format or backup metadata ledger exists.
