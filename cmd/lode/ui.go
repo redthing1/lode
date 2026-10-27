@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +19,7 @@ type commandDescription struct{ usage, description string }
 var commandHelp = []commandDescription{
 	{"init DIR", "Create a server project and print its access token."},
 	{"serve [-listen HOST:PORT] DIR", "Serve a project on loopback; use a TLS proxy for remote access."},
-	{"attach [options] URL [DIR]", "Track an existing folder in an empty project; DIR defaults to the workspace directory."},
+	{"attach [options] URL [DIR]", "Track an existing folder in an empty project; DIR defaults to the current directory or -C DIR."},
 	{"clone [options] URL DIR", "Download selected paths into a new workspace directory."},
 	{"status", "Show the workspace branch, base, selection and local changes."},
 	{"save -m MESSAGE [-author NAME]", "Save selected changes while preserving unloaded paths."},
@@ -35,6 +36,7 @@ var commandHelp = []commandDescription{
 	{"backup SOURCE DEST", "Copy a stopped project into a new directory; use the same command to restore."},
 	{"resume", "Finish an interrupted save or local transition."},
 	{"cancel", "Cancel an unaccepted save or roll back an unfinished local transition."},
+	{"version", "Print the installed version."},
 }
 
 func helpFor(command string) (commandDescription, bool) {
@@ -52,7 +54,15 @@ func printHelp(out io.Writer) {
 	for _, info := range commandHelp {
 		fmt.Fprintf(out, "  %-39s %s\n", info.usage, info.description)
 	}
-	fmt.Fprintln(out, "\nUse lode help COMMAND for arguments and options. Options precede positional arguments.\nSet LODE_TOKEN for attach/clone and LODE_AUTHOR for the default author.")
+	fmt.Fprintln(out, "\nRun workspace commands from any directory inside a workspace, or use -C DIR.\nWorkspace paths are relative to the root; attach/clone destinations use the current directory. Options precede positional arguments.\nUse lode help COMMAND for options, or lode --version for the installed version.\nSet LODE_TOKEN for attach/clone and LODE_AUTHOR for the default author.")
+}
+
+func printVersion(out io.Writer) {
+	version := "devel"
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		version = info.Main.Version
+	}
+	fmt.Fprintln(out, "lode", version)
 }
 
 func selectionText(selection model.Selection) string {

@@ -1,16 +1,16 @@
 # User guide
 
-Follow the [quickstart](../README.md#save-your-first-project) to create a workspace. Examples use `bin/lode -C ./work` from the source checkout; replace `./work` with your workspace root. Paths passed to workspace commands are relative to that root, even when the shell is elsewhere.
+Follow the [quickstart](../README.md#save-your-first-project) to create a workspace. Examples start at its root. Workspace commands also work from subdirectories; use `lode -C DIR` to work from elsewhere. Workspace paths are relative to the root; attach/clone destinations are relative to the current directory.
 
 ## Save and update
 
 A saved version, or **commit**, describes the complete project. Your workspace remembers a **base** version for comparing local changes. A **branch** names a line of saved work; new projects start on `main`.
 
 ```sh
-bin/lode -C ./work status
-bin/lode -C ./work save -m 'Update the assets'
-bin/lode -C ./work log
-bin/lode -C ./work update
+lode status
+lode save -m 'Update the assets'
+lode log
+lode update
 ```
 
 `status` shows the branch, base, selection, and added/modified/deleted paths. `save` publishes selected changes and prints the new version ID. A save with no changes reports that there is nothing to save. `log` follows first-parent history—the destination branch's line through merges; `log -n 50` shows more versions.
@@ -20,7 +20,7 @@ Saving requires a connection. Local editing and `status` work offline. If anothe
 Conflicts stop an update before files change. For example, keep your local file:
 
 ```sh
-bin/lode -C ./work update -ours assets/example.bin
+lode update -ours assets/example.bin
 ```
 
 Use one choice for each conflicting path; options are repeatable. `-ours` keeps your local contents as changes against the updated base. To take the server version instead, use `update -theirs PATH`. A directory choice chooses the entire subtree, including independent changes within it.
@@ -30,9 +30,9 @@ Use one choice for each conflicting path; options are repeatable. `-ours` keeps 
 Selection controls local presence. Unloaded paths remain part of the shared project and survive partial saves.
 
 ```sh
-bin/lode clone -include assets -exclude assets/cache https://lode.example.com ./selected
-bin/lode -C ./selected select
-bin/lode -C ./selected select -include assets -include references
+lode clone -include assets -exclude assets/cache https://lode.example.com ../selected
+lode -C ../selected select
+lode -C ../selected select -include assets -include references
 ```
 
 Set `LODE_TOKEN` before attaching or cloning. Both commands accept repeatable include/exclude options; the most specific path rule wins. Without rules, they select everything. Exclusions alone select everything except those paths. Use `select -include .` to select the whole project.
@@ -46,13 +46,13 @@ A rule set matching no remote or local entries cannot empty a populated workspac
 Create a branch at your workspace base, work on it, then merge its saved versions into `main`:
 
 ```sh
-bin/lode -C ./work branch experiment
-bin/lode -C ./work switch experiment
+lode branch experiment
+lode switch experiment
 # Edit files, then save.
-bin/lode -C ./work save -m 'Try a different layout'
-bin/lode -C ./work switch main
-bin/lode -C ./work merge experiment
-bin/lode -C ./work update
+lode save -m 'Try a different layout'
+lode switch main
+lode merge experiment
+lode update
 ```
 
 `branch` lists branches; `branch NAME COMMIT` chooses a starting version. `branch -delete NAME` removes the name while retaining its history. The CLI refuses deletion of `main` or the current workspace branch. `switch` preserves independent local edits and accepts the same choices as `update`.
@@ -66,9 +66,9 @@ For a conflict, use `merge -ours PATH BRANCH` to choose the destination version 
 `COMMIT` means the full version ID printed by `save`, `log`, or `tag`, not a branch or tag name.
 
 ```sh
-bin/lode -C ./work restore COMMIT assets/example.bin
-bin/lode -C ./work status
-bin/lode -C ./work save -m 'Restore the earlier file'
+lode restore COMMIT assets/example.bin
+lode status
+lode save -m 'Restore the earlier file'
 ```
 
 Restore puts historical contents into selected paths as local changes. It keeps the branch and base. Omit paths to restore the whole selection. Every explicit path must be known to the historical version, local files, or current baseline; a typo fails before any files change. A file absent from the historical version is removed locally.
@@ -80,10 +80,10 @@ A **tag** protects a saved version from expiry. `tag release-1` protects the wor
 ## Release old contents
 
 ```sh
-bin/lode -C ./work tag release-1
-bin/lode -C ./work cleanup -keep 20
+lode tag release-1
+lode cleanup -keep 20
 # Inspect the preview, then copy its token:
-bin/lode -C ./work cleanup -keep 20 -apply PREVIEW_TOKEN
+lode cleanup -keep 20 -apply PREVIEW_TOKEN
 ```
 
 `-keep N` protects the latest N first-parent versions of every branch, counting its tip. Tips and tagged versions are always protected, including with `-keep 0`. The preview explains which versions are kept, eligible, or already expired. Its apply token appears only after the complete preview succeeds.
@@ -105,4 +105,4 @@ Long workspace commands report elapsed activity on a terminal. Ctrl-C interrupts
 
 A cancelled initial checkout leaves an attached empty-selection workspace; populate it with `select`. A historical version can expire between downloads; the transition then stops and can be cancelled. An interrupted merge resumes its original saved versions; update is still a separate step.
 
-For more command options, use `bin/lode help COMMAND`. Hosting and complete-store recovery are covered in [operations](operations.md).
+For more command options, use `lode help COMMAND`. Hosting and complete-store recovery are covered in [operations](operations.md).

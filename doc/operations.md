@@ -1,14 +1,14 @@
 # Operations
 
-Lode currently supports one private project per server process on Linux. Use case-sensitive local filesystems that support file and directory synchronization and atomic rename without replacement. Build and runtime requirements are in the [README](../README.md#build).
+Lode currently supports one private project per server process on Linux. Use case-sensitive local filesystems that support file and directory synchronization and atomic rename without replacement. Build and runtime requirements are in the [README](../README.md#install).
 
 ## Host a project
 
 Initialize a new store and keep its printed access token private:
 
 ```sh
-bin/lode init ./store
-bin/lode serve -listen 127.0.0.1:8473 ./store
+lode init ./store
+lode serve -listen 127.0.0.1:8473 ./store
 ```
 
 Only one process can own a store at a time. Run the server under your normal process supervisor for persistent hosting. Keep the store outside working folders and serve it over HTTPS for remote clients; Lode's listener accepts loopback addresses only.
@@ -29,7 +29,7 @@ Clients connect using the HTTPS origin, without a path prefix:
 
 ```sh
 export LODE_TOKEN='the project access token'
-bin/lode clone https://lode.example.com ./work
+lode clone https://lode.example.com ./work
 ```
 
 ## Run with Podman Compose
@@ -80,7 +80,7 @@ Stop applications writing affected files while saving or changing local presence
 Stop the server with Ctrl-C in its terminal or through its process supervisor, then copy the complete store into a new directory:
 
 ```sh
-bin/lode backup ./store ./project-backup
+lode backup ./store ./project-backup
 ```
 
 The source must be stopped and writable. The destination must not exist or lie inside the source. The copy contains history, references, retention decisions, operation outcomes, credentials, and retained contents. Derived native caches and connection configuration are rebuilt when opened.
@@ -88,8 +88,8 @@ The source must be stopped and writable. The destination must not exist or lie i
 To restore, make a working copy of the backup and serve it:
 
 ```sh
-bin/lode backup ./project-backup ./restored-store
-bin/lode serve ./restored-store
+lode backup ./project-backup ./restored-store
+lode serve ./restored-store
 ```
 
 Copies are independent stores, not synchronized replicas. Point existing clients at the restored service's original address to keep using their stored connection settings.

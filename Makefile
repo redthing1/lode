@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: fmt check build
+.PHONY: fmt check build install
 fmt:
 	gofmt -w cmd internal
 
@@ -12,3 +12,6 @@ check:
 build:
 	mkdir -p bin
 	$(GO) build -o bin/lode ./cmd/lode
+
+install:
+	$(GO) install ./cmd/lode

@@ -34,7 +34,8 @@ func main() {
 func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 	global := flag.NewFlagSet("lode", flag.ContinueOnError)
 	global.SetOutput(diagnostics)
-	directory := global.String("C", ".", "workspace directory")
+	directory := global.String("C", ".", "directory to find a workspace from")
+	version := global.Bool("version", false, "print the installed version")
 	global.Usage = func() { printHelp(diagnostics) }
 	if err := global.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -43,6 +44,13 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	args = global.Args()
+	if *version {
+		if len(args) != 0 {
+			return errors.New("--version does not take a command")
+		}
+		printVersion(out)
+		return nil
+	}
 	if len(args) == 0 || len(args) == 1 && args[0] == "help" {
 		printHelp(out)
 		return nil
@@ -129,7 +137,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		flags.StringVar(&applyToken, "apply", "", "apply the supplied preview token")
 	case "restore":
 		flags.BoolVar(&force, "force", false, "discard local changes in restored paths")
-	case "init", "status", "resume", "cancel", "collect", "backup":
+	case "init", "status", "resume", "cancel", "collect", "backup", "version":
 	default:
 		return fmt.Errorf("unknown command %q; use lode help", command)
 	}
@@ -140,6 +148,13 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	args = flags.Args()
+	if command == "version" {
+		if len(args) != 0 {
+			return errors.New("usage: lode version")
+		}
+		printVersion(out)
+		return nil
+	}
 	finishActivity := showActivity(diagnostics, command)
 	defer finishActivity()
 	if command == "init" || command == "serve" || command == "backup" {
@@ -203,9 +218,13 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 	if command == "tag" && !deleteTag && len(args) > 2 {
 		return errors.New("usage: lode tag [NAME [COMMIT]]")
 	}
-	w, err := workspace.Open(*directory)
+	root, err := findWorkspace(*directory)
 	if err != nil {
 		return err
+	}
+	w, err := workspace.Open(root)
+	if err != nil {
+		return fmt.Errorf("open workspace %q: %w", root, err)
 	}
 	defer w.Close()
 	switch command {
