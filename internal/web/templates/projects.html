@@ -51,15 +51,6 @@
     <h1><a href="/p/{{.Info.Slug}}">{{.Info.Slug}}</a></h1>
     <span class="badge">Private</span>
   </div>
-  <details class="connect">
-    <summary class="button secondary">Connect CLI</summary>
-    <div class="popover">
-      <p>Create an access token, then run:</p>
-      <pre><code>lode login {{.URL}}
-lode clone {{.URL}} {{.Info.Slug}}</code></pre>
-      <a href="/settings/tokens">Access tokens</a>
-    </div>
-  </details>
 </div>
 <nav class="tabs" aria-label="Project navigation">
   <a
@@ -84,19 +75,31 @@ lode clone {{.URL}} {{.Info.Slug}}</code></pre>
     >{{template "branch-icon"}}Branches</a
   >
   {{if .CanManage}}<a
-    href="/p/{{.Info.Slug}}/storage"
-    {{if eq .Tab "storage"}}
-    aria-current="page"
-    {{end}}
-    >Storage</a
-  ><a
+    class="project-settings-link"
     href="/p/{{.Info.Slug}}/members"
-    {{if eq .Tab "members"}}
+    {{if or (eq .Tab "members") (eq .Tab "storage")}}
     aria-current="page"
     {{end}}
-    >Members</a
+    >Settings</a
   >{{end}}
 </nav>
+{{end}} {{define "project-settings-top"}}
+<div class="settings-layout">
+  <nav class="settings-nav" aria-label="Project settings">
+    <span class="nav-heading">Project settings</span>
+    <a
+      href="/p/{{.Info.Slug}}/members"
+      {{if eq .Tab "members"}} aria-current="page" {{end}}
+      >Members</a
+    >
+    <a
+      href="/p/{{.Info.Slug}}/storage"
+      {{if eq .Tab "storage"}} aria-current="page" {{end}}
+      >Storage</a
+    >
+  </nav>
+  <div class="settings-content">
+    <div class="page-heading"><h1>{{if eq .Tab "members"}}Members{{else}}Storage{{end}}</h1></div>
 {{end}} {{define "branch-picker"}}
 <form class="inline branch-picker" method="get">
   <label class="sr-only" for="branch">Branch</label>{{template
@@ -134,6 +137,14 @@ lode clone {{.URL}} {{.Info.Slug}}</code></pre>
   </div>
   {{if not .Commit.Retained}}<span class="badge amber">Contents released</span
   >{{end}}
+  <details class="connect">
+    <summary class="button">Clone</summary>
+    <div class="popover">
+      <pre><code>lode login {{.URL}}
+lode clone {{.URL}} {{.Info.Slug}}</code></pre>
+      <a href="/settings/tokens">Create access token</a>
+    </div>
+  </details>
 </div>
 <section class="panel file-panel">
   {{template "version-strip" .}}
@@ -400,8 +411,8 @@ lode save -m 'Initial version'</code></pre>
 {{end}} {{end}}{{template "bottom" .}}{{end}} {{define
 "project-members"}}{{template "top" .}}{{with .Data}}{{template "project-top"
 .}}
+{{template "project-settings-top" .}}
 <section class="panel">
-  <h2 class="panel-title">Members</h2>
   <div class="table-wrap">
     <table>
       <thead>
@@ -464,8 +475,8 @@ lode save -m 'Initial version'</code></pre>
     </p>
   </div>
 </section>
-{{end}}{{template "bottom" .}}{{end}} {{define "project-storage"}}{{template
-"top" .}}{{with .Data}}{{template "project-top" .}} {{if .Notice}}
+{{template "settings-bottom" .}}{{end}}{{template "bottom" .}}{{end}} {{define "project-storage"}}{{template
+"top" .}}{{with .Data}}{{template "project-top" .}}{{template "project-settings-top" .}} {{if .Notice}}
 <div class="notice" role="status">{{.Notice}}</div>
 {{end}}
 <section class="panel">
@@ -530,4 +541,4 @@ lode save -m 'Initial version'</code></pre>
     </form>
   </div>
 </section>
-{{end}}{{template "bottom" .}}{{end}}
+{{template "settings-bottom" .}}{{end}}{{template "bottom" .}}{{end}}

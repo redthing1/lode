@@ -82,6 +82,11 @@ func New(i *instance.Instance) (http.Handler, error) {
 	web.HandleFunc("POST /verify/recovery", s.recover)
 	web.HandleFunc("POST /logout", s.logout)
 	web.HandleFunc("POST /security/{purpose}/{step}", s.ceremony)
+	web.HandleFunc("GET /settings/appearance", func(w http.ResponseWriter, r *http.Request) {
+		if u, ok := s.require(w, r); ok {
+			s.render(w, r, "appearance", page{Title: "Appearance", Section: "appearance", User: u}, http.StatusOK)
+		}
+	})
 	web.HandleFunc("GET /settings/security", s.accountSecurity)
 	web.HandleFunc("POST /settings/password", s.password)
 	web.HandleFunc("POST /settings/keys/remove", s.removeKey)

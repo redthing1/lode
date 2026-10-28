@@ -1,3 +1,19 @@
+{{define "appearance"}}{{template "top" .}}{{template "settings-top" .}}
+<div class="page-heading"><h1>Appearance</h1></div>
+<section class="panel">
+  <h2 class="panel-title">Theme</h2>
+  <div class="panel-body">
+    <fieldset class="theme-options">
+      <legend class="sr-only">Theme</legend>
+      <label><input type="radio" name="theme" value="dark" checked />Dark</label>
+      <label><input type="radio" name="theme" value="light" />Light</label>
+      <label><input type="radio" name="theme" value="auto" />System</label>
+    </fieldset>
+    <p class="hint">Saved in this browser.</p>
+    <noscript><p class="hint">Enable JavaScript to change the theme.</p></noscript>
+  </div>
+</section>
+{{template "settings-bottom" .}}{{template "bottom" .}}{{end}}
 {{define "security"}}{{template "top" .}}{{template "settings-top" .}}
 <div class="page-heading"><h1>Account security</h1></div>
 {{if .User.ForcePasswordChange}}
