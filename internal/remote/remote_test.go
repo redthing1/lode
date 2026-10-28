@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -26,6 +27,70 @@ import (
 
 func readerSource(data []byte) func(string) (io.ReadCloser, error) {
 	return func(string) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
+}
+
+func TestProjectURLPathRoutingAndValidation(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/p/demo-1/v1/info" {
+			t.Errorf("path=%q", r.URL.Path)
+		}
+		w.Header().Set(projectHeader, id)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"`+id+`"}`)
+	}))
+	defer srv.Close()
+	c, err := New(srv.URL+"/p/demo-1", "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.Info(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"/p/Demo", "/p/a/b", "/p/demo/", "/p/d%65mo", "/other"} {
+		if _, err := New(srv.URL+suffix, "token", ""); err == nil {
+			t.Errorf("accepted path %s", suffix)
+		}
+	}
+	canonical, err := CanonicalURL(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(canonical)
+	if u.Path != "" {
+		t.Fatalf("canonical root path=%q", u.Path)
+	}
+}
+
+func TestVerifyReportsAuthorizationBeforeProjectIdentity(t *testing.T) {
+	c, _ := New("http://127.0.0.1", "token", project.NewID())
+	for _, tc := range []struct {
+		status int
+		want   string
+	}{{http.StatusUnauthorized, "authentication failed"}, {http.StatusForbidden, "permission denied"}} {
+		resp := httptest.NewRecorder()
+		resp.WriteHeader(tc.status)
+		err := c.verify(resp.Result())
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("status %d error=%v", tc.status, err)
+		}
+	}
+}
+
+func TestWhoAmIDoesNotForwardCredentialAcrossRedirect(t *testing.T) {
+	var received string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { received = r.Header.Get("Authorization") }))
+	defer target.Close()
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/api/me", http.StatusFound)
+	}))
+	defer front.Close()
+	if _, err := WhoAmI(context.Background(), front.URL, "secret"); err == nil {
+		t.Fatal("redirect was accepted")
+	}
+	if received != "" {
+		t.Fatalf("redirect target received %q", received)
+	}
 }
 
 func TestStreamSaveAndRead(t *testing.T) {

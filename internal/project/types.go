@@ -23,10 +23,16 @@ var (
 	ErrExpired           = errors.New("version contents have expired")
 	ErrCleanupChanged    = errors.New("history or protection changed; preview cleanup again")
 	ErrReferenceChanged  = errors.New("reference changed; list references again")
+	ErrOperationOwner    = errors.New("operation is owned by another actor")
 )
+
+// Actor is the authenticated, stable identity supplied by the instance layer.
+// Name is a display snapshot; ID is the durable ownership key.
+type Actor struct{ ID, Name string }
 
 type Commit struct {
 	ID       string    `json:"id"`
+	ActorID  string    `json:"actor_id,omitempty"`
 	Parents  []string  `json:"parents"`
 	Author   string    `json:"author"`
 	Message  string    `json:"message"`
@@ -44,6 +50,7 @@ type Request struct {
 	SecondParent string         `json:"second_parent,omitempty"`
 	MergeBase    string         `json:"merge_base,omitempty"`
 	Choices      []model.Choice `json:"choices,omitempty"`
+	actorID      string         `json:"-"`
 }
 
 type MergeBaseConflict struct{ Bases []string }

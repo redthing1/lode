@@ -125,7 +125,17 @@ func open(ctx context.Context, directory string, create bool) (_ *Project, err e
 	} else {
 		var version int
 		err = p.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
-		if err == nil && version != 2 {
+		if err == nil && version == 2 {
+			_, err = p.db.ExecContext(ctx, `BEGIN IMMEDIATE;
+ALTER TABLE commits ADD COLUMN actor_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE operations ADD COLUMN actor_id TEXT NOT NULL DEFAULT '';
+PRAGMA user_version=3;
+COMMIT;`)
+			if err == nil {
+				version = 3
+			}
+		}
+		if err == nil && version != 3 {
 			err = errors.New("unsupported project database version")
 		}
 	}
@@ -266,19 +276,36 @@ func canonical(request Request) (Request, string, error) {
 }
 
 func (p *Project) Save(ctx context.Context, request Request, source Source) (Commit, error) {
+	return p.save(ctx, Actor{}, request, source)
+}
+
+func (p *Project) SaveAs(ctx context.Context, actor Actor, request Request, source Source) (Commit, error) {
+	if actor.ID == "" || actor.Name == "" {
+		return Commit{}, ErrInvalid
+	}
+	return p.save(ctx, actor, request, source)
+}
+
+func (p *Project) save(ctx context.Context, actor Actor, request Request, source Source) (Commit, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if actor.ID != "" {
+		request.Author = ""
+	}
 	r, fingerprint, err := canonical(request)
 	if err != nil {
 		return Commit{}, err
 	}
-	var stored, outcome string
-	err = p.db.QueryRowContext(ctx, "SELECT fingerprint,outcome FROM operations WHERE id=?", r.ID).Scan(&stored, &outcome)
+	var stored, outcome, owner string
+	err = p.db.QueryRowContext(ctx, "SELECT fingerprint,outcome,actor_id FROM operations WHERE id=?", r.ID).Scan(&stored, &outcome, &owner)
 	existing := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Commit{}, err
 	}
 	if existing {
+		if owner != actor.ID {
+			return Commit{}, ErrOperationOwner
+		}
 		if outcome == "cancelled" {
 			return Commit{}, ErrCancelled
 		}
@@ -293,8 +320,12 @@ func (p *Project) Save(ctx context.Context, request Request, source Source) (Com
 		case "unchanged":
 			return Commit{}, ErrAlreadyMerged
 		}
-	} else if _, err := p.db.ExecContext(ctx, "INSERT INTO operations VALUES(?,?,'pending')", r.ID, fingerprint); err != nil {
+	} else if _, err := p.db.ExecContext(ctx, "INSERT INTO operations(id,fingerprint,outcome,actor_id) VALUES(?,?,'pending',?)", r.ID, fingerprint, actor.ID); err != nil {
 		return Commit{}, err
+	}
+	r.actorID = actor.ID
+	if actor.ID != "" {
+		r.Author = actor.Name
 	}
 	head, err := p.head(ctx, r.Branch)
 	if err != nil {
@@ -381,12 +412,31 @@ func changedEntries(base []content.Entry, changes []model.Entry) ([]content.Entr
 }
 
 func (p *Project) Cancel(ctx context.Context, id string) error {
+	return p.cancel(ctx, Actor{}, id)
+}
+
+func (p *Project) CancelAs(ctx context.Context, actor Actor, id string) error {
+	if actor.ID == "" {
+		return ErrInvalid
+	}
+	return p.cancel(ctx, actor, id)
+}
+
+func (p *Project) cancel(ctx context.Context, actor Actor, id string) error {
 	if !ValidID(id) {
 		return ErrInvalid
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	_, err := p.db.ExecContext(ctx, `INSERT INTO operations VALUES(?,'','cancelled') ON CONFLICT(id) DO UPDATE SET outcome='cancelled' WHERE outcome='pending'`, id)
+	var owner string
+	err := p.db.QueryRowContext(ctx, "SELECT actor_id FROM operations WHERE id=?", id).Scan(&owner)
+	if err == nil && owner != actor.ID {
+		return ErrOperationOwner
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	_, err = p.db.ExecContext(ctx, `INSERT INTO operations(id,fingerprint,outcome,actor_id) VALUES(?,'','cancelled',?) ON CONFLICT(id) DO UPDATE SET outcome='cancelled' WHERE outcome='pending' AND actor_id=?`, id, actor.ID, actor.ID)
 	if err != nil {
 		return err
 	}

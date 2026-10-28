@@ -32,6 +32,7 @@ type Workspace struct {
 	root  *os.Root
 	lock  *os.File
 	state State
+	token string
 }
 
 func Open(directory string) (*Workspace, error) {
@@ -99,18 +100,27 @@ func (s State) validate() error {
 		}
 		seen[e.Path] = true
 	}
-	_, err := remote.New(s.URL, s.Token, s.Project)
-	return err
+	if err := remote.ValidateURL(s.URL); err != nil {
+		return err
+	}
+	if s.Token == "" && !remote.HasProjectPath(s.URL) {
+		return errors.New("invalid workspace state")
+	}
+	return nil
 }
 
 func connect(ctx context.Context, url, token, branch string, selection model.Selection) (*remote.Client, State, error) {
+	canonicalURL, err := remote.CanonicalURL(url)
+	if err != nil {
+		return nil, State{}, err
+	}
 	if selection == nil {
 		selection = model.Selection{{Include: true}}
 	}
 	if err := selection.Validate(); err != nil {
 		return nil, State{}, err
 	}
-	client, err := remote.New(url, token, "")
+	client, err := remote.New(canonicalURL, token, "")
 	if err != nil {
 		return nil, State{}, err
 	}
@@ -118,7 +128,7 @@ func connect(ctx context.Context, url, token, branch string, selection model.Sel
 	if err != nil {
 		return nil, State{}, err
 	}
-	client, err = remote.New(url, token, info.ID)
+	client, err = remote.New(canonicalURL, token, info.ID)
 	if err != nil {
 		return nil, State{}, err
 	}
@@ -126,7 +136,11 @@ func connect(ctx context.Context, url, token, branch string, selection model.Sel
 	if err != nil {
 		return nil, State{}, err
 	}
-	return client, State{Version: 1, URL: url, Token: token, Project: info.ID, Branch: branch, Base: head, Selection: selection}, nil
+	storedToken := token
+	if remote.HasProjectPath(canonicalURL) {
+		storedToken = ""
+	}
+	return client, State{Version: 1, URL: canonicalURL, Token: storedToken, Project: info.ID, Branch: branch, Base: head, Selection: selection}, nil
 }
 
 func initialize(directory string) (*Workspace, error) {
@@ -160,6 +174,7 @@ func Attach(ctx context.Context, url, token, directory string, selection model.S
 		return nil, err
 	}
 	w.state = state
+	w.token = token
 	if err := w.store("state.json", state); err != nil {
 		w.Close()
 		return nil, err
@@ -168,8 +183,22 @@ func Attach(ctx context.Context, url, token, directory string, selection model.S
 }
 
 func (w *Workspace) client() (*remote.Client, error) {
-	return remote.New(w.state.URL, w.state.Token, w.state.Project)
+	token := w.token
+	if token == "" {
+		token = w.state.Token
+	}
+	if token == "" {
+		return nil, errors.New("no workspace credential; run lode login with this instance or project URL")
+	}
+	return remote.New(w.state.URL, token, w.state.Project)
 }
+
+// UseToken sets a per-process credential without writing it into workspace state.
+func (w *Workspace) UseToken(token string) { w.token = token }
+
+// RemoteClient returns the workspace client using the process credential override
+// or the legacy token stored in older workspaces.
+func (w *Workspace) RemoteClient() (*remote.Client, error) { return w.client() }
 
 func (w *Workspace) pending() error {
 	for _, name := range []string{"save.json", "transition.json"} {

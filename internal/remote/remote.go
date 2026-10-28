@@ -29,6 +29,54 @@ type Info struct {
 	ID string `json:"id"`
 }
 
+type Identity struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Instance string `json:"instance"`
+}
+
+func WhoAmI(ctx context.Context, baseURL, token string) (Identity, error) {
+	if token == "" {
+		return Identity{}, errors.New("empty bearer token")
+	}
+	canonical, err := CanonicalURL(baseURL)
+	if err != nil {
+		return Identity{}, err
+	}
+	u, _ := url.Parse(canonical)
+	u.Path = ""
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Path = "/api/me"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return Identity{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+	if err != nil {
+		return Identity{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return Identity{}, errors.New("authentication failed; check the access token")
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		return Identity{}, errors.New("permission denied")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Identity{}, fmt.Errorf("identity check returned HTTP %d", resp.StatusCode)
+	}
+	var identity Identity
+	if err := decodeMetadata(resp.Body, &identity); err != nil {
+		return Identity{}, err
+	}
+	if identity.ID == "" || identity.Username == "" || identity.Instance == "" {
+		return Identity{}, errors.New("identity response is incomplete")
+	}
+	return identity, nil
+}
+
 type wireError struct {
 	Code    string   `json:"code"`
 	Message string   `json:"message"`
@@ -43,6 +91,61 @@ type Client struct {
 	http      *http.Client
 }
 
+func ValidateURL(baseURL string) error {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return err
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return errors.New("invalid remote base URL")
+	}
+	if u.Scheme != "https" && !(u.Scheme == "http" && localHost(u.Hostname())) {
+		return errors.New("remote HTTP requires a loopback host")
+	}
+	if u.Host == "" {
+		return errors.New("invalid remote base URL")
+	}
+	if u.RawPath != "" {
+		return errors.New("remote URL path must be canonical")
+	}
+	if u.Path != "" && u.Path != "/" && !validProjectPath(u.Path) {
+		return errors.New("remote URL path must be /p/SLUG")
+	}
+	return nil
+}
+
+func validProjectPath(path string) bool {
+	if !strings.HasPrefix(path, "/p/") || strings.Contains(path[3:], "/") || len(path) < 4 || len(path) > 67 {
+		return false
+	}
+	for _, c := range path[3:] {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func HasProjectPath(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	return err == nil && validProjectPath(u.Path)
+}
+
+// CanonicalURL validates and normalizes the instance or project URL.
+func CanonicalURL(baseURL string) (string, error) {
+	if err := ValidateURL(baseURL); err != nil {
+		return "", err
+	}
+	u, _ := url.Parse(baseURL)
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	u.RawPath = ""
+	if u.Path == "/" {
+		u.Path = ""
+	}
+	return strings.TrimSuffix(u.String(), "/"), nil
+}
+
 func New(baseURL, token, projectID string) (*Client, error) {
 	if projectID != "" && !project.ValidID(projectID) {
 		return nil, errors.New("invalid remote project identity")
@@ -51,19 +154,12 @@ func New(baseURL, token, projectID string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
-		return nil, errors.New("invalid remote base URL")
-	}
-	if u.Scheme != "https" && !(u.Scheme == "http" && localHost(u.Hostname())) {
-		return nil, errors.New("remote HTTP requires a loopback host")
-	}
-	if u.Host == "" || u.Path != "" && u.Path != "/" {
-		return nil, errors.New("remote base URL must not contain a path")
-	}
 	if token == "" {
 		return nil, errors.New("empty bearer token")
 	}
-	u.Path = ""
+	if err := ValidateURL(baseURL); err != nil {
+		return nil, err
+	}
 	return &Client{base: u, token: token, projectID: projectID, http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 func localHost(host string) bool {
@@ -80,7 +176,7 @@ func (c *Client) request(ctx context.Context, method, p string, body io.Reader, 
 	if decodeErr != nil {
 		return nil, decodeErr
 	}
-	u.Path = "/v1/" + decodedPath
+	u.Path = strings.TrimSuffix(c.base.Path, "/") + "/v1/" + decodedPath
 	u.RawQuery = q
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
@@ -98,7 +194,10 @@ func (c *Client) request(ctx context.Context, method, p string, body io.Reader, 
 func (c *Client) verify(resp *http.Response) error {
 	// Authentication fails before the service reveals its project identity.
 	if resp.StatusCode == http.StatusUnauthorized {
-		return errors.New("access denied; check the project's access token")
+		return errors.New("authentication failed; check the access token with lode login or LODE_TOKEN")
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		return errors.New("permission denied; your account lacks access to this action")
 	}
 	if c.projectID != "" && resp.Header.Get(projectHeader) != c.projectID {
 		return errors.New("remote project identity mismatch")

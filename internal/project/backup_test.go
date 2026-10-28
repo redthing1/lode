@@ -5,9 +5,13 @@ package project
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"database/sql"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -142,6 +146,120 @@ func TestBackupPreservesHistoryOutcomesAndIndependentStores(t *testing.T) {
 	if got := readFile(t, copy, rightReq.ID, "fork.bin"); !bytes.Equal(got, right) {
 		t.Fatalf("restored fork = %q", got)
 	}
+}
+
+func TestBackupMigratesLegacyCopyWithoutChangingSource(t *testing.T) {
+	ctx := context.Background()
+	tp := newTestProject(t)
+	data := []byte("legacy history contents\x00\xff")
+	commit := saveOn(t, tp.p, "main", "", []model.Entry{fileEntry("legacy.bin", data)}, map[string][]byte{"legacy.bin": data})
+	if err := tp.p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tp.p = nil
+
+	// Produce the version 2 shape by removing fields introduced in version 3.
+	db, err := sql.Open("sqlite", filepath.Join(tp.dir, "history.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		"ALTER TABLE commits DROP COLUMN actor_id",
+		"ALTER TABLE operations DROP COLUMN actor_id",
+		"PRAGMA user_version=2",
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("make legacy project: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := backupSourceDigest(t, tp.dir)
+
+	destination := filepath.Join(t.TempDir(), "legacy-copy")
+	if err := Backup(ctx, tp.dir, destination); err != nil {
+		t.Fatalf("backup legacy source: %v", err)
+	}
+	if after := backupSourceDigest(t, tp.dir); !reflect.DeepEqual(after, before) {
+		t.Fatalf("backup changed legacy source files:\nbefore=%v\nafter=%v", before, after)
+	}
+	var sourceVersion int
+	sourceDB, err := sql.Open("sqlite", filepath.Join(tp.dir, "history.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceDB.QueryRowContext(ctx, "PRAGMA user_version").Scan(&sourceVersion); err != nil {
+		_ = sourceDB.Close()
+		t.Fatal(err)
+	}
+	if err := sourceDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if sourceVersion != 2 {
+		t.Fatalf("source schema version = %d, want 2", sourceVersion)
+	}
+
+	copy, err := Open(ctx, destination)
+	if err != nil {
+		t.Fatalf("open migrated copy: %v", err)
+	}
+	defer copy.Close()
+	var copyVersion int
+	if err := copy.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&copyVersion); err != nil {
+		t.Fatal(err)
+	}
+	if copyVersion != 3 {
+		t.Fatalf("copy schema version = %d, want 3", copyVersion)
+	}
+	history, err := copy.History(ctx, "main", 10)
+	if err != nil || len(history) != 1 || history[0].ID != commit.ID {
+		t.Fatalf("migrated copy history = %#v, %v", history, err)
+	}
+	if got := readFile(t, copy, commit.ID, "legacy.bin"); !bytes.Equal(got, data) {
+		t.Fatalf("migrated copy contents = %v, want %v", got, data)
+	}
+}
+
+func backupSourceDigest(t *testing.T, root string) map[string][32]byte {
+	t.Helper()
+	digest := make(map[string][32]byte)
+	for _, name := range []string{"project.json", "history.sqlite"} {
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest[name] = sha256.Sum256(data)
+	}
+	if err := filepath.WalkDir(filepath.Join(root, "content/repository"), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			t.Fatalf("unexpected source entry %s: %s", path, info.Mode())
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		digest[rel] = sha256.Sum256(data)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return digest
 }
 
 func assertBackupHasNoDerivedArtifacts(t *testing.T, dir string) {

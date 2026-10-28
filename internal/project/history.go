@@ -16,17 +16,17 @@ import (
 
 const schema = `
 CREATE TABLE commits(id TEXT PRIMARY KEY, parent TEXT REFERENCES commits(id), second_parent TEXT REFERENCES commits(id),
- author TEXT NOT NULL, message TEXT NOT NULL, created TEXT NOT NULL, root TEXT NOT NULL, depth INTEGER NOT NULL, checkpoint INTEGER NOT NULL);
+ author TEXT NOT NULL, message TEXT NOT NULL, created TEXT NOT NULL, root TEXT NOT NULL, depth INTEGER NOT NULL, checkpoint INTEGER NOT NULL, actor_id TEXT NOT NULL DEFAULT '');
 CREATE TABLE entries(commit_id TEXT NOT NULL REFERENCES commits(id), path TEXT NOT NULL, kind TEXT NOT NULL,
  size INTEGER NOT NULL, sha256 TEXT NOT NULL, object TEXT NOT NULL, PRIMARY KEY(commit_id,path)) WITHOUT ROWID;
 CREATE TABLE branches(name TEXT PRIMARY KEY, tip TEXT REFERENCES commits(id));
 CREATE TABLE tags(name TEXT PRIMARY KEY, commit_id TEXT NOT NULL REFERENCES commits(id));
-CREATE TABLE operations(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, outcome TEXT NOT NULL);
+CREATE TABLE operations(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, outcome TEXT NOT NULL, actor_id TEXT NOT NULL DEFAULT '');
 INSERT INTO branches VALUES('main',NULL);
-PRAGMA user_version=2;
+PRAGMA user_version=3;
 `
 
-const commitColumns = "id,parent,second_parent,author,message,created,root<>''"
+const commitColumns = "id,parent,second_parent,author,message,created,root<>'',actor_id"
 
 func (p *Project) commit(ctx context.Context, id string) (Commit, error) {
 	return scanCommit(p.db.QueryRowContext(ctx, "SELECT "+commitColumns+" FROM commits WHERE id=?", id))
@@ -36,7 +36,7 @@ func scanCommit(row interface{ Scan(...any) error }) (Commit, error) {
 	var c Commit
 	var parent, second sql.NullString
 	var created string
-	err := row.Scan(&c.ID, &parent, &second, &c.Author, &c.Message, &created, &c.Retained)
+	err := row.Scan(&c.ID, &parent, &second, &c.Author, &c.Message, &created, &c.Retained, &c.ActorID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Commit{}, ErrNotFound
 	}
@@ -167,10 +167,11 @@ func (p *Project) accept(ctx context.Context, r Request, root string, before, af
 	if second != "" {
 		c.Parents = append(c.Parents, second)
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO commits VALUES(?,?,?,?,?,?,?,?,?)", r.ID, parent, secondParent, r.Author, r.Message, c.Created.Format(time.RFC3339Nano), root, depth, checkpoint)
+	_, err = tx.ExecContext(ctx, "INSERT INTO commits(id,parent,second_parent,author,message,created,root,depth,checkpoint,actor_id) VALUES(?,?,?,?,?,?,?,?,?,?)", r.ID, parent, secondParent, r.Author, r.Message, c.Created.Format(time.RFC3339Nano), root, depth, checkpoint, r.actorID)
 	if err != nil {
 		return Commit{}, err
 	}
+	c.ActorID = r.actorID
 	changes := map[string]content.Entry{}
 	if !checkpoint {
 		for _, e := range before {

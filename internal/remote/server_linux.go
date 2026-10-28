@@ -21,7 +21,85 @@ import (
 // Handler returns the versioned HTTP boundary for one project.
 func Handler(p *project.Project) http.Handler { return &handler{p: p} }
 
-type handler struct{ p *project.Project }
+type handler struct {
+	p         *project.Project
+	authorize actorAuthorizer
+}
+
+type Access string
+
+const (
+	Read   Access = "read"
+	Write  Access = "write"
+	Manage Access = "manage"
+)
+
+var (
+	ErrUnauthenticated = errors.New("unauthenticated")
+)
+
+type actorAuthorizer func(*http.Request, Access) (project.Actor, error)
+
+// AuthenticatedHandler delegates identity and current authorization to the instance layer.
+// It does not check or fall back to the project token.
+func AuthenticatedHandler(p *project.Project, authorize func(*http.Request, Access) (project.Actor, error)) http.Handler {
+	if authorize == nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "unauthorized", http.StatusUnauthorized) })
+	}
+	return &handler{p: p, authorize: authorize}
+}
+
+func requiredAccess(path, method string) (Access, bool) {
+	parts := strings.Split(strings.TrimPrefix(path, "/v1/"), "/")
+	if len(parts) == 1 {
+		switch parts[0] {
+		case "info", "head", "history":
+			if method == http.MethodGet {
+				return Read, true
+			}
+		case "entries":
+			if method == http.MethodPost {
+				return Read, true
+			}
+		case "branches", "tags":
+			if method == http.MethodGet {
+				return Read, true
+			}
+			if method == http.MethodPost || method == http.MethodDelete {
+				return Write, true
+			}
+		case "read":
+			if method == http.MethodGet || method == http.MethodPost {
+				return Read, true
+			}
+		case "signature":
+			if method == http.MethodGet {
+				return Read, true
+			}
+		case "save":
+			if method == http.MethodPost {
+				return Write, true
+			}
+		case "collect":
+			if method == http.MethodPost {
+				return Manage, true
+			}
+		}
+	}
+	if len(parts) == 2 {
+		switch parts[0] {
+		case "cancel":
+			if method == http.MethodPost {
+				return Write, true
+			}
+		case "cleanup":
+			if method == http.MethodPost && (parts[1] == "preview" || parts[1] == "apply") {
+				return Manage, true
+			}
+		}
+	}
+	return "", false
+}
 
 func codeOf(err error) string {
 	var conflicts *model.Conflicts
@@ -47,6 +125,8 @@ func codeOf(err error) string {
 		return "exists"
 	case errors.Is(err, project.ErrStale):
 		return "stale"
+	case errors.Is(err, project.ErrOperationOwner):
+		return "operation_conflict"
 	case errors.Is(err, project.ErrCancelled):
 		return "cancelled"
 	case errors.Is(err, project.ErrOperationConflict):
@@ -99,17 +179,30 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	header := r.Header.Get("Authorization")
-	if !strings.HasPrefix(header, "Bearer ") {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+	var actor project.Actor
+	if h.authorize != nil {
+		access, ok := requiredAccess(r.URL.Path, r.Method)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		var err error
+		actor, err = h.authorize(r, access)
+		if err != nil || actor.ID == "" || actor.Name == "" {
+			status := http.StatusForbidden
+			if errors.Is(err, ErrUnauthenticated) {
+				status = http.StatusUnauthorized
+			}
+			http.Error(w, http.StatusText(status), status)
+			return
+		}
+	} else {
+		header := r.Header.Get("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") || subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(header, "Bearer ")), []byte(h.p.Token())) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
-	auth := strings.TrimPrefix(header, "Bearer ")
-	if subtle.ConstantTimeCompare([]byte(auth), []byte(h.p.Token())) != 1 {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	w.Header().Set(projectHeader, h.p.ID())
 	requestedProject := r.Header.Get(projectHeader)
 	if requestedProject != "" && requestedProject != h.p.ID() {
 		http.Error(w, "project identity mismatch", http.StatusMisdirectedRequest)
@@ -119,6 +212,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project identity is required", http.StatusBadRequest)
 		return
 	}
+	w.Header().Set(projectHeader, h.p.ID())
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/"), "/")
 	ctx := r.Context()
 	if len(parts) == 1 && parts[0] == "info" && r.Method == http.MethodGet {
@@ -287,7 +381,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !h.decodeEmpty(w, r) {
 			return
 		}
-		err := h.p.Cancel(ctx, parts[1])
+		var err error
+		if actor.ID != "" {
+			err = h.p.CancelAs(ctx, actor, parts[1])
+		} else {
+			err = h.p.Cancel(ctx, parts[1])
+		}
 		if err != nil {
 			h.fail(w, err)
 			return
@@ -304,7 +403,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 1 && parts[0] == "save" && r.Method == http.MethodPost {
-		h.save(w, r)
+		h.save(w, r, actor)
 		return
 	}
 	http.NotFound(w, r)
@@ -332,7 +431,7 @@ func (h *handler) decodeEmpty(w http.ResponseWriter, r *http.Request) bool {
 	var v struct{}
 	return h.decode(w, r, &v)
 }
-func (h *handler) save(w http.ResponseWriter, r *http.Request) {
+func (h *handler) save(w http.ResponseWriter, r *http.Request, actor project.Actor) {
 	mr, err := r.MultipartReader()
 	if err != nil {
 		h.fail(w, project.ErrInvalid)
@@ -400,7 +499,12 @@ func (h *handler) save(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}}
-	c, err := h.p.Save(r.Context(), req, source)
+	var c project.Commit
+	if actor.ID != "" {
+		c, err = h.p.SaveAs(r.Context(), actor, req, source)
+	} else {
+		c, err = h.p.Save(r.Context(), req, source)
+	}
 	if err != nil {
 		h.fail(w, err)
 		return

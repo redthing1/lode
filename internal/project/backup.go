@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -53,16 +54,18 @@ func Backup(ctx context.Context, source, destination string) (retErr error) {
 		return err
 	}
 
-	p, err := Open(ctx, source)
+	// Hold the ownership lock while copying a cold source. Opening it here
+	// would run schema migrations and native-root reconciliation in place.
+	owner, err := os.OpenFile(filepath.Join(source, "lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return fmt.Errorf("open backup source (stop its server first): %w", err)
 	}
-	// Close both writers while keeping the existing ownership lock. Copying a
-	// cold SQLite store plus its native repository needs no second snapshot log.
-	owner := p.owner
-	p.owner = nil
+	if err := syscall.Flock(int(owner.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = owner.Close()
+		return fmt.Errorf("open backup source (stop its server first): project is in use")
+	}
 	defer func() { retErr = errors.Join(retErr, owner.Close()) }()
-	if err := p.Close(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	src, err := os.OpenRoot(source)

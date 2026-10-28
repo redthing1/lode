@@ -1,0 +1,108 @@
+{{define "auth-intro"}}
+<aside class="auth-intro">
+  <span class="eyebrow">Made for the things you make</span>
+  <h2>Big files.<br />Room to work.</h2>
+  <p>
+    A shared home for binary projects, with clear history and only the files you
+    need.
+  </p>
+  <div class="strata" aria-hidden="true">
+    <i></i><i></i><i></i><i></i><i></i>
+  </div>
+  <span class="intro-caption"
+    >A little less overhead.<br />A little more possibility.</span
+  >
+</aside>
+{{end}} {{define "setup"}}{{template "top" .}}
+<div class="auth-shell">
+  {{template "auth-intro"}}
+  <section class="auth-form">
+    <span class="eyebrow">Set up your instance</span>
+    <h1>Make yourself<br />at home.</h1>
+    <p class="lead">Create the administrator account for this Lode instance.</p>
+    <form action="/setup" method="post" class="stack">
+      <label
+        >Setup code<input
+          name="code"
+          required
+          autocomplete="off"
+          spellcheck="false"
+      /></label>
+      <p class="hint">
+        Use the one-time code printed by <code>lode init</code>.
+      </p>
+      <label
+        >Username<input
+          name="username"
+          minlength="3"
+          maxlength="32"
+          pattern="[a-z0-9_-]{3,32}"
+          required
+          autocomplete="username"
+          spellcheck="false"
+          placeholder="Your username" /></label><label
+        >Password<input
+          type="password"
+          name="password"
+          minlength="12"
+          maxlength="1024"
+          required
+          autocomplete="new-password"
+      /></label>
+      <p class="hint">
+        At least 12 characters. A memorable passphrase works well.
+      </p>
+      <button type="submit">Create administrator</button>
+    </form>
+    <p class="fine">You can add security keys and collaborators after setup.</p>
+  </section>
+</div>
+{{template "bottom" .}}{{end}} {{define "login"}}{{template "top" .}}
+<div class="auth-shell">
+  {{template "auth-intro"}}
+  <section class="auth-form">
+    <span class="eyebrow">Your work is here</span>
+    <h1>Welcome back.</h1>
+    <p class="lead">Sign in to your Lode instance.</p>
+    <form action="/login" method="post" class="stack">
+      <label
+        >Username<input
+          name="username"
+          required
+          autocomplete="username"
+          spellcheck="false"
+          maxlength="32" /></label><label
+        >Password<input
+          type="password"
+          name="password"
+          required
+          autocomplete="current-password"
+          maxlength="1024" /></label><button type="submit">Sign in <span aria-hidden="true">→</span></button>
+    </form>
+    <p class="fine">Need an account? Ask your instance administrator.</p>
+  </section>
+</div>
+{{template "bottom" .}}{{end}} {{define "verify"}}{{template "top" .}}
+<section class="card centered">
+  <span class="eyebrow">Two-factor authentication</span>
+  <h1>One more step.</h1>
+  <p class="lead">Use a registered security key to finish signing in.</p>
+  <div class="stack">
+    <button type="button" data-security="login">Use security key</button>
+    <p class="hint" data-security-status role="status" aria-live="polite"></p>
+  </div>
+  <details {{if .Error}}open{{end}}>
+    <summary>Use a recovery code instead</summary>
+    <form action="/verify/recovery" method="post" class="stack">
+      <label
+        >Recovery code<input
+          name="code"
+          required
+          autocomplete="off"
+          spellcheck="false" /></label><button type="submit" class="secondary">Verify recovery code</button>
+      <p class="hint">Each code can be used once.</p>
+    </form>
+  </details>
+  <a class="text-link" href="/login">Start over</a>
+</section>
+{{template "bottom" .}}{{end}}

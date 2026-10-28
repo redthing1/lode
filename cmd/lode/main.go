@@ -14,7 +14,6 @@ import (
 	"github.com/redthing1/lode/internal/content"
 	"github.com/redthing1/lode/internal/model"
 	"github.com/redthing1/lode/internal/project"
-	"github.com/redthing1/lode/internal/remote"
 	"github.com/redthing1/lode/internal/workspace"
 )
 
@@ -76,13 +75,13 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 			fmt.Fprintln(diagnostics, "Set LODE_TOKEN to the project's access token. Repeat -include/-exclude; no rules selects all paths.")
 		}
 		if command == "save" || command == "merge" {
-			fmt.Fprintln(diagnostics, "LODE_AUTHOR supplies the default author.")
+			fmt.Fprintln(diagnostics, "Versions record your authenticated account.")
 		}
 	}
 	var selection model.Selection
 	var choices []model.Choice
 	var emptySelection, force, deleteBranch, deleteTag bool
-	var message, author, listen, base, applyToken string
+	var message, listen, publicURL, base, applyToken string
 	keep := -1
 	limit := 20
 	switch command {
@@ -118,14 +117,14 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		flags.Func("theirs", "choose the source entry/subtree (repeatable)", addChoice(false))
 		if command == "merge" {
 			flags.StringVar(&message, "m", "", "merge message")
-			flags.StringVar(&author, "author", os.Getenv("LODE_AUTHOR"), "author name")
 			flags.StringVar(&base, "base", "", "explicit merge base")
 		}
 	case "save":
 		flags.StringVar(&message, "m", "", "version message")
-		flags.StringVar(&author, "author", os.Getenv("LODE_AUTHOR"), "author name")
 	case "serve":
 		flags.StringVar(&listen, "listen", "127.0.0.1:8473", "loopback listen address")
+	case "init":
+		flags.StringVar(&publicURL, "url", "http://localhost:8473", "canonical public instance URL")
 	case "log":
 		flags.IntVar(&limit, "n", 20, "maximum versions")
 	case "branch":
@@ -137,7 +136,8 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		flags.StringVar(&applyToken, "apply", "", "apply the supplied preview token")
 	case "restore":
 		flags.BoolVar(&force, "force", false, "discard local changes in restored paths")
-	case "init", "status", "resume", "cancel", "collect", "backup", "version":
+	case "status", "resume", "cancel", "collect", "backup", "import", "recover", "version":
+	case "login", "logout":
 	default:
 		return fmt.Errorf("unknown command %q; use lode help", command)
 	}
@@ -148,6 +148,15 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	args = flags.Args()
+	if command == "login" || command == "logout" {
+		if len(args) != 1 {
+			return fmt.Errorf("usage: lode %s URL", command)
+		}
+		if command == "login" {
+			return login(ctx, args[0], os.Stdin, diagnostics)
+		}
+		return logout(args[0], out)
+	}
 	if command == "version" {
 		if len(args) != 0 {
 			return errors.New("usage: lode version")
@@ -157,8 +166,8 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 	}
 	finishActivity := showActivity(diagnostics, command)
 	defer finishActivity()
-	if command == "init" || command == "serve" || command == "backup" {
-		return runServer(ctx, command, args, listen, out, diagnostics)
+	if command == "init" || command == "serve" || command == "backup" || command == "import" || command == "recover" {
+		return runServer(ctx, command, args, listen, publicURL, out, diagnostics)
 	}
 	if emptySelection && len(selection) > 0 {
 		return errors.New("-none cannot be combined with selection rules")
@@ -184,7 +193,14 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		}
 		token := os.Getenv("LODE_TOKEN")
 		if token == "" {
-			return errors.New("set LODE_TOKEN to the project's access token")
+			if saved, ok, e := verifiedCredential(ctx, args[0]); e != nil {
+				return e
+			} else if ok {
+				token = saved.Token
+			}
+		}
+		if token == "" {
+			return errors.New("run lode login URL or set LODE_TOKEN")
 		}
 		var w *workspace.Workspace
 		var err error
@@ -227,6 +243,19 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		return fmt.Errorf("open workspace %q: %w", root, err)
 	}
 	defer w.Close()
+	if command != "status" {
+		token := os.Getenv("LODE_TOKEN")
+		if token == "" {
+			if saved, ok, e := verifiedCredential(ctx, w.State().URL); e != nil {
+				return e
+			} else if ok {
+				token = saved.Token
+			}
+		}
+		if token != "" {
+			w.UseToken(token)
+		}
+	}
 	switch command {
 	case "status":
 		state := w.State()
@@ -257,7 +286,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 			fmt.Fprintln(out, "No selected changes.")
 		}
 	case "save":
-		commit, err := w.Save(ctx, author, message)
+		commit, err := w.Save(ctx, "", message)
 		if err != nil {
 			return err
 		}
@@ -291,7 +320,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		fmt.Fprintln(out, "Operation cancelled.")
 	case "log":
 		state := w.State()
-		client, err := remote.New(state.URL, state.Token, state.Project)
+		client, err := w.RemoteClient()
 		if err != nil {
 			return err
 		}
@@ -308,7 +337,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		}
 	case "branch":
 		state := w.State()
-		client, err := remote.New(state.URL, state.Token, state.Project)
+		client, err := w.RemoteClient()
 		if err != nil {
 			return err
 		}
@@ -356,7 +385,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		fmt.Fprintf(out, "Created branch %s at %s.\n", args[0], tip)
 	case "tag":
 		state := w.State()
-		client, err := remote.New(state.URL, state.Token, state.Project)
+		client, err := w.RemoteClient()
 		if err != nil {
 			return err
 		}
@@ -404,8 +433,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		}
 		fmt.Fprintf(out, "Created tag %s at %s.\n", args[0], id)
 	case "cleanup":
-		state := w.State()
-		client, err := remote.New(state.URL, state.Token, state.Project)
+		client, err := w.RemoteClient()
 		if err != nil {
 			return err
 		}
@@ -444,8 +472,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		}
 		fmt.Fprintf(out, "%d protected, %d eligible for expiry, %d already expired.\nToken: %s\nApply with: lode cleanup -keep %d -apply %s (from this workspace)\n", kept, eligible, expired, token, keep, token)
 	case "collect":
-		state := w.State()
-		client, err := remote.New(state.URL, state.Token, state.Project)
+		client, err := w.RemoteClient()
 		if err != nil {
 			return err
 		}
@@ -464,9 +491,9 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		fmt.Fprintf(out, "Switched to branch %s.\n", args[0])
 	case "merge":
 		if len(args) != 1 {
-			return errors.New("usage: lode merge [-m MESSAGE] [-author NAME] [-base COMMIT] [-ours PATH | -theirs PATH] BRANCH")
+			return errors.New("usage: lode merge [-m MESSAGE] [-base COMMIT] [-ours PATH | -theirs PATH] BRANCH")
 		}
-		commit, err := w.Merge(ctx, args[0], author, message, base, choices)
+		commit, err := w.Merge(ctx, args[0], "", message, base, choices)
 		if errors.Is(err, project.ErrAlreadyMerged) {
 			fmt.Fprintln(out, "Already merged.")
 			return nil

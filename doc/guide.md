@@ -1,6 +1,25 @@
 # User guide
 
-Follow the [quickstart](../README.md#save-your-first-project) to create a workspace. Examples start at its root. Workspace commands also work from subdirectories; use `lode -C DIR` to work from elsewhere. Workspace paths are relative to the root; attach/clone destinations are relative to the current directory.
+Follow the [quickstart](../README.md#start-an-instance) to create a project and connect a workspace. Examples start at its root. Workspace commands also work from subdirectories; use `lode -C DIR` to work from elsewhere. Workspace paths are relative to the root; attach/clone destinations are relative to the current directory.
+
+## Accounts and project access
+
+An instance administrator creates accounts and projects in the web interface. New accounts receive a temporary password and must choose a new password before using projects. Usernames are 3–32 lowercase letters, digits, underscores, or hyphens; passwords must be at least 12 characters. Registration is closed.
+
+Project maintainers can add existing accounts as readers, writers, or maintainers. Readers browse and download. Writers also save versions and manage branches. Maintainers can additionally manage project members and release historical contents. Instance administrators can maintain every project. A personal access token cannot administer the instance and cannot exceed its owner's current project permissions.
+
+Create a token under **Tokens**. Choose one project or all projects you can access, a maximum role, and an expiry of 30, 90, or 365 days. Copy the token when it is created; it is shown only once. Revoke it from the same page when it is no longer needed.
+
+Log in to a project URL to save a project-specific credential:
+
+```sh
+lode login https://lode.example.com/p/example
+lode attach https://lode.example.com/p/example ./work
+```
+
+The prompt hides the token in a terminal. Lode verifies the account and project before saving it in your OS user configuration, with file permissions restricted to your account. Credentials are not stored in workspace state. A project-specific credential takes precedence; a credential saved for the instance origin is used as a fallback for its projects. `LODE_TOKEN` overrides either saved credential for the current command.
+
+`lode logout URL` removes the saved local credential for that URL. It does not revoke the server token; revoke tokens in the web interface. A local operator can reset an account with `lode recover INSTANCE USERNAME` while the server is stopped. The command prints a temporary password, invalidates sessions and tokens, removes security keys and recovery codes, and requires a password change at next sign-in.
 
 ## Save and update
 
@@ -35,7 +54,7 @@ lode -C ../selected select
 lode -C ../selected select -include assets -include references
 ```
 
-Set `LODE_TOKEN` before attaching or cloning. Both commands accept repeatable include/exclude options; the most specific path rule wins. Without rules, they select everything. Exclusions alone select everything except those paths. Use `select -include .` to select the whole project.
+Log in first or set `LODE_TOKEN` before attaching or cloning. Both commands accept repeatable include/exclude options; the most specific path rule wins. Without rules, they select everything. Exclusions alone select everything except those paths. Use `select -include .` to select the whole project.
 
 `select` without options shows the rules. With options, it replaces them at the current base. Clean files leaving the selection are removed locally; modified, deleted, or untracked selected entries must be resolved first. Unselected local contents and directories needed to contain them remain.
 

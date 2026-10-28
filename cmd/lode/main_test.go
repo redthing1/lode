@@ -5,12 +5,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/redthing1/lode/internal/instance"
 	"github.com/redthing1/lode/internal/model"
 	"github.com/redthing1/lode/internal/project"
 	"github.com/redthing1/lode/internal/remote"
@@ -89,7 +93,7 @@ func TestCommandHelpExplainsArgumentsWithoutOpeningAWorkspace(t *testing.T) {
 		{[]string{"help", "clone"}, []string{"URL DIR", "-include", "LODE_TOKEN"}},
 		{[]string{"help", "restore"}, []string{"COMMIT [PATH...]", "-force", "local changes"}},
 		{[]string{"cleanup", "-h"}, []string{"-keep N", "-apply TOKEN", "Tips and tags"}},
-		{[]string{"help", "merge"}, []string{"BRANCH", "-ours", "-theirs", "update afterwards", "LODE_AUTHOR"}},
+		{[]string{"help", "merge"}, []string{"BRANCH", "-ours", "-theirs", "update afterwards", "authenticated account"}},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			var out, diagnostics bytes.Buffer
@@ -112,7 +116,7 @@ func TestCommandHelpExplainsArgumentsWithoutOpeningAWorkspace(t *testing.T) {
 
 func TestBackupCLIIsAvailableOutsideAWorkspace(t *testing.T) {
 	ctx := context.Background()
-	// The -C directory need not exist: backup is a project-level operation.
+	// The -C directory need not exist: backup is an instance-level operation.
 	dir := filepath.Join(t.TempDir(), "not-a-workspace")
 	var out, diagnostics bytes.Buffer
 	destination := filepath.Join(t.TempDir(), "backup")
@@ -121,14 +125,70 @@ func TestBackupCLIIsAvailableOutsideAWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	data := []byte("instance backup project bytes")
+	sum := sha256.Sum256(data)
+	commit, err := p.Save(ctx, project.Request{ID: project.NewID(), Branch: "main", Author: "test", Message: "backup fixture", Changes: []model.Entry{{Path: "assets.bin", Kind: model.File, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:])}}}, project.Source{Write: func(_ model.Entry, _ project.Basis, out io.Writer) error {
+		_, err := io.Copy(out, bytes.NewReader(data))
+		return err
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := p.ID()
 	if err := p.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(ctx, []string{"-C", dir, "backup", source, destination}, &out, &diagnostics); err != nil {
+	instanceDir := filepath.Join(t.TempDir(), "instance")
+	if err := run(ctx, []string{"init", "-url", "https://example.test", instanceDir}, &out, &diagnostics); err != nil {
+		t.Fatalf("init instance: %v (%s)", err, diagnostics.String())
+	}
+	if err := run(ctx, []string{"import", instanceDir, "art", source}, &out, &diagnostics); err != nil {
+		t.Fatalf("import legacy project: %v (%s)", err, diagnostics.String())
+	}
+	inst, err := instance.Open(ctx, instanceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, release, err := inst.Acquire(ctx, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before []byte
+	if err := imported.Read(ctx, commit.ID, "assets.bin", func(_ model.Entry, r io.Reader) error { var e error; before, e = io.ReadAll(r); return e }); err != nil {
+		release()
+		inst.Close()
+		t.Fatal(err)
+	}
+	release()
+	if err := inst.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(ctx, []string{"-C", dir, "backup", instanceDir, destination}, &out, &diagnostics); err != nil {
 		t.Fatalf("backup CLI: %v (diagnostics %s)", err, diagnostics.String())
 	}
 	if !strings.Contains(out.String(), "Backup created:") {
 		t.Fatalf("backup output = %q", out.String())
+	}
+	backup, err := instance.Open(ctx, destination)
+	if err != nil {
+		t.Fatalf("open backup instance: %v", err)
+	}
+	backupProject, release, err := backup.Acquire(ctx, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after []byte
+	if err := backupProject.Read(ctx, commit.ID, "assets.bin", func(_ model.Entry, r io.Reader) error { var e error; after, e = io.ReadAll(r); return e }); err != nil {
+		release()
+		backup.Close()
+		t.Fatal(err)
+	}
+	release()
+	if err := backup.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, data) || !bytes.Equal(after, data) {
+		t.Fatalf("backup content before=%q after=%q", before, after)
 	}
 }
 

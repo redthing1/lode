@@ -401,3 +401,70 @@ func TestBranchMetadataCRUD(t *testing.T) {
 		t.Fatalf("delete main: %v", err)
 	}
 }
+
+func TestActorOwnsAcceptedRetryAndAuthenticatedAuthorSnapshot(t *testing.T) {
+	tp := newTestProject(t)
+	r := request(fileEntry("actor.bin", []byte("data")))
+	r.Author = "spoofed"
+	a := Actor{ID: "user-opaque-1", Name: "old-name"}
+	c, err := tp.p.SaveAs(tp.ctx, a, r, sourceFor(map[string][]byte{"actor.bin": []byte("data")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ActorID != a.ID || c.Author != a.Name {
+		t.Fatalf("commit attribution = %#v", c)
+	}
+	if _, err = tp.p.SaveAs(tp.ctx, Actor{ID: "user-opaque-1", Name: "renamed"}, r, Source{}); err != nil {
+		t.Fatalf("same actor retry after rename: %v", err)
+	}
+	if _, err = tp.p.SaveAs(tp.ctx, Actor{ID: "user-opaque-2", Name: "old-name"}, r, Source{}); !errors.Is(err, ErrOperationOwner) {
+		t.Fatalf("cross-actor replay error = %v", err)
+	}
+}
+
+func TestActorOwnsCancellationTombstoneAndPendingOperation(t *testing.T) {
+	tp := newTestProject(t)
+	id := NewID()
+	a := Actor{ID: "user-a", Name: "A"}
+	b := Actor{ID: "user-b", Name: "B"}
+	if err := tp.p.CancelAs(tp.ctx, a, id); err != nil {
+		t.Fatal(err)
+	}
+	r := request(fileEntry("late.bin", []byte("late")))
+	r.ID = id
+	if _, err := tp.p.SaveAs(tp.ctx, b, r, sourceFor(map[string][]byte{"late.bin": []byte("late")})); !errors.Is(err, ErrOperationOwner) {
+		t.Fatalf("foreign delayed save = %v", err)
+	}
+	if _, err := tp.p.SaveAs(tp.ctx, a, r, sourceFor(map[string][]byte{"late.bin": []byte("late")})); !errors.Is(err, ErrCancelled) {
+		t.Fatalf("owner delayed save = %v", err)
+	}
+
+	pending := request(fileEntry("pending.bin", []byte("data")))
+	_, _ = tp.p.SaveAs(tp.ctx, a, pending, Source{Write: func(model.Entry, Basis, io.Writer) error { return errors.New("stop") }})
+	if err := tp.p.CancelAs(tp.ctx, b, pending.ID); !errors.Is(err, ErrOperationOwner) {
+		t.Fatalf("foreign pending cancel = %v", err)
+	}
+}
+
+func TestVersionTwoDatabaseMigratesLegacyActorlessRows(t *testing.T) {
+	tp := newTestProject(t)
+	id := NewID()
+	if _, err := tp.p.db.ExecContext(tp.ctx, `INSERT INTO operations(id,fingerprint,outcome,actor_id) VALUES(?,?,?,'')`, id, "legacy-fingerprint", "cancelled"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tp.p.db.ExecContext(tp.ctx, `ALTER TABLE commits DROP COLUMN actor_id; ALTER TABLE operations DROP COLUMN actor_id; PRAGMA user_version=2;`); err != nil {
+		t.Fatal(err)
+	}
+	tp.reopen()
+	var version int
+	if err := tp.p.db.QueryRowContext(tp.ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 3 {
+		t.Fatalf("migrated version=%d err=%v", version, err)
+	}
+	var fingerprint, outcome, actor string
+	if err := tp.p.db.QueryRowContext(tp.ctx, "SELECT fingerprint,outcome,actor_id FROM operations WHERE id=?", id).Scan(&fingerprint, &outcome, &actor); err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint != "legacy-fingerprint" || outcome != "cancelled" || actor != "" {
+		t.Fatalf("legacy row = %q,%q,%q", fingerprint, outcome, actor)
+	}
+}

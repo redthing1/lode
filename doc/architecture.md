@@ -1,18 +1,32 @@
 # Architecture
 
-Lode is one Go module and executable. The project service owns shared history and retention. A workspace owns selected local files, its baseline, and unfinished work. SQLite stores application facts; Kopia represents and collects content; librsync transforms transfer bytes.
+Lode is one Go module and executable. An instance owns accounts, permissions, sessions, tokens, and its project registry. Each project service owns shared history and retention. A workspace owns selected local files, its baseline, and unfinished work. The embedded web interface serves account, project, and history pages. SQLite stores application facts; Kopia represents and collects content; librsync transforms transfer bytes.
 
 | Package | Responsibility |
 | --- | --- |
 | `model` | Pure path, selection, entry, comparison, and whole-entry merge rules |
 | `project` | Publication, SQLite history, references, and retention authority |
 | `content` | Kopia objects, protected snapshot roots, retrieval, release, and collection |
+| `instance` | Accounts, authentication, permissions, personal tokens, and hosted-project lifecycle |
 | `transfer` | Bounded streaming signature, delta, and patch calls to librsync |
 | `remote` | Authenticated HTTP operations and streamed file transfers |
+| `web` | Embedded same-origin account, project, and history interface |
 | `workspace` | Local observation, selected transitions, baseline, and recovery |
 | `cmd/lode` | CLI presentation and server lifecycle |
 
 Server commands, HTTP handlers, SQLite, and Kopia implementations are built only on Linux. Non-Linux client builds include shared project types and HTTP client code without SQLite or Kopia. Workspace filesystem operations and terminal detection live in platform-specific files; the transition algorithm is shared. Platform implementations must preserve locking, no-follow access, exclusive rename, and synchronization ordering. The transfer codec requires native librsync and cgo.
+
+## Hosted instances
+
+An instance has one canonical HTTP(S) origin, a private directory, an ownership lock, and one SQLite database. HTTP is allowed only for loopback development origins; remote access uses HTTPS through a reverse proxy while the server listens on loopback. The proxy preserves the configured `Host` and path. The web interface uses same-origin browser sessions. The CLI project API uses personal bearer tokens and checks current account, project, role, token scope, and expiry for each operation.
+
+The first account is an administrator created with a one-time setup code. Registration is closed. Administrators create accounts and projects; project maintainers assign readers, writers, and maintainers. Readers browse and download, writers also save and manage branches, and maintainers can change project membership and retention. Instance administrator authority does not pass through personal tokens.
+
+Passwords and optional WebAuthn security keys protect browser sign-in. Recovery codes are single-use. Password and security changes invalidate existing sessions; account recovery is a local operator command while the server is stopped. Personal tokens are stored as hashes, can be scoped to one or all accessible projects, and are capped by the owner's current permissions.
+
+The instance database stores accounts, memberships, sessions, credentials, tokens, and project metadata. Each project's existing database and content repository remain the authority for its history and payloads. Instance backups include the registry and all registered project stores, hold the ownership lock, and publish a verified cold copy atomically. A legacy single-project store can be imported while both servers are stopped; import preserves the project ID and history but does not carry its old shared token into the instance.
+
+Native project stores are opened on demand and bounded to eight open projects per instance. Browser history and directory views are paginated; a directory response contains at most 100 entries and a history response at most 50 versions. Expired project contents remain visible as metadata while downloads return unavailable.
 
 ## Versions and presence
 
@@ -64,10 +78,10 @@ Kopia's ordinary full maintenance owns reachability, rewriting, deletion, and ma
 
 A project ownership lock excludes a second service. SQLite transactions and synchronized workspace state files record application decisions. Kopia synchronizes blob contents; the filesystem adapter also synchronizes affected directory chains. These contracts require local filesystems that honor synchronization.
 
-HTTP requires a bearer token and expected project identity. Counted newline-delimited metadata records let clients detect truncated lists while bounding each record. Cleanup exposes its apply token only after complete validation. Selected inventories become workspace baseline metadata; native indexes stay on the server.
+The project HTTP API requires a bearer token and expected project identity. The browser interface uses its separate session authentication. Counted newline-delimited metadata records let clients detect truncated lists while bounding each record. Cleanup exposes its apply token only after complete validation. Selected inventories become workspace baseline metadata; native indexes stay on the server.
 
 Upload signatures are fetched for exact retained base paths before publication and spooled to a bounded anonymous file. Under the publication gate, librsync reconstructs into the same size/hash-verified capture path as full uploads. Downloads optionally use a local basis and reconstruct into the transition's existing staging file, then verify before installation. Retries regenerate signatures; neither direction adds durable transfer state.
 
-Backup holds the project ownership lock, closes database/content writers, copies identity/SQLite/native files while preserving maintenance timestamps, and excludes derived configuration/caches. It reopens the copy to check SQLite and retained roots before a synchronized no-replace rename publishes the destination. Restore uses the same copy operation.
+Backup holds the stopped project's ownership lock, copies identity/SQLite/native files while preserving maintenance timestamps, and excludes derived configuration/caches. It opens and upgrades only the copy, checking SQLite and retained roots before a synchronized no-replace rename publishes the destination. Restore uses the same copy operation.
 
 See the [user guide](guide.md) for command behavior and [operations](operations.md) for deployment and resource limits.

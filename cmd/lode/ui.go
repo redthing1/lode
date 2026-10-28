@@ -17,12 +17,16 @@ import (
 type commandDescription struct{ usage, description string }
 
 var commandHelp = []commandDescription{
-	{"init DIR", "Create a server project and print its access token."},
+	{"login URL", "Verify an access token and save it for the instance or project URL."},
+	{"logout URL", "Remove the saved credential for the instance or project URL."},
+	{"init [-url URL] DIR", "Create an instance and print its one-time setup code."},
+	{"import INSTANCE NAME LEGACY_STORE", "Import a legacy single-project store into an instance."},
+	{"recover INSTANCE USERNAME", "Reset an account credential through the local operator interface."},
 	{"serve [-listen HOST:PORT] DIR", "Serve a project on loopback; use a TLS proxy for remote access."},
 	{"attach [options] URL [DIR]", "Track an existing folder in an empty project; DIR defaults to the current directory or -C DIR."},
 	{"clone [options] URL DIR", "Download selected paths into a new workspace directory."},
 	{"status", "Show the workspace branch, base, selection and local changes."},
-	{"save -m MESSAGE [-author NAME]", "Save selected changes while preserving unloaded paths."},
+	{"save -m MESSAGE", "Save selected changes while preserving unloaded paths."},
 	{"update [options]", "Update to the branch tip while preserving independent local edits."},
 	{"select [options]", "Show selection, replace it with include/exclude rules, or unload with -none."},
 	{"log [-n COUNT]", "List saved versions along the workspace branch's first-parent history."},
@@ -33,7 +37,7 @@ var commandHelp = []commandDescription{
 	{"tag [-delete] [NAME [COMMIT]]", "List retention tags, protect COMMIT or the workspace base, or delete NAME."},
 	{"cleanup -keep N [-apply TOKEN]", "Preview expiry, or apply its token and collect. Tips and tags always stay protected."},
 	{"collect", "Request native storage collection without changing retention."},
-	{"backup SOURCE DEST", "Copy a stopped project into a new directory; use the same command to restore."},
+	{"backup SOURCE DEST", "Copy a stopped instance and its projects into a new directory; use the same command to restore."},
 	{"resume", "Finish an interrupted save or local transition."},
 	{"cancel", "Cancel an unaccepted save or roll back an unfinished local transition."},
 	{"version", "Print the installed version."},
@@ -54,7 +58,7 @@ func printHelp(out io.Writer) {
 	for _, info := range commandHelp {
 		fmt.Fprintf(out, "  %-39s %s\n", info.usage, info.description)
 	}
-	fmt.Fprintln(out, "\nRun workspace commands from any directory inside a workspace, or use -C DIR.\nWorkspace paths are relative to the root; attach/clone destinations use the current directory. Options precede positional arguments.\nUse lode help COMMAND for options, or lode --version for the installed version.\nSet LODE_TOKEN for attach/clone and LODE_AUTHOR for the default author.")
+	fmt.Fprintln(out, "\nRun workspace commands from any directory inside a workspace, or use -C DIR.\nWorkspace paths are relative to the root; attach/clone destinations use the current directory. Options precede positional arguments.\nUse lode help COMMAND for options, or lode --version for the installed version.\nUse lode login URL to save credentials; LODE_TOKEN overrides saved credentials.")
 }
 
 func printVersion(out io.Writer) {

@@ -37,6 +37,7 @@ func Clone(ctx context.Context, url, token, directory string, selection model.Se
 		return nil, err
 	}
 	w.state = target
+	w.token = token
 	w.state.Selection = model.Selection{}
 	w.state.Baseline = nil
 	if err := w.store("state.json", w.state); err != nil {
