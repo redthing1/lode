@@ -46,7 +46,7 @@ func Clone(ctx context.Context, url, token, directory string, selection model.Se
 	}
 	if err := w.transitionTo(ctx, target, nil); err != nil {
 		w.Close()
-		return nil, fmt.Errorf("checkout incomplete; use resume or cancel in %s: %w", directory, err)
+		return nil, fmt.Errorf("checkout incomplete in %s: %w", directory, err)
 	}
 	return w, nil
 }

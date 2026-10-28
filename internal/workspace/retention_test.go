@@ -98,7 +98,7 @@ func TestRestoreSourceExpiryBetweenReadsCanBeCancelled(t *testing.T) {
 	}
 	defer closeWorkspace(t, w)
 	expire.Store(true)
-	if err := w.Restore(context.Background(), historical, nil, false); !errors.Is(err, project.ErrExpired) {
+	if err := w.Restore(context.Background(), historical, nil, false); !errors.Is(err, project.ErrExpired) || !errors.Is(err, ErrPending) {
 		t.Fatalf("restore after source expiry = %v", err)
 	}
 	if string(read(t, localDir, "a")) != "old a" || w.State().Base != current {

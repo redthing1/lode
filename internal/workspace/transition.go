@@ -47,7 +47,12 @@ func recoveryName(i int, suffix string) string {
 	return fmt.Sprintf(".lode/transition/%d.%s", i, suffix)
 }
 
-func (w *Workspace) runTransition(ctx context.Context, p *transition) error {
+func (w *Workspace) runTransition(ctx context.Context, p *transition) (err error) {
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, w.pending())
+		}
+	}()
 	if err := p.Target.validate(); err != nil {
 		return err
 	}
