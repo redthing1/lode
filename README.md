@@ -11,17 +11,18 @@ Use Go 1.27.2 or later, Git, a C compiler, and the development headers/library f
 Install or update from Git using your configured Git credentials:
 
 ```sh
-GOPRIVATE=github.com/redthing1/lode go install github.com/redthing1/lode/cmd/lode@main
+GOBIN="$HOME/.local/bin" GOPRIVATE=github.com/redthing1/lode \
+  go install github.com/redthing1/lode/cmd/lode@main
 ```
 
-Go installs to `GOBIN`, or `$(go env GOPATH)/bin` when unset. Add that directory to your shell's `PATH` once. For the default location:
+Add `$HOME/.local/bin` to `PATH` in your shell configuration once:
 
 ```sh
-export PATH="$(go env GOPATH)/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
 lode --version
 ```
 
-From an existing source checkout, `make install` installs the local version using the same Go settings. For containerized hosting, follow [Podman Compose setup](doc/operations.md#run-with-podman-compose).
+From a source checkout, `GOBIN="$HOME/.local/bin" make install` installs the local version there. For containerized hosting, follow [Podman Compose setup](doc/operations.md#run-with-podman-compose).
 
 ## Save your first project
 
