@@ -57,7 +57,7 @@ Use one choice for each conflicting path; options are repeatable. `-ours` keeps 
 Selection controls local presence. Unloaded paths remain part of the shared project and survive partial saves.
 
 ```sh
-lode clone -include assets -exclude assets/cache https://lode.example.com ../selected
+lode clone -include assets -exclude assets/cache https://lode.example.com/alice/example ../selected
 lode -C ../selected select
 lode -C ../selected select -include assets -include references
 ```

@@ -72,7 +72,7 @@ func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
 		flags.PrintDefaults()
 		fmt.Fprintln(diagnostics, "\nOptions precede positional arguments. Use -C before the command to choose a workspace.")
 		if command == "attach" || command == "clone" {
-			fmt.Fprintln(diagnostics, "Set LODE_TOKEN to the project's access token. Repeat -include/-exclude; no rules selects all paths.")
+			fmt.Fprintln(diagnostics, "Run lode login URL or set LODE_TOKEN. Repeat -include/-exclude; no rules selects all paths.")
 		}
 		if command == "save" || command == "merge" {
 			fmt.Fprintln(diagnostics, "Versions record your authenticated account.")
