@@ -5,6 +5,7 @@ package instance
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/redthing1/lode/internal/project"
 )
@@ -36,42 +38,35 @@ func Backup(ctx context.Context, source, destination string) (retErr error) {
 		return err
 	}
 
-	instance, err := Open(ctx, source)
+	// Lock the cold source without opening it: Open applies schema migrations,
+	// which must only happen in the staged copy during backup.
+	owner, err := os.OpenFile(filepath.Join(source, "lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return fmt.Errorf("open backup source (stop its server first): %w", err)
 	}
-	closed := false
-	defer func() {
-		if !closed {
-			retErr = errors.Join(retErr, instance.Close())
-		}
-	}()
-	projectIDs, err := registeredProjectIDs(ctx, instance.db)
-	if err != nil {
-		return err
+	if err := syscall.Flock(int(owner.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = owner.Close()
+		return errors.New("open backup source (stop its server first): instance is in use")
 	}
-	if err := rejectUnregisteredProjectData(source, projectIDs); err != nil {
-		return err
-	}
-	userIDs, err := accountIDs(ctx, instance.db)
-	if err != nil {
-		return err
-	}
-	var busy, frames, checkpointed int
-	if err := instance.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &frames, &checkpointed); err != nil {
-		return fmt.Errorf("checkpoint instance database: %w", err)
-	}
-	if busy != 0 || frames != checkpointed {
-		return fmt.Errorf("checkpoint instance database is busy (frames=%d checkpointed=%d)", frames, checkpointed)
-	}
-	owner := instance.owner
-	instance.owner = nil
-	if err := instance.Close(); err != nil {
-		closed = true
-		return fmt.Errorf("close cold backup source: %w", errors.Join(err, owner.Close()))
-	}
-	closed = true
 	defer func() { retErr = errors.Join(retErr, owner.Close()) }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	projectsInfo, err := os.Lstat(filepath.Join(source, "projects"))
+	if err != nil {
+		return err
+	}
+	if !projectsInfo.IsDir() || projectsInfo.Mode()&os.ModeSymlink != 0 {
+		return errors.New("invalid instance projects directory")
+	}
+	configData, err := readRegularFile(filepath.Join(source, "instance.json"))
+	if err != nil {
+		return err
+	}
+	var sourceConfig Config
+	if err := json.Unmarshal(configData, &sourceConfig); err != nil {
+		return err
+	}
 
 	stage, err := os.MkdirTemp(parent, "."+name+".partial-")
 	if err != nil {
@@ -94,6 +89,50 @@ func Backup(ctx context.Context, source, destination string) (retErr error) {
 		if err := copyRegularFile(ctx, filepath.Join(source, name), filepath.Join(stage, name)); err != nil {
 			return err
 		}
+	}
+	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+		sourceSidecar := filepath.Join(source, "instance.sqlite"+suffix)
+		if _, err := os.Lstat(sourceSidecar); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := copyRegularFile(ctx, sourceSidecar, filepath.Join(stage, "instance.sqlite"+suffix)); err != nil {
+			return err
+		}
+	}
+	// Migrate only the staged database, then use its registry to select project
+	// stores. The source database and any security keys remain byte-for-byte
+	// untouched, including legacy schema versions.
+	stagedStore, err := openStore(filepath.Join(stage, "instance.sqlite"), false)
+	if err != nil {
+		return fmt.Errorf("open staged instance database: %w", err)
+	}
+	projectIDs, err := registeredProjectIDs(ctx, stagedStore.db)
+	var userIDs []string
+	if err == nil {
+		userIDs, err = accountIDs(ctx, stagedStore.db)
+	}
+	if err == nil {
+		var busy, frames, checkpointed int
+		err = stagedStore.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &frames, &checkpointed)
+		if err == nil && (busy != 0 || frames != checkpointed) {
+			err = fmt.Errorf("checkpoint staged instance database is busy (frames=%d checkpointed=%d)", frames, checkpointed)
+		}
+	}
+	if closeErr := stagedStore.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("inspect staged instance database: %w", err)
+	}
+	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+		if err := os.Remove(filepath.Join(stage, "instance.sqlite"+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if err := rejectUnregisteredProjectData(source, projectIDs); err != nil {
+		return err
 	}
 	for _, id := range projectIDs {
 		if err := ctx.Err(); err != nil {
@@ -122,7 +161,7 @@ func Backup(ctx context.Context, source, destination string) (retErr error) {
 	if checkErr == nil && integrity != "ok" {
 		checkErr = fmt.Errorf("backup instance database check: %s", integrity)
 	}
-	if checkErr == nil && verified.Config != instance.Config {
+	if checkErr == nil && verified.Config != sourceConfig {
 		checkErr = errors.New("instance backup configuration mismatch")
 	}
 	if checkErr == nil {

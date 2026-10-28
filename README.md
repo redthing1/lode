@@ -37,7 +37,7 @@ Open the setup URL and enter the code printed by `init`. Choose an administrator
 
 ## Connect a workspace
 
-Create a project named `example` in the web interface, then create an access token under **Tokens**. From the CLI, log in to the project URL and connect a folder:
+Create a project named `example` in the web interface, then open **Access tokens** from the account menu to create a token. From the CLI, log in to the project URL and connect a folder:
 
 ```sh
 lode login http://localhost:8473/p/example

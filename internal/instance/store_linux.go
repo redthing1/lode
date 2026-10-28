@@ -97,7 +97,7 @@ CREATE TABLE personal_tokens (
 CREATE INDEX personal_tokens_owner ON personal_tokens(user_id,created_at);
 CREATE TABLE security_keys(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, credential BLOB NOT NULL, created INTEGER NOT NULL);
 CREATE INDEX security_keys_owner ON security_keys(user_id);
-CREATE TABLE ceremonies(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), binding TEXT NOT NULL, purpose TEXT NOT NULL, data BLOB NOT NULL, expires INTEGER NOT NULL, auth_version INTEGER NOT NULL);
+CREATE TABLE ceremonies(id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), binding TEXT NOT NULL, purpose TEXT NOT NULL, data BLOB NOT NULL, expires INTEGER NOT NULL, auth_version INTEGER NOT NULL);
 CREATE TABLE recovery_codes(user_id TEXT NOT NULL REFERENCES users(id), hash BLOB NOT NULL, PRIMARY KEY(user_id,hash));
 CREATE TABLE sessions(token TEXT PRIMARY KEY,data BLOB NOT NULL,expiry INTEGER NOT NULL);
 `
@@ -107,7 +107,7 @@ CREATE TABLE sessions(token TEXT PRIMARY KEY,data BLOB NOT NULL,expiry INTEGER N
 			_, txErr = tx.Exec(schema)
 		}
 		if txErr == nil {
-			_, txErr = tx.Exec("PRAGMA user_version=1")
+			_, txErr = tx.Exec("PRAGMA user_version=2")
 		}
 		if txErr == nil {
 			txErr = tx.Commit()
@@ -119,21 +119,24 @@ CREATE TABLE sessions(token TEXT PRIMARY KEY,data BLOB NOT NULL,expiry INTEGER N
 			return nil, fmt.Errorf("initialize instance store: %w", txErr)
 		}
 	}
-	if err := validateStore(context.Background(), db); err != nil {
+	if err := migrateStore(context.Background(), db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return &Store{db: db}, nil
 }
 
-func validateStore(ctx context.Context, db *sql.DB) error {
+// migrateStore upgrades the original account-keyed ceremony table for anonymous
+// discoverable passkey challenges. Pending ceremonies are deliberately invalidated.
+func migrateStore(ctx context.Context, db *sql.DB) error {
 	var version int
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version != 1 {
-		return fmt.Errorf("unsupported instance database version %d (want 1)", version)
+	if version != 1 && version != 2 {
+		return fmt.Errorf("unsupported instance database version %d (want 1 or 2)", version)
 	}
+	// Both versions require the same durable tables. Never repair missing data.
 	for _, table := range []string{"instance_settings", "users", "memberships", "projects", "personal_tokens", "security_keys", "ceremonies", "recovery_codes", "sessions"} {
 		var exists int
 		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name=?", table).Scan(&exists); err != nil {
@@ -143,7 +146,34 @@ func validateStore(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("instance database is missing required table %s", table)
 		}
 	}
-	return nil
+	if version == 2 {
+		return nil
+	}
+	return tx(ctx, db, func(t *sql.Tx) error {
+		if _, err := t.ExecContext(ctx, `CREATE TABLE ceremonies_v2(id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), binding TEXT NOT NULL, purpose TEXT NOT NULL, data BLOB NOT NULL, expires INTEGER NOT NULL, auth_version INTEGER NOT NULL)`); err != nil {
+			return err
+		}
+		if _, err := t.ExecContext(ctx, "DROP TABLE ceremonies"); err != nil {
+			return err
+		}
+		if _, err := t.ExecContext(ctx, "ALTER TABLE ceremonies_v2 RENAME TO ceremonies"); err != nil {
+			return err
+		}
+		_, err := t.ExecContext(ctx, "PRAGMA user_version=2")
+		return err
+	})
+}
+
+func tx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
+	t, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err := fn(t); err != nil {
+		_ = t.Rollback()
+		return err
+	}
+	return t.Commit()
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -151,13 +181,5 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) DB() *sql.DB { return s.db }
 
 func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	return tx.Commit()
+	return tx(ctx, s.db, fn)
 }

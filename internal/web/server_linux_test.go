@@ -125,7 +125,7 @@ func testServer(t *testing.T) (*instance.Instance, string, string) {
 	return inst, origin, setupCode
 }
 
-var oneTimeValue = regexp.MustCompile(`<code data-copy-value>([^<]+)</code>`)
+var oneTimeValue = regexp.MustCompile(`<code\s+data-copy-value\s*>([^<]+)</code\s*>`)
 var renderedAnchor = regexp.MustCompile(`(?s)<a\b[^>]*href="([^"]+)"[^>]*>(.*?)</a\s*>`)
 var htmlTag = regexp.MustCompile(`<[^>]*>`)
 var selectedWorkBranch = regexp.MustCompile(`<option\b[^>]*value="work"[^>]*selected`)
@@ -357,12 +357,12 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 	if !selectedWorkBranch.MatchString(leafPage.body) {
 		t.Fatalf("nested navigation lost branch context: %s", leafPage.body)
 	}
-	leafDownload := member.get(anchorWithText(t, leafPage.body, "Download ↓"))
+	leafDownload := member.get(anchorWithText(t, leafPage.body, "Download"))
 	wantStatus(t, leafDownload, http.StatusOK)
 	if !bytes.Equal([]byte(leafDownload.body), deepTwo) {
 		t.Fatalf("deeply nested file download %q, want opaque bytes %q", leafDownload.body, deepTwo)
 	}
-	parentHref := anchorWithText(t, leafPage.body, "← Parent directory")
+	parentHref := anchorWithText(t, leafPage.body, "..")
 	parentPage := member.get(parentHref)
 	wantStatus(t, parentPage, http.StatusOK)
 	if !selectedWorkBranch.MatchString(parentPage.body) || !strings.Contains(parentPage.body, "deeper name") {
@@ -371,7 +371,7 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 	assetHref := anchorWithText(t, branchFiles.body, "assets folder")
 	assetPage := member.get(assetHref)
 	wantStatus(t, assetPage, http.StatusOK)
-	downloadHref := anchorWithText(t, assetPage.body, "Download ↓")
+	downloadHref := anchorWithText(t, assetPage.body, "Download")
 	download := member.get(downloadHref)
 	wantStatus(t, download, http.StatusOK)
 	if !bytes.Equal([]byte(download.body), deepOne) {

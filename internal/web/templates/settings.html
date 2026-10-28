@@ -1,78 +1,32 @@
-{{define "security"}}{{template "top" .}}
-<div class="page-heading">
-  <div>
-    <span class="eyebrow">Your account</span>
-    <h1>Account security</h1>
-    <p class="lead">A strong password. A second factor. A way back in.</p>
-  </div>
-</div>
+{{define "security"}}{{template "top" .}}{{template "settings-top" .}}
+<div class="page-heading"><h1>Account security</h1></div>
 {{if .User.ForcePasswordChange}}
 <div class="notice" role="status">
-  Choose a new password before using projects or creating access tokens.
+  Change your temporary password to continue.
 </div>
-{{end}}{{with .Data}}{{if .Welcome}}
+{{end}} {{with .Data}}{{if .Welcome}}
 <div class="notice" role="status">
-  Your instance is ready. Add a security key, then create your first project.
+  Administrator created. <a href="/projects/new">Create a project</a>.
 </div>
 {{end}}{{if .Recovered}}
 <div class="notice" role="status">
-  You're signed in with a recovery code. Replace any lost keys and save a fresh
-  set of recovery codes.
+  Recovery code accepted. Replace lost keys and generate new recovery codes.
 </div>
 {{end}}{{if .Changed}}
 <div class="notice" role="status">
-  Password updated. Other browser sessions have been signed out.
+  Password updated. Other sessions were signed out.
 </div>
-{{end}}{{if .Codes}}
-<section class="card recovery">
-  <h2>Save your recovery codes</h2>
-  <p>
-    Keep these somewhere private. Each code can be used once after entering your
-    password. They are shown only now.
-  </p>
+{{end}} {{if .Codes}}
+<section class="notice">
+  <h2>Recovery codes</h2>
+  <p>Save these now. Each code works once, after your password.</p>
   <pre><code>{{range .Codes}}{{.}}
 {{end}}</code></pre>
 </section>
 {{end}}{{end}}
-<div class="two-columns">
-  <section class="card">
-    <span class="eyebrow">Sign-in password</span>
-    <h2>Change password</h2>
-    <form action="/settings/password" method="post" class="stack">
-      <label
-        >Current password<input
-          type="password"
-          name="current"
-          required
-          autocomplete="current-password" /></label><label
-        >New password<input
-          type="password"
-          name="password"
-          required
-          minlength="12"
-          maxlength="1024"
-          autocomplete="new-password" /></label><label
-        >Confirm new password<input
-          type="password"
-          name="confirm"
-          required
-          minlength="12"
-          maxlength="1024"
-          autocomplete="new-password"
-      /></label>
-      <p class="hint">
-        At least 12 characters. Other browser sessions will be signed out.
-      </p>
-      <button type="submit">Update password</button>
-    </form>
-  </section>
-  <section class="card">
-    <span class="eyebrow">Two-factor authentication</span>
-    <h2>Security keys</h2>
-    <p>
-      After your password, verify with a FIDO2 security key or an authenticator
-      supported by your browser.
-    </p>
+<section class="panel">
+  <h2 class="panel-title">Passkeys and security keys</h2>
+  <div class="panel-body">
     {{with .Data}}{{range .Keys}}
     <div class="key-row">
       <div>
@@ -88,73 +42,100 @@
       </form>
     </div>
     {{else}}
-    <p class="muted inset">
-      No security keys yet. Your account currently uses a password only.
-    </p>
-    {{end}}{{end}}{{if not .User.ForcePasswordChange}}
-    <div class="stack">
+    <p class="muted">No keys registered.</p>
+    {{end}}{{end}} {{if not .User.ForcePasswordChange}}
+    <div class="form-row key-form">
       <label
-        >Name for this key<input
+        >Name<input
           id="key-name"
           maxlength="80"
-          placeholder="Everyday key"
-          autocomplete="off" /></label><button type="button" data-security="register" class="secondary">
-        Add security key
+          placeholder="Laptop or security key"
+          autocomplete="off" /></label
+      ><label
+        >Sign-in mode<select id="key-mode">
+          <option value="passkey">Without a username</option>
+          <option value="key">Enter a username</option>
+        </select></label
+      ><button type="button" data-security="register" class="secondary">
+        Add key
       </button>
-      <p class="hint" data-security-status role="status" aria-live="polite"></p>
     </div>
-    <div data-recovery-panel hidden>
-      <h3>Save these recovery codes</h3>
-      <p>They are shown only once. Keep them somewhere private.</p>
+    <p class="hint">
+      Username-free sign-in stores a passkey on your authenticator. Both modes
+      use its PIN or biometric verification.
+    </p>
+    <p class="hint" data-security-status role="status" aria-live="polite"></p>
+    <div data-recovery-panel hidden class="notice">
+      <h3>Save your recovery codes</h3>
+      <p>Shown once. Each code works once, after your password.</p>
       <pre data-recovery-codes></pre>
-      <a href="/settings/security" class="button secondary"
-        >I've saved my codes</a
-      >
+      <a href="/settings/security" class="button secondary">Done</a>
     </div>
     {{with .Data}}{{if .Keys}}
-    <hr />
-    <h3>Recovery codes</h3>
-    <p class="hint">
-      Generate a new set if your codes are lost. This invalidates all previous
-      codes.
-    </p>
-    <form action="/settings/recovery" method="post">
-      <button type="submit" class="secondary">Generate new codes</button>
-    </form>
-    <p class="fine">
-      Removing your final key turns off two-factor authentication.
-    </p>
+    <div class="section-rule">
+      <h3>Recovery codes</h3>
+      <form action="/settings/recovery" method="post" class="inline">
+        <button type="submit" class="secondary">Generate new codes</button
+        ><span class="hint">Replaces all existing codes.</span>
+      </form>
+    </div>
     {{end}}{{end}}{{end}}
-  </section>
-</div>
-<p class="fine">
-  Security changes require a recent sign-in.
-  <a href="/login">Sign in again</a> if your session is older than ten minutes.
-</p>
-{{template "bottom" .}}{{end}} {{define "tokens"}}{{template "top" .}}
-<div class="page-heading">
-  <div>
-    <span class="eyebrow">Your account</span>
-    <h1>Access tokens</h1>
-    <p class="lead">Connect the CLI with only the access it needs.</p>
   </div>
-</div>
+</section>
+<section class="panel">
+  <h2 class="panel-title">Change password</h2>
+  <form
+    action="/settings/password"
+    method="post"
+    class="stack panel-body narrow-form"
+  >
+    <label
+      >Current password<input
+        type="password"
+        name="current"
+        required
+        autocomplete="current-password" /></label
+    ><label
+      >New password<input
+        type="password"
+        name="password"
+        required
+        minlength="12"
+        maxlength="1024"
+        autocomplete="new-password" /></label
+    ><label
+      >Confirm password<input
+        type="password"
+        name="confirm"
+        required
+        minlength="12"
+        maxlength="1024"
+        autocomplete="new-password"
+    /></label>
+    <p class="hint">
+      At least 12 characters. Other sessions will be signed out.
+    </p>
+    <button type="submit">Update password</button>
+  </form>
+</section>
+{{template "settings-bottom" .}}{{template "bottom" .}}{{end}} {{define
+"tokens"}}{{template "top" .}}{{template "settings-top" .}}
+<div class="page-heading"><h1>Access tokens</h1></div>
 {{with .Data}}{{if .Secret}}
 <section class="notice secret" role="status">
-  <strong>Copy your token now</strong>
-  <p>
-    This secret will not be shown again. Paste it when
-    <code>lode login</code> asks for a token.
-  </p>
-  <code data-copy-value>{{.Secret}}</code><button type="button" class="secondary small" data-copy>Copy token</button><span class="hint" data-copy-status role="status"></span>
+  <strong>Copy this token now</strong>
+  <p>Shown once. Use it with <code>lode login</code>.</p>
+  <code data-copy-value>{{.Secret}}</code
+  ><button type="button" class="secondary small" data-copy>Copy token</button
+  ><span class="hint" data-copy-status role="status"></span>
 </section>
 {{end}}
-<section class="card flush">
+<section class="panel">
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Token</th>
+          <th>Name</th>
           <th>Access</th>
           <th>Expires</th>
           <th>Last used</th>
@@ -168,100 +149,96 @@
             <strong>{{.Name}}</strong><small class="mono">{{.Prefix}}…</small>
           </td>
           <td>
-            <span class="badge">{{.Role}}</span><small
-              >{{if .ProjectID}}{{with index $.Data.ProjectNames .ProjectID}}{{.}}{{else}}Project {{short .ProjectID}}{{end}}{{else}}All accessible
-              projects{{end}}</small
+            {{.Role}}<small
+              >{{if .ProjectID}}{{with index $.Data.ProjectNames
+              .ProjectID}}{{.}}{{else}}Project {{short
+              .ProjectID}}{{end}}{{else}}All accessible projects{{end}}</small
             >
           </td>
           <td>{{if .ExpiresAt}}{{date .ExpiresAt}}{{end}}</td>
-          <td>
-            {{if .LastUsedAt}}{{date .LastUsedAt}}{{else}}Never{{end}}
-          </td>
+          <td>{{if .LastUsedAt}}{{date .LastUsedAt}}{{else}}Never{{end}}</td>
           <td class="align-right">
-            {{if .Revoked}}<span class="muted">Revoked</span
-            >{{else}}
+            {{if .Revoked}}<span class="muted">Revoked</span>{{else}}
             <form action="/settings/tokens/revoke" method="post">
-              <input
-                type="hidden"
-                name="id"
-                value="{{.ID}}"
-              /><button class="quiet danger" type="submit">Revoke</button>
+              <input type="hidden" name="id" value="{{.ID}}" /><button
+                class="quiet danger"
+                type="submit"
+              >
+                Revoke
+              </button>
             </form>
             {{end}}
           </td>
         </tr>
         {{else}}
         <tr>
-          <td colspan="5" class="table-empty">
-            No tokens yet. Create one to connect your CLI.
-          </td>
+          <td colspan="5" class="table-empty">No access tokens.</td>
         </tr>
         {{end}}
       </tbody>
     </table>
   </div>
 </section>
-<section class="card form-card">
-  <h2>Create access token</h2>
-  <form action="/settings/tokens" method="post" class="token-form">
-    <label
-      >Name<input
-        name="name"
-        required
-        maxlength="80"
-        placeholder="Laptop"
-        autocomplete="off" /></label><label
-      >Project<select name="project">
-        <option value="">All accessible projects</option>
-        {{range .Projects}}
-        <option value="{{.ID}}">{{.Slug}}</option>
-        {{end}}
-      </select></label><label
-      >Maximum access<select name="role">
-        <option value="reader">Reader — browse and download</option><option value="writer" selected>Writer — save and branch</option><option value="maintainer">Maintainer — members and cleanup</option>
-      </select></label><label
-      >Expires in<select name="days">
-        <option value="30">30 days</option><option value="90" selected>90 days</option><option value="365">1 year</option>
-      </select></label><button type="submit">Create token</button>
-  </form>
-  <p class="hint">
-    A token can never exceed your current project permissions. Tokens cannot
-    administer the instance. Keep separate tokens for separate devices or tasks.
-  </p>
-</section>
-{{end}}
-<p class="fine">
-  Token creation requires a recent sign-in.
-  <a href="/login">Sign in again</a> if needed.
-</p>
-{{template "bottom" .}}{{end}} {{define "users"}}{{template "top" .}}
-<div class="page-heading">
-  <div>
-    <span class="eyebrow">Instance administration</span>
-    <h1>People</h1>
-    <p class="lead">A small, deliberate circle of collaborators.</p>
+<section class="panel">
+  <h2 class="panel-title">New access token</h2>
+  <div class="panel-body">
+    <form action="/settings/tokens" method="post" class="stack narrow-form">
+      <label
+        >Name<input
+          name="name"
+          required
+          maxlength="80"
+          placeholder="Laptop"
+          autocomplete="off" /></label
+      ><label
+        >Project<select name="project">
+          <option value="">All accessible projects</option>
+          {{range .Projects}}
+          <option value="{{.ID}}">{{.Slug}}</option>
+          {{end}}
+        </select></label
+      ><label
+        >Maximum access<select name="role">
+          <option value="reader">Reader</option>
+          <option value="writer" selected>Writer</option>
+          <option value="maintainer">Maintainer</option>
+        </select></label
+      ><label
+        >Expires in<select name="days">
+          <option value="30">30 days</option>
+          <option value="90" selected>90 days</option>
+          <option value="365">1 year</option>
+        </select></label
+      ><button type="submit">Create token</button>
+    </form>
+    <p class="hint">
+      Limited by your current project permissions. Tokens cannot administer the
+      instance.
+    </p>
   </div>
+</section>
+{{end}}{{template "settings-bottom" .}}{{template "bottom" .}}{{end}} {{define
+"users"}}{{template "top" .}}{{template "settings-top" .}}
+<div class="page-heading">
+  <h1>Users</h1>
   <span class="badge">Registration closed</span>
 </div>
 {{with .Data}}{{if .Password}}
 <section class="notice secret" role="status">
-  <strong>Account created: {{.Created}}</strong>
-  <p>
-    Share this temporary password privately. They must change it at their first
-    sign-in.
-  </p>
-  <code data-copy-value>{{.Password}}</code><button type="button" class="secondary small" data-copy>Copy password</button><span class="hint" data-copy-status role="status"></span>
+  <strong>Created {{.Created}}</strong>
+  <p>Temporary password. Must be changed at first sign-in.</p>
+  <code data-copy-value>{{.Password}}</code
+  ><button type="button" class="secondary small" data-copy>Copy password</button
+  ><span class="hint" data-copy-status role="status"></span>
 </section>
 {{end}}
-<section class="card flush">
+<section class="panel">
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
           <th>Username</th>
-          <th>Account access</th>
-          <th>Status</th>
-          <th><span class="sr-only">Action</span></th>
+          <th>Account settings</th>
         </tr>
       </thead>
       <tbody>
@@ -272,7 +249,7 @@
               >Password change required</small
             >{{end}}
           </td>
-          <td colspan="3">
+          <td>
             <form
               action="/admin/users/state"
               method="post"
@@ -283,13 +260,21 @@
                 ><input
                   type="checkbox"
                   name="admin"
-                  {{if .Admin}}checked{{end}}
-                />Administrator</label><label class="check"
+                  {{if
+                  .Admin}}
+                  checked
+                  {{end}}
+                />Administrator</label
+              ><label class="check"
                 ><input
                   type="checkbox"
                   name="disabled"
-                  {{if .Disabled}}checked{{end}}
-                />Disabled</label><button class="secondary small" type="submit">Save</button>
+                  {{if
+                  .Disabled}}
+                  checked
+                  {{end}}
+                />Disabled</label
+              ><button class="secondary small" type="submit">Save</button>
             </form>
           </td>
         </tr>
@@ -298,28 +283,25 @@
     </table>
   </div>
 </section>
-<section class="card form-card">
-  <h2>Add a person</h2>
-  <form method="post" class="form-row">
-    <label
-      >Username<input
-        name="username"
-        required
-        pattern="[a-z0-9_-]{3,32}"
-        maxlength="32"
-        autocomplete="off"
-        spellcheck="false"
-        placeholder="sam" /></label><label class="check"
-      ><input type="checkbox" name="admin" />Instance administrator</label><button type="submit">Create account</button>
-  </form>
-  <p class="hint">
-    A temporary password is generated for you. Add the person to specific
-    projects after creating their account.
-  </p>
+<section class="panel">
+  <h2 class="panel-title">New user</h2>
+  <div class="panel-body">
+    <form method="post" class="form-row">
+      <label
+        >Username<input
+          name="username"
+          required
+          pattern="[a-z0-9_-]{3,32}"
+          maxlength="32"
+          autocomplete="off"
+          spellcheck="false" /></label
+      ><label class="check"
+        ><input type="checkbox" name="admin" />Administrator</label
+      ><button type="submit">Create account</button>
+    </form>
+    <p class="hint">
+      Administrators can access every project and manage users.
+    </p>
+  </div>
 </section>
-{{end}}
-<p class="fine">
-  Administrators can access every project and manage accounts. At least one
-  enabled administrator must remain.
-</p>
-{{template "bottom" .}}{{end}}
+{{end}}{{template "settings-bottom" .}}{{template "bottom" .}}{{end}}

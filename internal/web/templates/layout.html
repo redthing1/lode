@@ -3,89 +3,132 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{.Title}} · Lode</title><link rel="stylesheet" href="/assets/style.css" />
+    <title>{{.Title}} · Lode</title>
+    <script src="/assets/theme.js"></script>
+    <link rel="stylesheet" href="/assets/style.css" />
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
     <a class="skip" href="#main">Skip to content</a>
     <header class="bar">
       <a class="brand" href="/" aria-label="Lode home"
-        ><span class="mark" aria-hidden="true">l</span>lode<span
-          class="brand-note"
-          >a home for your work</span
-        ></a
-      >{{if .User.ID}}
+        >{{template "repo-icon"}}<span>Lode</span></a
+      >
+      {{if .User.ID}}
       <nav aria-label="Main navigation">
-        <a href="/" {{if eq .Section "projects"}}aria-current="page" {{end}}
-          >Projects</a><a
-          href="/settings/security"
-          {{if eq .Section "security"}}aria-current="page"
-          {{end}}
-          >Security</a><a
-          href="/settings/tokens"
-          {{if eq .Section "tokens"}}aria-current="page"
-          {{end}}
-          >Tokens</a
-        >{{if .User.Admin}}<a
-          href="/admin/users"
-          {{if eq .Section "admin"}}aria-current="page"
-          {{end}}
-          >People</a
-        >{{end}}
+        <a href="/" {{if eq .Section "projects"}} aria-current="page" {{end}}
+          >Projects</a
+        >
       </nav>
-      <div class="account">
-        <span class="avatar" aria-hidden="true">{{slice .User.Username 0 1}}</span><span>{{.User.Username}}</span>
-        <form action="/logout" method="post">
-          <button class="quiet" type="submit">Sign out</button>
-        </form>
+      {{end}}
+      <div class="bar-right">
+        <label class="theme-control"
+          ><span class="sr-only">Theme</span
+          ><select id="theme" aria-label="Theme">
+            <option value="auto">System theme</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select></label
+        >
+        {{if .User.ID}}
+        <details class="account-menu">
+          <summary>
+            <span class="avatar" aria-hidden="true"
+              >{{slice .User.Username 0 1}}</span
+            ><span>{{.User.Username}}</span><span aria-hidden="true">▾</span>
+          </summary>
+          <div class="popover menu">
+            <a href="/settings/security">Account security</a>
+            <a href="/settings/tokens">Access tokens</a>
+            {{if .User.Admin}}<a href="/admin/users">Administration</a>{{end}}
+            <form action="/logout" method="post">
+              <button class="quiet" type="submit">Sign out</button>
+            </form>
+          </div>
+        </details>
+        {{end}}
       </div>
-      {{else}}<span class="bar-note"
-        >Binary projects. Thoughtfully versioned.</span
-      >{{end}}
     </header>
     <main id="main" class="main">
       {{if .Error}}
       <div class="notice error" role="alert">{{.Error}}</div>
-      {{end}}{{end}} {{define "bottom"}}
+      {{end}} {{end}} {{define "bottom"}}
     </main>
-    <footer class="footer">
-      <span class="footer-brand">lode</span><span>Keep the work. Choose the history.</span>
-    </footer>
   </body>
 </html>
 {{end}} {{define "error"}}{{template "top" .}}
 <section class="empty">
-  <span class="eyebrow">Something needs your attention</span>
   <h1>{{.Title}}</h1>
-  <p>Use the navigation above, or return to your projects.</p>
-  <a class="button" href="/">Back to projects</a><a class="button secondary" href="/login">Sign in again</a>
+  <a class="button secondary" href="/">Projects</a>
+  <a class="button secondary" href="/login">Sign in</a>
 </section>
-{{template "bottom" .}}{{end}} {{define "folder"}}<svg
+{{template "bottom" .}}{{end}} {{define "repo-icon"}}<svg
   class="icon"
   viewBox="0 0 24 24"
   fill="none"
   stroke="currentColor"
-  stroke-width="1.6"
+  stroke-width="1.7"
+  aria-hidden="true"
+>
+  <path d="M5 3h14v18H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm0 0v14h14M7 20h8" />
+  <path d="M8 6h7M8 9h5" /></svg
+>{{end}} {{define "folder"}}<svg
+  class="icon folder-icon"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.7"
   aria-hidden="true"
 >
   <path
     d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"
   /></svg
 >{{end}} {{define "file"}}<svg
-  class="icon file-icon"
+  class="icon"
   viewBox="0 0 24 24"
   fill="none"
   stroke="currentColor"
-  stroke-width="1.6"
+  stroke-width="1.7"
   aria-hidden="true"
 >
-  <path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10Z" />
-  <path d="M13 3v7h7M8 14h8M8 17h5" /></svg
->{{end}}
-
-{{define "branch-icon"}}
-<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-  <circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/>
-  <path d="M6 7v10m12-10v2a5 5 0 0 1-5 5H6"/>
-</svg>
+  <path
+    d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10ZM13 3v7h7"
+  /></svg
+>{{end}} {{define "branch-icon"}}<svg
+  class="icon"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.7"
+  aria-hidden="true"
+>
+  <circle cx="6" cy="5" r="2" />
+  <circle cx="6" cy="19" r="2" />
+  <circle cx="18" cy="5" r="2" />
+  <path d="M6 7v10m12-10v2a5 5 0 0 1-5 5H6" /></svg
+>{{end}} {{define "settings-top"}}
+<div class="settings-layout">
+  <nav class="settings-nav" aria-label="Settings">
+    <span class="nav-heading">Account settings</span>
+    <a
+      href="/settings/security"
+      {{if eq .Section "security"}}
+      aria-current="page"
+      {{end}}
+      >Security</a
+    >
+    <a
+      href="/settings/tokens"
+      {{if eq .Section "tokens"}}
+      aria-current="page"
+      {{end}}
+      >Access tokens</a
+    >
+    {{if .User.Admin}}<span class="nav-heading">Administration</span
+    ><a href="/admin/users" {{if eq .Section "admin"}} aria-current="page" {{end}}
+      >Users</a
+    >{{end}}
+  </nav>
+  <div class="settings-content">{{end}} {{define "settings-bottom"}}</div>
+</div>
 {{end}}

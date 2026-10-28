@@ -22,11 +22,13 @@ An instance has one canonical HTTP(S) origin, a private directory, an ownership 
 
 The first account is an administrator created with a one-time setup code. Registration is closed. Administrators create accounts and projects; project maintainers assign readers, writers, and maintainers. Readers browse and download, writers also save and manage branches, and maintainers can change project membership and retention. Instance administrator authority does not pass through personal tokens.
 
-Passwords and optional WebAuthn security keys protect browser sign-in. Recovery codes are single-use. Password and security changes invalidate existing sessions; account recovery is a local operator command while the server is stopped. Personal tokens are stored as hashes, can be scoped to one or all accessible projects, and are capped by the owner's current permissions.
+WebAuthn supports username-free discoverable passkeys and username-first security keys. Both passwordless paths require user verification; password sign-in retains its optional key second factor and single-use recovery codes. Challenges are session-bound, expiring, and atomically consumed. Password and security changes invalidate existing sessions; account recovery is a local operator command while the server is stopped. Personal tokens are stored as hashes, can be scoped to one or all accessible projects, and are capped by the owner's current permissions.
 
 The instance database stores accounts, memberships, sessions, credentials, tokens, and project metadata. Each project's existing database and content repository remain the authority for its history and payloads. Instance backups include the registry and all registered project stores, hold the ownership lock, and publish a verified cold copy atomically. A legacy single-project store can be imported while both servers are stopped; import preserves the project ID and history but does not carry its old shared token into the instance.
 
 Native project stores are opened on demand and bounded to eight open projects per instance. Browser history and directory views are paginated; a directory response contains at most 100 entries and a history response at most 50 versions. Expired project contents remain visible as metadata while downloads return unavailable.
+
+File and README previews use the same project authorization and retained-content read gates. Markdown and escaped text reads are capped at 1 MiB. Markdown omits embedded HTML and remote images; relative links identify the immutable version. Inline media uses an explicit type allowlist and bounded streaming, including single byte ranges. Downloads preserve the original bytes.
 
 ## Versions and presence
 

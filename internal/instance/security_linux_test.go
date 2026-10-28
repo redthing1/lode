@@ -76,7 +76,7 @@ func registrationResponse(t *testing.T, auth syntheticAuthenticator, challenge, 
 	authData := make([]byte, 0, 37+16+2+len(auth.id)+len(coseKey))
 	rpHash := sha256.Sum256([]byte(testRPID))
 	authData = append(authData, rpHash[:]...)
-	authData = append(authData, byte(protocol.FlagUserPresent|protocol.FlagAttestedCredentialData))
+	authData = append(authData, byte(protocol.FlagUserPresent|protocol.FlagUserVerified|protocol.FlagAttestedCredentialData))
 	authData = binary.BigEndian.AppendUint32(authData, 0)
 	authData = append(authData, make([]byte, 16)...)
 	authData = binary.BigEndian.AppendUint16(authData, uint16(len(auth.id)))
@@ -103,7 +103,7 @@ func assertionResponse(t *testing.T, auth syntheticAuthenticator, challenge, ori
 	authData := make([]byte, 0, 37)
 	rpHash := sha256.Sum256([]byte(testRPID))
 	authData = append(authData, rpHash[:]...)
-	authData = append(authData, byte(protocol.FlagUserPresent))
+	authData = append(authData, byte(protocol.FlagUserPresent|protocol.FlagUserVerified))
 	authData = binary.BigEndian.AppendUint32(authData, counter)
 	clientData, err := json.Marshal(map[string]any{"type": "webauthn.get", "challenge": challenge, "origin": origin, "crossOrigin": false})
 	if err != nil {
@@ -118,6 +118,21 @@ func assertionResponse(t *testing.T, auth syntheticAuthenticator, challenge, ori
 	}
 	id := base64.RawURLEncoding.EncodeToString(auth.id)
 	body, err := json.Marshal(map[string]any{"id": id, "rawId": id, "type": "public-key", "response": map[string]any{"authenticatorData": base64.RawURLEncoding.EncodeToString(authData), "clientDataJSON": base64.RawURLEncoding.EncodeToString(clientData), "signature": base64.RawURLEncoding.EncodeToString(signature)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func passkeyAssertionResponse(t *testing.T, auth syntheticAuthenticator, userID, challenge, origin string, counter uint32) []byte {
+	t.Helper()
+	var response map[string]any
+	if err := json.Unmarshal(assertionResponse(t, auth, challenge, origin, counter), &response); err != nil {
+		t.Fatal(err)
+	}
+	credentialResponse := response["response"].(map[string]any)
+	credentialResponse["userHandle"] = base64.RawURLEncoding.EncodeToString([]byte(userID))
+	body, err := json.Marshal(response)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,6 +181,10 @@ func TestSecurityRegistrationBindingOneUseExpiryAndOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	creation := options.(*protocol.CredentialCreation).Response
+	if creation.AuthenticatorSelection.ResidentKey != protocol.ResidentKeyRequirementRequired || creation.AuthenticatorSelection.RequireResidentKey == nil || !*creation.AuthenticatorSelection.RequireResidentKey || creation.AuthenticatorSelection.UserVerification != protocol.VerificationRequired {
+		t.Fatalf("registration did not require a discoverable key with UV: %+v", creation.AuthenticatorSelection)
+	}
 	body := registrationResponse(t, auth, optionChallenge(t, options, true), testOrigin)
 	if _, err = security.FinishRegistration(ctx, user.ID, "browser-session-b", id, "test key", webauthnRequest(body)); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("wrong binding: %v", err)
@@ -208,6 +227,21 @@ func TestSecurityRegistrationBindingOneUseExpiryAndOrigin(t *testing.T) {
 	expiredAuth := newSyntheticAuthenticator(t, "registration-key-0003")
 	if _, err = security.FinishRegistration(ctx, user.ID, "browser-session-a", expiredID, "expired", webauthnRequest(registrationResponse(t, expiredAuth, optionChallenge(t, expiredOptions, true), testOrigin))); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expired registration challenge: %v", err)
+	}
+}
+
+func TestUsernameCompatibleEnrollmentOmitsResidentKeyButRequiresUV(t *testing.T) {
+	ctx, _, security, user := securityFixture(t)
+	_, options, err := security.BeginWithMode(ctx, user.ID, "browser", "register", "username")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := options.(*protocol.CredentialCreation).Response.AuthenticatorSelection
+	if selection.UserVerification != protocol.VerificationRequired || selection.ResidentKey != protocol.ResidentKeyRequirementDiscouraged || selection.RequireResidentKey == nil || *selection.RequireResidentKey {
+		t.Fatalf("username-compatible enrollment options %+v", selection)
+	}
+	if _, _, err := security.BeginWithMode(ctx, user.ID, "browser", "register", "unknown"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unknown enrollment mode returned %v", err)
 	}
 }
 
@@ -272,6 +306,50 @@ func TestSecurityAssertionSignatureCounterBindingAndReplay(t *testing.T) {
 	}
 	if err = security.FinishLogin(ctx, user.ID, "browser-session-a", id, webauthnRequest(assertionResponse(t, badAuth, optionChallenge(t, options, false), testOrigin, 3))); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("assertion signed by other key: %v", err)
+	}
+}
+
+func TestDiscoverablePasskeyLoginRequiresUVAndConsumesChallenge(t *testing.T) {
+	ctx, _, security, user := securityFixture(t)
+	auth := newSyntheticAuthenticator(t, "discoverable-passkey-key")
+	registerSynthetic(t, ctx, security, user, auth, "enrollment-session")
+	keys, err := security.Keys(ctx, user.ID)
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("registered keys %d, error %v", len(keys), err)
+	}
+	binding := "anonymous-browser-session"
+	id, options, err := security.BeginPasskey(ctx, binding, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		PublicKey struct {
+			UserVerification string `json:"userVerification"`
+			AllowCredentials []any  `json:"allowCredentials"`
+		} `json:"publicKey"`
+	}
+	data, err := json.Marshal(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.PublicKey.UserVerification != "required" || len(wire.PublicKey.AllowCredentials) != 0 {
+		t.Fatalf("passkey options were not discoverable with required UV: %s", data)
+	}
+	challenge := optionChallenge(t, options, false)
+	req := webauthnRequest(passkeyAssertionResponse(t, auth, user.ID, challenge, testOrigin, 7))
+	loggedIn, err := security.FinishPasskey(ctx, binding, id, req)
+	if err != nil || loggedIn.ID != user.ID {
+		t.Fatalf("passkey sign-in returned user %q, error %v", loggedIn.ID, err)
+	}
+	if _, err := security.FinishPasskey(ctx, binding, id, webauthnRequest(passkeyAssertionResponse(t, auth, user.ID, challenge, testOrigin, 8))); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("replayed passkey ceremony returned %v", err)
+	}
+	keys, err = security.Keys(ctx, user.ID)
+	if err != nil || keys[0].Credential.Authenticator.SignCount != 7 {
+		t.Fatalf("credential counter was not persisted: %+v, %v", keys, err)
 	}
 }
 

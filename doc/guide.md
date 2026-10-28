@@ -8,7 +8,7 @@ An instance administrator creates accounts and projects in the web interface. Ne
 
 Project maintainers can add existing accounts as readers, writers, or maintainers. Readers browse and download. Writers also save versions and manage branches. Maintainers can additionally manage project members and release historical contents. Instance administrators can maintain every project. A personal access token cannot administer the instance and cannot exceed its owner's current project permissions.
 
-Create a token under **Tokens**. Choose one project or all projects you can access, a maximum role, and an expiry of 30, 90, or 365 days. Copy the token when it is created; it is shown only once. Revoke it from the same page when it is no longer needed.
+Open **Access tokens** from the account menu. Choose one project or all projects you can access, a maximum role, and an expiry of 30, 90, or 365 days. Copy the token when it is created; it is shown only once. Revoke it from the same page when it is no longer needed.
 
 Log in to a project URL to save a project-specific credential:
 
@@ -20,6 +20,12 @@ lode attach https://lode.example.com/p/example ./work
 The prompt hides the token in a terminal. Lode verifies the account and project before saving it in your OS user configuration, with file permissions restricted to your account. Credentials are not stored in workspace state. A project-specific credential takes precedence; a credential saved for the instance origin is used as a fallback for its projects. `LODE_TOKEN` overrides either saved credential for the current command.
 
 `lode logout URL` removes the saved local credential for that URL. It does not revoke the server token; revoke tokens in the web interface. A local operator can reset an account with `lode recover INSTANCE USERNAME` while the server is stopped. The command prints a temporary password, invalidates sessions and tokens, removes security keys and recovery codes, and requires a password change at next sign-in.
+
+## Browser sign-in and files
+
+Add passkeys under **Account security**. The default mode lets you sign in without a username. Choose **Enter a username** for a security key that should avoid storing a discoverable credential. At sign-in, use **Sign in with a passkey**; enter your username first for a non-discoverable key. Both passwordless modes require the authenticator's PIN or biometric verification. With a key registered, password sign-in also requires a key or a single-use recovery code. Existing keys remain available.
+
+Directory pages render their README. Click a filename to preview Markdown, text, supported images, audio or video. Text previews are limited to 1 MiB; other files remain downloadable. Markdown links and local images stay pinned to the selected version. Choose **Light**, **Dark**, or **System theme** in the header; the choice is saved in your browser.
 
 ## Save and update
 

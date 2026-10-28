@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -58,6 +59,7 @@ func New(i *instance.Instance) (http.Handler, error) {
 		},
 		"date":  func(t time.Time) string { return t.UTC().Format("02 Jan 2006 · 15:04 UTC") },
 		"bytes": formatBytes,
+		"base":  path.Base,
 	}).ParseFS(files, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -75,6 +77,7 @@ func New(i *instance.Instance) (http.Handler, error) {
 	web.HandleFunc("POST /setup", s.setup)
 	web.HandleFunc("GET /login", s.login)
 	web.HandleFunc("POST /login", s.login)
+	web.HandleFunc("POST /passkey/{step}", s.passkey)
 	web.HandleFunc("GET /verify", s.verify)
 	web.HandleFunc("POST /verify/recovery", s.recover)
 	web.HandleFunc("POST /logout", s.logout)
@@ -97,6 +100,8 @@ func New(i *instance.Instance) (http.Handler, error) {
 	web.HandleFunc("GET /p/{slug}/members", s.projectMembers)
 	web.HandleFunc("POST /p/{slug}/members", s.projectMembers)
 	web.HandleFunc("GET /p/{slug}/download", s.download)
+	web.HandleFunc("GET /p/{slug}/file", s.projectFile)
+	web.HandleFunc("GET /p/{slug}/raw", s.rawFile)
 	web.HandleFunc("GET /admin/users", s.users)
 	web.HandleFunc("POST /admin/users", s.users)
 	web.HandleFunc("POST /admin/users/state", s.userState)

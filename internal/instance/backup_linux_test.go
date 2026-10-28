@@ -133,6 +133,71 @@ func TestBackupCreatesColdSelfContainedInstance(t *testing.T) {
 	}
 }
 
+func TestBackupMigratesLegacyDatabaseOnlyInBackup(t *testing.T) {
+	ctx := context.Background()
+	i, setupCode, source := newTestInstance(t)
+	user, err := i.Setup(ctx, setupCode, "owner", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	security, err := NewSecurity(i.Store, testOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := newSyntheticAuthenticator(t, "backup-legacy-preserved-key")
+	registerSynthetic(t, ctx, security, user, auth, "legacy-enrollment-session")
+	keysBefore, err := security.Keys(ctx, user.ID)
+	if err != nil || len(keysBefore) != 1 {
+		t.Fatalf("legacy key count %d: %v", len(keysBefore), err)
+	}
+	if _, err := i.db.ExecContext(ctx, `CREATE TABLE ceremonies_v1(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), binding TEXT NOT NULL, purpose TEXT NOT NULL, data BLOB NOT NULL, expires INTEGER NOT NULL, auth_version INTEGER NOT NULL);
+		INSERT INTO ceremonies_v1 SELECT * FROM ceremonies;
+		DROP TABLE ceremonies;
+		ALTER TABLE ceremonies_v1 RENAME TO ceremonies;
+		PRAGMA user_version=1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := i.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(source, "instance.sqlite")
+	sourceBefore, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "legacy-backup")
+	if err := Backup(ctx, source, destination); err != nil {
+		t.Fatalf("backup legacy source: %v", err)
+	}
+	sourceAfter, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(sourceAfter, sourceBefore) {
+		t.Fatal("backup migrated or otherwise changed the source database")
+	}
+
+	copy, err := Open(ctx, destination)
+	if err != nil {
+		t.Fatalf("open migrated backup: %v", err)
+	}
+	var version int
+	if err := copy.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+		t.Fatalf("backup schema version = %d, err %v", version, err)
+	}
+	backupSecurity, err := NewSecurity(copy.Store, testOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keysAfter, err := backupSecurity.Keys(ctx, user.ID)
+	if err != nil || len(keysAfter) != 1 || !bytes.Equal(keysAfter[0].raw, keysBefore[0].raw) {
+		t.Fatalf("migrated backup key count %d, error %v", len(keysAfter), err)
+	}
+	if err := copy.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBackupRejectsDestinationsAndCleansCancelledWork(t *testing.T) {
 	i, _, source := newTestInstance(t)
 	if err := i.Close(); err != nil {

@@ -29,7 +29,7 @@ The server only listens on loopback. Do not expose its listener directly to a ne
 
 The first account is an instance administrator. Administrators create more accounts; there is no public registration. Each new account receives a temporary password that must be changed at first sign-in. Administrators can disable accounts and change their administrator status. Account password recovery is a local operator action described below.
 
-Users can add browser-supported FIDO2 security keys as a second factor and generate one-time recovery codes. Recovery codes are shown only when generated. A user can have up to ten keys. Removing the final key disables second-factor sign-in.
+Users can register up to ten FIDO2 credentials for passwordless sign-in, with or without entering a username. Password sign-in uses a registered key as a second factor; single-use recovery codes provide a fallback. Removing the final key disables the second factor. Recovery codes are shown only when generated.
 
 For local operator recovery, stop the server and run:
 

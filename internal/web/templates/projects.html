@@ -1,195 +1,190 @@
 {{define "projects"}}{{template "top" .}}
 <div class="page-heading">
-  <div>
-    <span class="eyebrow">Your shared workspace</span>
-    <h1>Your projects</h1>
-    <p class="lead">The work you're making, and the history worth keeping.</p>
-  </div>
-  {{if .User.Admin}}<a class="button" href="/projects/new">+ New project</a
+  <h1>Projects <span class="count">{{len .Data}}</span></h1>
+  {{if .User.Admin}}<a class="button" href="/projects/new">New project</a
   >{{end}}
 </div>
-{{if .Data}}
-<div class="project-grid">
-  {{range .Data}}<a class="project-card" href="/p/{{.Slug}}"
-    ><span class="project-symbol">{{template "folder"}}</span>
-    <div>
-      <h2>{{.Slug}}</h2>
-      <p>Created {{date .Created}}</p>
+<section class="panel project-list">
+  {{range .Data}}
+  <div class="project-row">
+    <div class="project-name">
+      {{template "repo-icon"}}<a href="/p/{{.Slug}}">{{.Slug}}</a
+      ><span class="badge">Private</span>
     </div>
-    <span class="card-arrow" aria-hidden="true">↗</span></a
-  >{{end}}
-</div>
-{{else}}
-<section class="empty card">
-  <span class="empty-icon">{{template "folder"}}</span>
-  <h2>A clear space to begin.</h2>
-  <p>
-    {{if .User.Admin}}Create a project, connect the CLI, and save your first
-    version.{{else}}You don't have any projects yet. Ask an
-    administrator or project maintainer to add you.{{end}}
-  </p>
-  {{if .User.Admin}}<a class="button" href="/projects/new"
-    >Create your first project</a
-  >{{end}}
+    <time class="muted">Created {{date .Created}}</time>
+  </div>
+  {{else}}
+  <div class="empty">
+    <p>No projects.</p>
+    {{if .User.Admin}}<a href="/projects/new">Create a project</a>{{else}}
+    <p class="muted">Ask an administrator or project maintainer for access.</p>
+    {{end}}
+  </div>
+  {{end}}
 </section>
-{{end}}{{template "bottom" .}}{{end}}
-{{define "new-project"}}{{template "top" .}}<a class="breadcrumb" href="/"
-  >← Projects</a
->
-<section class="card centered">
-  <span class="eyebrow">New project</span>
-  <h1>A home for your<br />next project.</h1>
-  <p class="lead">Keep files, versions and collaborators together.</p>
-  <form action="/projects/new" method="post" class="stack">
+{{template "bottom" .}}{{end}} {{define "new-project"}}{{template "top" .}}
+<section class="auth-panel panel">
+  <h1 class="panel-title">New project</h1>
+  <form action="/projects/new" method="post" class="stack panel-body">
     <label
       >Project name<input
         name="slug"
         required
         maxlength="64"
         pattern="[a-z0-9]+(-[a-z0-9]+)*"
-        placeholder="studio-assets"
         spellcheck="false"
         autocomplete="off"
     /></label>
     <p class="hint">
-      Lowercase letters, digits and hyphens. This becomes the project's URL.
+      Lowercase letters, digits and hyphens. Used in the project URL.
     </p>
-    <button type="submit">Create project</button>
+    <div class="actions">
+      <button type="submit">Create project</button><a href="/">Cancel</a>
+    </div>
   </form>
 </section>
-{{template "bottom" .}}{{end}} {{define "project-top"}}<a
-  class="breadcrumb"
-  href="/"
-  >Projects <span aria-hidden="true">/</span></a
->
-<div class="page-heading compact">
+{{template "bottom" .}}{{end}} {{define "project-top"}}
+<div class="repo-heading">
   <div class="project-title">
-    <span class="project-symbol">{{template "folder"}}</span>
-    <h1>{{.Info.Slug}}</h1>
+    {{template "repo-icon"}}<a href="/" class="muted">Projects</a
+    ><span class="muted">/</span>
+    <h1><a href="/p/{{.Info.Slug}}">{{.Info.Slug}}</a></h1>
     <span class="badge">Private</span>
   </div>
   <details class="connect">
     <summary class="button secondary">Connect CLI</summary>
     <div class="popover">
-      <strong>Work from your terminal</strong>
-      <p>Create a token in your account, then:</p>
+      <p>Create an access token, then run:</p>
       <pre><code>lode login {{.URL}}
 lode clone {{.URL}} {{.Info.Slug}}</code></pre>
-      <p class="hint">
-        Use <code>-include PATH</code> to download just what you need.
-      </p>
-      <a href="/settings/tokens">Manage access tokens →</a>
+      <a href="/settings/tokens">Access tokens</a>
     </div>
   </details>
 </div>
 <nav class="tabs" aria-label="Project navigation">
   <a
     href="/p/{{.Info.Slug}}?branch={{.Branch}}"
-    {{if eq .Tab "files"}}aria-current="page"
+    {{if eq .Tab "files"}}
+    aria-current="page"
     {{end}}
-    >Files</a><a
+    >{{template "file"}}Files</a
+  >
+  <a
     href="/p/{{.Info.Slug}}/history?branch={{.Branch}}"
-    {{if eq .Tab "history"}}aria-current="page"
+    {{if eq .Tab "history"}}
+    aria-current="page"
     {{end}}
-    >History</a><a
+    >History</a
+  >
+  <a
     href="/p/{{.Info.Slug}}/branches"
-    {{if eq .Tab "branches"}}aria-current="page"
+    {{if eq .Tab "branches"}}
+    aria-current="page"
     {{end}}
-    >Branches</a
-  >{{if .CanManage}}<a
+    >{{template "branch-icon"}}Branches</a
+  >
+  {{if .CanManage}}<a
     href="/p/{{.Info.Slug}}/storage"
-    {{if eq .Tab "storage"}}aria-current="page"
+    {{if eq .Tab "storage"}}
+    aria-current="page"
     {{end}}
-    >Storage</a><a
+    >Storage</a
+  ><a
     href="/p/{{.Info.Slug}}/members"
-    {{if eq .Tab "members"}}aria-current="page"
+    {{if eq .Tab "members"}}
+    aria-current="page"
     {{end}}
     >Members</a
   >{{end}}
 </nav>
 {{end}} {{define "branch-picker"}}
-<form class="inline" method="get">
-  <label class="sr-only" for="branch">Branch</label>{{template "branch-icon"}}<select name="branch" id="branch">
+<form class="inline branch-picker" method="get">
+  <label class="sr-only" for="branch">Branch</label>{{template
+  "branch-icon"}}<select name="branch" id="branch" data-auto-submit>
     {{range .Branches}}
-    <option
-      value="{{.Name}}"
-      {{if eq .Name $.Branch}}selected{{end}}
-    >
+    <option value="{{.Name}}" {{if eq .Name $.Branch}} selected {{end}}>
       {{.Name}}
     </option>
-    {{end}}</select><button type="submit" class="secondary small">View</button>
-</form>
-{{end}}
-{{define "project-files"}}{{template "top" .}}{{with .Data}}{{template "project-top" .}}{{if .Commit.ID}}
-<div class="toolbar">
-  {{template "branch-picker" .}}<span class="muted"
-    >{{if .Commit.Retained}}Contents available{{else}}<span
-      class="badge amber"
-      >Contents released</span
-    >{{end}}</span
+    {{end}}</select
+  ><noscript
+    ><button type="submit" class="secondary small">View</button></noscript
   >
+</form>
+{{end}} {{define "version-strip"}}
+<div class="version-strip">
+  <span class="avatar small-avatar" aria-hidden="true"
+    >{{if .Commit.Author}}{{slice .Commit.Author 0 1}}{{else}}·{{end}}</span
+  ><strong>{{.Commit.Author}}</strong
+  ><a
+    class="hash"
+    href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}"
+    >{{short .Commit.ID}}</a
+  ><span class="commit-message">{{.Commit.Message}}</span
+  ><time class="muted">{{date .Commit.Created}}</time>
 </div>
-<section class="file-panel">
-  <div class="version-strip">
-    <div>
-      <span class="avatar small-avatar"
-        >{{if .Commit.Author}}{{slice .Commit.Author 0 1}}{{else}}·{{end}}</span><strong>{{.Commit.Message}}</strong>
-    </div>
-    <a class="mono" href="/p/{{.Info.Slug}}/history?branch={{.Branch}}">Version {{short .Commit.ID}}</a><span class="muted">{{date .Commit.Created}}</span>
-  </div>
+{{end}} {{define "project-files"}}{{template "top" .}}{{with .Data}}{{template
+"project-top" .}} {{if .Commit.ID}}
+<div class="toolbar">
+  {{template "branch-picker" .}}
   <div class="file-breadcrumb">
-    <a href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}"
+    <a
+      href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}"
       >{{.Info.Slug}}</a
     >{{if .Path}}<span>/</span><span>{{.Path}}</span>{{end}}
   </div>
+  {{if not .Commit.Retained}}<span class="badge amber">Contents released</span
+  >{{end}}
+</div>
+<section class="panel file-panel">
+  {{template "version-strip" .}}
   <div class="table-wrap">
     <table class="file-table">
-      <thead>
+      <thead class="sr-only">
         <tr>
           <th>Name</th>
-          <th>Type</th>
-          <th class="align-right">Logical size</th>
-          <th><span class="sr-only">Action</span></th>
+          <th>Size</th>
+          <th>Action</th>
         </tr>
       </thead>
       <tbody>
         {{if .Path}}
         <tr>
-          <td colspan="4">
+          <td colspan="3">
             <a
               href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.Parent}}"
-              >← Parent directory</a
+              aria-label="Parent directory"
+              >..</a
             >
           </td>
         </tr>
-        {{end}}{{range .Files}}
+        {{end}} {{range .Files}}
         <tr>
           <td>
             <div class="file-name">
               {{if eq .Kind "directory"}}{{template "folder"}}<a
                 href="/p/{{$.Data.Info.Slug}}?branch={{$.Data.Branch}}&amp;version={{$.Data.Commit.ID}}&amp;path={{.Path}}"
                 >{{.Name}}</a
-              >{{else}}{{template "file"}}<span>{{.Name}}</span>{{end}}
+              >{{else}}{{template "file"}}<a
+                href="/p/{{$.Data.Info.Slug}}/file?branch={{$.Data.Branch}}&amp;version={{$.Data.Commit.ID}}&amp;path={{.Path}}"
+                >{{.Name}}</a
+              >{{end}}
             </div>
           </td>
-          <td class="muted">
-            {{if eq .Kind "directory"}}Folder{{else}}File{{end}}
+          <td class="align-right muted mono">
+            {{if eq .Kind "file"}}{{bytes .Size}}{{end}}
           </td>
-          <td class="align-right mono">
-            {{if eq .Kind "file"}}{{bytes .Size}}{{else}}—{{end}}
-          </td>
-          <td class="align-right">
+          <td class="align-right file-action">
             {{if and (eq .Kind "file") $.Data.Commit.Retained}}<a
-              class="subtle-link"
+              class="muted"
               href="/p/{{$.Data.Info.Slug}}/download?version={{$.Data.Commit.ID}}&amp;path={{.Path}}"
               aria-label="Download {{.Name}}"
-              >Download ↓</a
+              >Download</a
             >{{end}}
           </td>
         </tr>
         {{else}}
         <tr>
-          <td colspan="4" class="table-empty">This directory is empty.</td>
+          <td colspan="3" class="table-empty">Empty directory.</td>
         </tr>
         {{end}}
       </tbody>
@@ -201,43 +196,117 @@ lode clone {{.URL}} {{.Info.Slug}}</code></pre>
   <a
     class="button secondary"
     href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.Path}}&amp;after={{.Next}}"
-    >Next files →</a
+    >Next files</a
   >
 </div>
-{{end}}
-<p class="fine">
-  Sizes describe file contents, not deduplicated storage usage.
-</p>
-{{else}}
-<section class="card empty">
-  <span class="empty-icon">{{template "folder"}}</span><span class="eyebrow">Ready when you are</span>
-  <h2>Your first version starts here.</h2>
-  <p>Connect an existing folder with the CLI, then save a version.</p>
-  <pre class="terminal"><code>lode login {{.URL}}
+{{end}} {{if .ReadmeName}}
+<section class="panel readme-panel">
+  <h2 class="panel-title">
+    {{template "file"}}<a
+      href="/p/{{.Info.Slug}}/file?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.ReadmeName}}"
+      >{{.ReadmeName}}</a
+    >
+  </h2>
+  {{if .ReadmeBody}}
+  <article class="markdown">{{.ReadmeBody}}</article>
+  {{else}}
+  <p class="panel-body muted">README exceeds the 1 MiB preview limit.</p>
+  {{end}}
+</section>
+{{end}} {{else}}
+<section class="panel">
+  <h2 class="panel-title">Empty project</h2>
+  <div class="panel-body">
+    <p>Save a local folder with the CLI:</p>
+    <pre><code>lode login {{.URL}}
 lode attach {{.URL}} ./your-folder
 cd your-folder
 lode save -m 'Initial version'</code></pre>
-  <a href="/settings/tokens" class="text-link">Create a CLI access token →</a>
+    <a href="/settings/tokens">Create access token</a>
+  </div>
 </section>
-{{end}}{{end}}{{template "bottom" .}}{{end}}
-{{define "project-history"}}{{template "top" .}}{{with .Data}}{{template "project-top" .}}
+{{end}} {{end}}{{template "bottom" .}}{{end}} {{define
+"project-file"}}{{template "top" .}}{{with .Data}}{{template "project-top" .}}
+<div class="toolbar">
+  <div class="file-breadcrumb">
+    <a
+      href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}"
+      >{{.Info.Slug}}</a
+    ><span>/</span>{{if .Path}}<a
+      href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.Path}}"
+      >{{.Path}}</a
+    ><span>/</span>{{end}}<strong>{{base .Name}}</strong>
+  </div>
+  <a
+    class="button secondary small"
+    href="/p/{{.Info.Slug}}/download?version={{.Commit.ID}}&amp;path={{.Name}}"
+    >Download</a
+  >
+</div>
+<section class="panel file-preview">
+  {{template "version-strip" .}}
+  <div class="preview-meta">
+    {{template "file"}}<strong>{{base .Name}}</strong
+    ><span class="muted">{{bytes .Entry.Size}}</span>
+  </div>
+  {{if eq .Kind "markdown"}}
+  <article class="markdown">{{.Body}}</article>
+  {{else if eq .Kind "text"}}
+  <div class="source-preview">{{.Body}}</div>
+  {{else if eq .Kind "image"}}
+  <div class="media-preview">
+    <img
+      src="/p/{{.Info.Slug}}/raw?version={{.Commit.ID}}&amp;path={{.Name}}"
+      alt="{{base .Name}}"
+    />
+  </div>
+  {{else if eq .Kind "audio"}}
+  <div class="media-preview">
+    <audio
+      controls
+      preload="metadata"
+      src="/p/{{.Info.Slug}}/raw?version={{.Commit.ID}}&amp;path={{.Name}}"
+    >
+      Audio preview unavailable.
+    </audio>
+  </div>
+  {{else if eq .Kind "video"}}
+  <div class="media-preview">
+    <video
+      controls
+      preload="metadata"
+      src="/p/{{.Info.Slug}}/raw?version={{.Commit.ID}}&amp;path={{.Name}}"
+    >
+      Video preview unavailable.
+    </video>
+  </div>
+  {{else}}
+  <div class="empty">
+    <p>{{.Notice}}</p>
+    <a
+      class="button secondary"
+      href="/p/{{.Info.Slug}}/download?version={{.Commit.ID}}&amp;path={{.Name}}"
+      >Download file</a
+    >
+  </div>
+  {{end}}
+</section>
+{{end}}{{template "bottom" .}}{{end}} {{define "project-history"}}{{template
+"top" .}}{{with .Data}}{{template "project-top" .}}
 <div class="toolbar">
   {{template "branch-picker" .}}<span class="muted">First-parent history</span>
 </div>
-<section class="card flush">
+<section class="panel">
   {{range .History}}
   <article class="history-row">
-    <span class="history-dot" aria-hidden="true"></span>
+    <span class="avatar" aria-hidden="true"
+      >{{if .Author}}{{slice .Author 0 1}}{{else}}·{{end}}</span
+    >
     <div class="history-copy">
-      <h2>
-        <a href="/p/{{$.Data.Info.Slug}}?branch={{$.Data.Branch}}&amp;version={{.ID}}"
-          >{{.Message}}</a
-        >
-      </h2>
-      <p>
-        {{if .Author}}<strong>{{.Author}}</strong> ·
-        {{end}}{{date .Created}}
-      </p>
+      <a
+        href="/p/{{$.Data.Info.Slug}}?branch={{$.Data.Branch}}&amp;version={{.ID}}"
+        ><strong>{{.Message}}</strong></a
+      ><small>{{if .Author}}{{.Author}} · {{end}}{{date .Created}}</small>
     </div>
     {{if not .Retained}}<span class="badge amber">Contents released</span
     >{{end}}<a
@@ -247,10 +316,7 @@ lode save -m 'Initial version'</code></pre>
     >
   </article>
   {{else}}
-  <div class="empty">
-    <h2>No versions yet.</h2>
-    <p>Save your first version with the CLI to begin the history.</p>
-  </div>
+  <div class="empty">No versions.</div>
   {{end}}
 </section>
 {{if .Next}}
@@ -258,18 +324,16 @@ lode save -m 'Initial version'</code></pre>
   <a
     class="button secondary"
     href="/p/{{.Info.Slug}}/history?branch={{.Branch}}&amp;before={{.Next}}"
-    >Older versions →</a
+    >Older versions</a
   >
 </div>
-{{end}}{{end}}{{template "bottom" .}}{{end}}
-{{define "project-branches"}}{{template "top" .}}{{with .Data}}{{template "project-top" .}}
-<div class="section-heading">
-  <div>
-    <h2>Branches</h2>
-    <p>Give parallel work a place of its own.</p>
-  </div>
-</div>
-<section class="card flush">
+{{end}} {{end}}{{template "bottom" .}}{{end}} {{define
+"project-branches"}}{{template "top" .}}{{with .Data}}{{template "project-top"
+.}}
+<section class="panel">
+  <h2 class="panel-title">
+    Branches <span class="count">{{len .Branches}}</span>
+  </h2>
   <div class="table-wrap">
     <table>
       <thead>
@@ -283,16 +347,18 @@ lode save -m 'Initial version'</code></pre>
         {{range .Branches}}
         <tr>
           <td>
-            <a href="/p/{{$.Data.Info.Slug}}?branch={{.Name}}"
-              >{{.Name}}</a
-            >{{if eq .Name "main"}}
-            <span class="badge">Default</span>{{end}}
+            <div class="file-name">
+              {{template "branch-icon"}}<a
+                href="/p/{{$.Data.Info.Slug}}?branch={{.Name}}"
+                >{{.Name}}</a
+              >{{if eq .Name "main"}}<span class="badge">Default</span>{{end}}
+            </div>
           </td>
           <td class="mono">
             {{if .Tip}}<a
               href="/p/{{$.Data.Info.Slug}}?branch={{.Name}}&amp;version={{.Tip}}"
               >{{short .Tip}}</a
-            >{{else}}No versions{{end}}
+            >{{else}}Empty{{end}}
           </td>
           <td class="align-right">
             {{if and $.Data.CanWrite (ne .Name "main")}}
@@ -316,40 +382,31 @@ lode save -m 'Initial version'</code></pre>
   </div>
 </section>
 {{if .CanWrite}}
-<section class="card form-card">
-  <h2>Create a branch</h2>
-  <form method="post" class="form-row">
-    <label
-      >Branch name<input
-        name="name"
-        required
-        placeholder="experiment"
-        maxlength="128" /></label><label
+<section class="panel">
+  <h2 class="panel-title">New branch</h2>
+  <form method="post" class="form-row panel-body">
+    <label>Branch name<input name="name" required maxlength="128" /></label
+    ><label
       >Start at version<select name="tip">
         {{range .Branches}}
         <option value="{{.Tip}}">
-          {{.Name}} —
-          {{if .Tip}}{{short .Tip}}{{else}}empty{{end}}
+          {{.Name}} — {{if .Tip}}{{short .Tip}}{{else}}empty{{end}}
         </option>
         {{end}}
-      </select></label><button type="submit">Create branch</button>
+      </select></label
+    ><button type="submit">Create branch</button>
   </form>
-  <p class="hint">Branch changes do not download or modify workspace files.</p>
 </section>
-{{end}}{{end}}{{template "bottom" .}}{{end}}
-{{define "project-members"}}{{template "top" .}}{{with .Data}}{{template "project-top" .}}
-<div class="section-heading">
-  <div>
-    <h2>Project members</h2>
-    <p>Give each collaborator the access they need.</p>
-  </div>
-</div>
-<section class="card flush">
+{{end}} {{end}}{{template "bottom" .}}{{end}} {{define
+"project-members"}}{{template "top" .}}{{with .Data}}{{template "project-top"
+.}}
+<section class="panel">
+  <h2 class="panel-title">Members</h2>
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Person</th>
+          <th>Username</th>
           <th>Role</th>
           <th><span class="sr-only">Actions</span></th>
         </tr>
@@ -368,16 +425,14 @@ lode save -m 'Initial version'</code></pre>
                 type="hidden"
                 name="user"
                 value="{{.UserID}}"
-              /><button class="quiet danger" type="submit">
-                Remove access
-              </button>
+              /><button class="quiet danger" type="submit">Remove</button>
             </form>
           </td>
         </tr>
         {{else}}
         <tr>
           <td colspan="3" class="table-empty">
-            No members added yet. Instance administrators already have access.
+            No members. Instance administrators have access.
           </td>
         </tr>
         {{end}}
@@ -385,65 +440,86 @@ lode save -m 'Initial version'</code></pre>
     </table>
   </div>
 </section>
-<section class="card form-card">
-  <h2>Add or update a member</h2>
-  <form method="post" class="form-row">
-    <label
-      >Username<input
-        name="username"
-        required
-        spellcheck="false"
-        autocomplete="off" /></label><label
-      >Role<select name="role">
-        <option value="reader">Reader</option><option value="writer">Writer</option><option value="maintainer">Maintainer</option>
-      </select></label><button type="submit">Save membership</button>
-  </form>
-  <p class="hint">
-    Readers browse and download. Writers save versions and manage branches.
-    Maintainers also manage members and release historical contents.
-  </p>
-</section>
-<p class="fine">
-  Instance administrators can maintain every project. Permission changes apply
-  to subsequent requests; active transfers may finish.
-</p>
-{{end}}{{template "bottom" .}}{{end}}
-{{define "project-storage"}}{{template "top" .}}{{with .Data}}{{template "project-top" .}}
-<div class="section-heading">
-  <div>
-    <h2>Keep the history that matters.</h2>
-    <p>
-      Release old contents deliberately. Branch tips and tags remain protected.
+<section class="panel">
+  <h2 class="panel-title">Add or update member</h2>
+  <div class="panel-body">
+    <form method="post" class="form-row">
+      <label
+        >Username<input
+          name="username"
+          required
+          spellcheck="false"
+          autocomplete="off" /></label
+      ><label
+        >Role<select name="role">
+          <option value="reader">Reader</option>
+          <option value="writer">Writer</option>
+          <option value="maintainer">Maintainer</option>
+        </select></label
+      ><button type="submit">Save membership</button>
+    </form>
+    <p class="hint">
+      Reader: browse and download. Writer: save and branch. Maintainer: also
+      manage members and storage.
     </p>
   </div>
-</div>
-{{if .Notice}}
+</section>
+{{end}}{{template "bottom" .}}{{end}} {{define "project-storage"}}{{template
+"top" .}}{{with .Data}}{{template "project-top" .}} {{if .Notice}}
 <div class="notice" role="status">{{.Notice}}</div>
 {{end}}
-<div class="two-columns">
-  <section class="card">
-    <span class="eyebrow">Historical contents</span>
-    <h2>Preview cleanup</h2>
+<section class="panel">
+  <h2 class="panel-title">Release historical contents</h2>
+  <div class="panel-body">
     <p>
-      Keep recent first-parent versions on each branch, including the tip. Zero
-      still protects tips and tags.
+      Branch tips and tags stay protected. Released versions keep metadata, but
+      their files become unavailable.
     </p>
-    <form method="post" class="stack">
+    <form method="post" class="form-row">
       <input type="hidden" name="action" value="preview" /><label
         >Versions to keep per branch<input
           type="number"
           min="0"
           name="keep"
           value="{{.Keep}}"
-          required /></label><button type="submit" class="secondary">Preview changes</button>
+          required /></label
+      ><button type="submit" class="secondary">Preview cleanup</button>
     </form>
-  </section>
-  <section class="card">
-    <span class="eyebrow">Physical storage</span>
-    <h2>Collect released contents</h2>
+  </div>
+</section>
+{{if .PlanToken}}
+<section class="panel">
+  <h2 class="panel-title">Cleanup preview</h2>
+  <div class="panel-body">
+    <div class="stats">
+      <span><strong>{{.Protected}}</strong> protected</span
+      ><span><strong>{{.Eligible}}</strong> eligible</span
+      ><span><strong>{{.Expired}}</strong> already released</span>
+    </div>
+    <form method="post">
+      <input type="hidden" name="action" value="apply" /><input
+        type="hidden"
+        name="keep"
+        value="{{.Keep}}"
+      /><input type="hidden" name="token" value="{{.PlanToken}}" /><button
+        type="submit"
+        class="danger-button"
+        {{if eq .Eligible 0}}
+        disabled
+        {{end}}
+      >
+        Release {{.Eligible}} historical versions
+      </button>
+    </form>
+  </div>
+</section>
+{{end}}
+<section class="panel">
+  <h2 class="panel-title">Collect released contents</h2>
+  <div class="panel-body">
     <p>
-      Reclaim unreferenced data using the storage engine's maintenance rules.
-      Safety delays can defer reclamation.
+      Reclaim unreferenced data. Storage-engine safety delays may postpone
+      reclamation.
     </p>
     <form method="post">
       <input type="hidden" name="action" value="collect" /><input
@@ -452,34 +528,6 @@ lode save -m 'Initial version'</code></pre>
         value="{{.Keep}}"
       /><button type="submit" class="secondary">Run collection</button>
     </form>
-  </section>
-</div>
-{{if .PlanToken}}
-<section class="card cleanup-preview">
-  <h2>Cleanup preview</h2>
-  <div class="stats">
-    <div><strong>{{.Protected}}</strong><span>protected</span></div>
-    <div>
-      <strong>{{.Eligible}}</strong><span>eligible for release</span>
-    </div>
-    <div><strong>{{.Expired}}</strong><span>already released</span></div>
   </div>
-  <p>
-    Released versions keep their history and file listings. Their file contents
-    will no longer be downloadable by anyone.
-  </p>
-  <form method="post">
-    <input type="hidden" name="action" value="apply" /><input
-      type="hidden"
-      name="keep"
-      value="{{.Keep}}"
-    /><input type="hidden" name="token" value="{{.PlanToken}}" /><button
-      type="submit"
-      class="danger-button"
-      {{if eq .Eligible 0}}disabled{{end}}
-    >
-      Release {{.Eligible}} historical versions
-    </button>
-  </form>
 </section>
-{{end}}{{end}}{{template "bottom" .}}{{end}}
+{{end}}{{template "bottom" .}}{{end}}

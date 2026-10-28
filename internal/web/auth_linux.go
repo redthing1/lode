@@ -3,6 +3,7 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -55,7 +56,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		redirect(w, r, "/login")
 		return
 	}
-	p := page{Title: "Make yourself at home"}
+	p := page{Title: "Create administrator"}
 	if r.Method == http.MethodPost {
 		if !s.attempts.allow("setup") {
 			s.fail(w, r, 429, "Too many setup attempts. Try again in a minute.")
@@ -89,7 +90,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		redirect(w, r, "/setup")
 		return
 	}
-	p := page{Title: "Welcome back"}
+	p := page{Title: "Sign in"}
 	if r.Method == http.MethodPost {
 		username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
 		if !s.attempts.allow("login:" + username) {
@@ -133,6 +134,60 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		status = 401
 	}
 	s.render(w, r, "login", p, status)
+}
+
+// passkey handles discoverable and username-first passkey sign-in. The browser
+// session binding keeps each one-use challenge tied to the client.
+func (s *Server) passkey(w http.ResponseWriter, r *http.Request) {
+	step := r.PathValue("step")
+	if step != "begin" && step != "finish" {
+		http.NotFound(w, r)
+		return
+	}
+	binding := s.sessions.GetString(r.Context(), "binding")
+	if binding == "" {
+		binding = project.NewID()
+		s.sessions.Put(r.Context(), "binding", binding)
+	}
+	if !s.attempts.allow("passkey:" + binding) {
+		s.fail(w, r, 429, "Too many sign-in attempts. Try again in a minute.")
+		return
+	}
+	if step == "begin" {
+		var input struct {
+			Username string `json:"username"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			http.Error(w, "Passkey sign-in could not be started.", http.StatusBadRequest)
+			return
+		}
+		id, options, err := s.security.BeginPasskey(r.Context(), binding, input.Username)
+		if err != nil {
+			if errors.Is(err, instance.ErrUnauthorized) {
+				http.Error(w, "The account or passkey could not be verified.", http.StatusUnauthorized)
+				return
+			}
+			http.Error(w, "Passkey sign-in is temporarily unavailable.", http.StatusServiceUnavailable)
+			return
+		}
+		jsonReply(w, struct {
+			ID      string `json:"id"`
+			Options any    `json:"options"`
+		}{id, options})
+		return
+	}
+	u, err := s.security.FinishPasskey(r.Context(), binding, r.URL.Query().Get("id"), r)
+	if err != nil {
+		http.Error(w, "The passkey could not be verified. Try again.", http.StatusUnauthorized)
+		return
+	}
+	if err := s.startSession(r, u, false); err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	jsonReply(w, struct {
+		Next string `json:"next"`
+	}{"/"})
 }
 
 func (s *Server) verify(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +254,7 @@ func (s *Server) ceremony(w http.ResponseWriter, r *http.Request) {
 	}
 	binding := s.sessions.GetString(r.Context(), "binding")
 	if r.PathValue("step") == "begin" {
-		id, options, err := s.security.Begin(r.Context(), u.ID, binding, purpose)
+		id, options, err := s.security.BeginWithMode(r.Context(), u.ID, binding, purpose, r.URL.Query().Get("mode"))
 		if err != nil {
 			http.Error(w, "Unable to start a security key challenge.", 400)
 			return

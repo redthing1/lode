@@ -5,6 +5,7 @@ package web
 import (
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"mime"
 	"net/http"
@@ -34,7 +35,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p := page{Title: "A home for your next project", Section: "projects", User: u}
+	p := page{Title: "New project", Section: "projects", User: u}
 	if r.Method == http.MethodPost {
 		created, err := s.i.CreateProject(r.Context(), r.FormValue("slug"))
 		if err != nil {
@@ -63,6 +64,8 @@ type projectView struct {
 	Notice                               string
 	Keep, Protected, Eligible, Expired   int
 	PlanToken                            string
+	ReadmeName                           string
+	ReadmeBody                           template.HTML
 }
 
 func (s *Server) access(w http.ResponseWriter, r *http.Request, role instance.Role) (instance.User, instance.Project, bool) {
@@ -143,6 +146,13 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, e := range entries {
 			v.Files = append(v.Files, fileRow{e, path.Base(e.Path)})
+		}
+		if v.Commit.Retained {
+			v.ReadmeName, _, v.ReadmeBody, err = readDirectoryReadme(r.Context(), p, info.Slug, id, v.Path)
+			if err != nil && !errors.Is(err, project.ErrExpired) {
+				s.internal(w, r, err)
+				return
+			}
 		}
 	}
 	s.renderProject(w, r, u, v, "")
