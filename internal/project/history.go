@@ -28,6 +28,30 @@ PRAGMA user_version=3;
 
 const commitColumns = "id,parent,second_parent,author,message,created,root<>'',actor_id"
 
+const inventoryHistory = `WITH RECURSIVE history(id,parent,checkpoint,n) AS (
+ SELECT id,parent,checkpoint,0 FROM commits WHERE id=?1
+ UNION ALL
+ SELECT c.id,c.parent,c.checkpoint,h.n+1 FROM commits c JOIN history h ON c.id=h.parent
+ WHERE NOT h.checkpoint AND h.n<63
+) `
+
+func (p *Project) prepareInventory(ctx context.Context) error {
+	// Keep history outermost so both path predicates use the compound key.
+	const entries = "SELECT e.path,e.kind,e.size,e.sha256,e.object,h.n FROM history h CROSS JOIN entries e ON e.commit_id=h.id"
+	const prefix = inventoryHistory + "SELECT path,kind,size,sha256,object FROM ("
+	var err error
+	p.inventoryBounds, err = p.db.PrepareContext(ctx, inventoryHistory+"SELECT count(*),coalesce(max(checkpoint),0) FROM history")
+	if err != nil {
+		return err
+	}
+	p.inventoryAll, err = p.db.PrepareContext(ctx, prefix+entries+") ORDER BY n")
+	if err != nil {
+		return err
+	}
+	p.inventorySelected, err = p.db.PrepareContext(ctx, prefix+entries+" WHERE e.path=?2 UNION ALL "+entries+" WHERE e.path>=?3 AND e.path<?4) ORDER BY n")
+	return err
+}
+
 func (p *Project) commit(ctx context.Context, id string) (Commit, error) {
 	return scanCommit(p.db.QueryRowContext(ctx, "SELECT "+commitColumns+" FROM commits WHERE id=?", id))
 }
@@ -78,58 +102,47 @@ func (p *Project) inventory(ctx context.Context, id string, selection model.Sele
 		}
 		return []content.Entry{}, nil
 	}
-	const selectEntries = "SELECT path,kind,size,sha256,object FROM entries WHERE commit_id=?1"
+	var count int
+	var checkpoint bool
+	if err := p.inventoryBounds.QueryRowContext(ctx, id).Scan(&count, &checkpoint); err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, ErrNotFound
+	}
+	if !checkpoint {
+		return nil, errors.New("history checkpoint is missing")
+	}
 	seen := map[string]bool{}
 	result := []content.Entry{}
-	for count := 0; id != ""; count++ {
-		if count >= 64 {
-			return nil, errors.New("history checkpoint is missing")
+	for _, scope := range scopes {
+		query := p.inventoryAll
+		if len(scope) != 0 {
+			query = p.inventorySelected
 		}
-		var parent sql.NullString
-		var checkpoint bool
-		if err := p.db.QueryRowContext(ctx, "SELECT parent,checkpoint FROM commits WHERE id=?", id).Scan(&parent, &checkpoint); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil, ErrNotFound
-			}
+		rows, err := query.QueryContext(ctx, append([]any{id}, scope...)...)
+		if err != nil {
 			return nil, err
 		}
-		for _, scope := range scopes {
-			query := selectEntries
-			if len(scope) != 0 {
-				// On WITHOUT ROWID tables, OR can scan every entry of a commit.
-				// Separate indexed searches keep selected reads proportional to
-				// their prefixes. ?1 shares the version parameter in both arms.
-				query += " AND path=? UNION ALL " + selectEntries + " AND path>=? AND path<?"
-			}
-			args := append([]any{id}, scope...)
-			rows, err := p.db.QueryContext(ctx, query, args...)
-			if err != nil {
+		for rows.Next() {
+			var e content.Entry
+			if err := rows.Scan(&e.Path, &e.Kind, &e.Size, &e.SHA256, &e.Object); err != nil {
+				rows.Close()
 				return nil, err
 			}
-			for rows.Next() {
-				var e content.Entry
-				if err := rows.Scan(&e.Path, &e.Kind, &e.Size, &e.SHA256, &e.Object); err != nil {
-					rows.Close()
-					return nil, err
-				}
-				if !seen[e.Path] {
-					seen[e.Path] = true
-					if e.Kind != model.Absent && selection.Includes(e.Path) {
-						result = append(result, e)
-					}
+			if !seen[e.Path] {
+				seen[e.Path] = true
+				if e.Kind != model.Absent && selection.Includes(e.Path) {
+					result = append(result, e)
 				}
 			}
-			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-				return nil, err
-			}
 		}
-		if checkpoint {
-			sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
-			return result, nil
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return nil, err
 		}
-		id = parent.String
 	}
-	return nil, errors.New("history ended without a checkpoint")
+	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
+	return result, nil
 }
 
 func (p *Project) accept(ctx context.Context, r Request, root string, before, after []content.Entry) (Commit, error) {

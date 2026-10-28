@@ -49,6 +49,8 @@ type Project struct {
 	owner    *os.File
 	config   Config
 	closed   bool
+
+	inventoryBounds, inventoryAll, inventorySelected *sql.Stmt
 }
 
 func Create(ctx context.Context, directory string) (*Project, error) {
@@ -130,6 +132,9 @@ func open(ctx context.Context, directory string, create bool) (_ *Project, err e
 		}
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := p.prepareInventory(ctx); err != nil {
 		return nil, err
 	}
 	p.contents, err = content.Open(ctx, filepath.Join(directory, "content"), p.config.Password, create)

@@ -369,6 +369,25 @@ func TestSelectedHistoryOverlappingPrefixesAndExclusions(t *testing.T) {
 	}
 }
 
+func TestInventoryRejectsMissingCheckpoint(t *testing.T) {
+	tp := newTestProject(t)
+	first := save(t, tp.p, request(fileEntry("kept", []byte("original"))), map[string][]byte{"kept": []byte("original")})
+	r := request(fileEntry("changed", []byte("new")))
+	r.Base = first.ID
+	second := save(t, tp.p, r, map[string][]byte{"changed": []byte("new")})
+	if _, err := tp.p.db.Exec("UPDATE commits SET checkpoint=0 WHERE id=?", first.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, selection := range []model.Selection{nil, {{Path: "changed", Include: true}}} {
+		if entries, err := tp.p.Entries(tp.ctx, second.ID, selection); err == nil || len(entries) != 0 {
+			t.Fatalf("incomplete history returned entries: %v, %v", entries, err)
+		}
+	}
+	if _, err := tp.p.Entries(tp.ctx, NewID(), nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown version = %v", err)
+	}
+}
+
 func TestBranchMetadataCRUD(t *testing.T) {
 	tp := newTestProject(t)
 	ctx := tp.ctx
