@@ -283,10 +283,9 @@ p.hint:empty {
 .brand:hover {
   text-decoration: none;
 }
-.brand .icon {
-  width: 22px;
-  height: 22px;
-  color: var(--link);
+.app-icon {
+  width: 26px;
+  height: 26px;
 }
 .bar nav {
   display: flex;

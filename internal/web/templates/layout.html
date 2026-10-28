@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{.Title}} · Lode</title>
+    <link rel="icon" href="/assets/icon.svg" type="image/svg+xml" />
     <script src="/assets/theme.js"></script>
     <link rel="stylesheet" href="/assets/style.css" />
     <script src="/assets/app.js" defer></script>
@@ -12,7 +13,7 @@
     <a class="skip" href="#main">Skip to content</a>
     <header class="bar">
       <a class="brand" href="/" aria-label="Lode home"
-        >{{template "repo-icon"}}<span>Lode</span></a
+        ><img class="app-icon" src="/assets/icon.svg" alt="" /><span>Lode</span></a
       >
       {{if .User.ID}}
       <nav aria-label="Main navigation">
