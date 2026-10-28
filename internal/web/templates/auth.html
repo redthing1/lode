@@ -15,7 +15,7 @@
         name="username"
         minlength="3"
         maxlength="32"
-        pattern="[a-z0-9_-]{3,32}"
+        pattern="[a-z0-9_\-]{3,32}"
         required
         autocomplete="username"
         spellcheck="false"
@@ -66,7 +66,21 @@
       key.
     </p>
     <p class="hint" data-security-status role="status" aria-live="polite"></p>
+    {{if .Data}}<p><a href="/register">Create an account</a></p>{{end}}
   </div>
+</section>
+{{template "bottom" .}}{{end}}
+{{define "register"}}{{template "top" .}}
+<section class="auth-panel panel">
+  <h1 class="panel-title">Create account</h1>
+  <form action="/register" method="post" class="stack panel-body">
+    <label>Username<input name="username" required minlength="3" maxlength="32" pattern="[a-z0-9_\-]{3,32}" autocomplete="username" spellcheck="false" /></label>
+    <label>Password<input type="password" name="password" required minlength="12" maxlength="1024" autocomplete="new-password" /></label>
+    <label>Confirm password<input type="password" name="confirm" required minlength="12" maxlength="1024" autocomplete="new-password" /></label>
+    <p class="hint">At least 12 characters.</p>
+    <button type="submit">Create account</button>
+    <a href="/login">Sign in</a>
+  </form>
 </section>
 {{template "bottom" .}}{{end}} {{define "verify"}}{{template "top" .}}
 <section class="auth-panel panel">

@@ -33,16 +33,16 @@ lode init -url http://localhost:8473 ./instance
 lode serve ./instance
 ```
 
-Open the setup URL and enter the code printed by `init`. Choose an administrator username and a password of at least 12 characters. The administrator creates projects and accounts in the web interface; each user can create personal access tokens in account settings. Use an HTTPS origin with `-url` when serving beyond loopback; see [operations](doc/operations.md#host-an-instance).
+Open the setup URL and enter the code printed by `init`. Choose an administrator username and a password of at least 12 characters. Each signed-in user can create private projects under their username; administrators also manage accounts and all projects. Users create personal access tokens in account settings. Use an HTTPS origin with `-url` when serving beyond loopback; see [operations](doc/operations.md#host-an-instance).
 
 ## Connect a workspace
 
-Create a project named `example` in the web interface, then open **Settings → Access tokens** from the account menu to create a token. From the CLI, log in to the project URL and connect a folder:
+Create a project named `example` in the web interface, then open **Settings → Access tokens** from the account menu to create a token. Project URLs use `/<username>/<project>`; replace `alice` below with your username. From the CLI, log in to the project URL and connect a folder:
 
 ```sh
-lode login http://localhost:8473/p/example
+lode login http://localhost:8473/alice/example
 mkdir -p ./work
-lode attach http://localhost:8473/p/example ./work
+lode attach http://localhost:8473/alice/example ./work
 cd ./work
 printf 'First version\n' > example.bin
 lode save -m 'Initial version'

@@ -52,7 +52,7 @@ func (s *Server) tokens(w http.ResponseWriter, r *http.Request) {
 	}
 	v.ProjectNames = make(map[string]string, len(v.Projects))
 	for _, p := range v.Projects {
-		v.ProjectNames[p.ID] = p.Slug
+		v.ProjectNames[p.ID] = p.Path()
 	}
 	s.render(w, r, "tokens", page{Title: "Access tokens", Section: "tokens", User: u, Error: message, Data: v}, 200)
 }
@@ -70,8 +70,10 @@ func (s *Server) revokeToken(w http.ResponseWriter, r *http.Request) {
 }
 
 type usersView struct {
-	Users             []instance.User
-	Created, Password string
+	Users            []instance.User
+	Account          instance.User
+	Password         string
+	RegistrationOpen bool
 }
 
 func (s *Server) users(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +81,7 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v := usersView{}
+	v := usersView{RegistrationOpen: s.i.Config.RegistrationOpen}
 	message := ""
 	if r.Method == http.MethodPost {
 		if !s.fresh(w, r) {
@@ -90,7 +92,7 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			message = "Choose an unused username with 3–32 lowercase letters, digits, underscores or hyphens."
 		} else {
-			v.Created, v.Password = created.Username, password
+			v.Account, v.Password = created, password
 		}
 	}
 	var err error
@@ -99,20 +101,65 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, r, err)
 		return
 	}
-	s.render(w, r, "users", page{Title: "People", Section: "admin", User: u, Error: message, Data: v}, 200)
+	s.render(w, r, "users", page{Title: "Users", Section: "admin-users", User: u, Error: message, Data: v}, 200)
 }
 
-func (s *Server) userState(w http.ResponseWriter, r *http.Request) {
-	_, ok := s.admin(w, r)
+func (s *Server) adminUser(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.admin(w, r)
 	if !ok {
 		return
 	}
-	if !s.fresh(w, r) {
+	account, err := s.i.LookupUser(r.Context(), r.PathValue("username"))
+	if err != nil {
+		s.fail(w, r, 404, "This account is unavailable.")
 		return
 	}
-	if _, err := s.i.SetUserState(r.Context(), r.FormValue("id"), r.FormValue("disabled") == "on", r.FormValue("admin") == "on"); err != nil {
-		s.fail(w, r, 400, "Keep at least one enabled administrator. The account could not be changed.")
+	v := struct {
+		Account  instance.User
+		Password string
+	}{Account: account}
+	message := ""
+	if r.Method == http.MethodPost {
+		if !s.fresh(w, r) {
+			return
+		}
+		switch r.FormValue("action") {
+		case "reset":
+			password := project.NewID()
+			if account.ID == u.ID {
+				message = "Use account security settings to change your own credentials."
+			} else if v.Account, err = s.i.ResetAccount(r.Context(), account.Username, password); err != nil {
+				message = "The account could not be reset."
+			} else {
+				v.Password = password
+			}
+		case "state":
+			if _, err := s.i.SetUserState(r.Context(), account.ID, r.FormValue("disabled") == "on", r.FormValue("admin") == "on"); err != nil {
+				message = "Keep at least one enabled administrator. The account could not be changed."
+			} else {
+				redirect(w, r, "/-/admin/users/"+account.Username)
+				return
+			}
+		default:
+			message = "Choose an account action."
+		}
+	}
+	status := http.StatusOK
+	if message != "" {
+		status = http.StatusBadRequest
+	}
+	s.render(w, r, "admin-user", page{Title: account.Username, Section: "admin-users", User: u, Error: message, Data: v}, status)
+}
+
+func (s *Server) adminProjects(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.admin(w, r)
+	if !ok {
 		return
 	}
-	redirect(w, r, "/admin/users")
+	items, err := s.i.Projects(r.Context(), u.ID)
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	s.render(w, r, "admin-projects", page{Title: "Projects", Section: "admin-projects", User: u, Data: items}, http.StatusOK)
 }

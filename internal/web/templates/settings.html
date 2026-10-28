@@ -210,7 +210,7 @@
         >Project<select name="project">
           <option value="">All accessible projects</option>
           {{range .Projects}}
-          <option value="{{.ID}}">{{.Slug}}</option>
+          <option value="{{.ID}}">{{.Path}}</option>
           {{end}}
         </select></label
       ><label
@@ -237,62 +237,27 @@
 "users"}}{{template "top" .}}{{template "settings-top" .}}
 <div class="page-heading">
   <h1>Users</h1>
-  <span class="badge">Registration closed</span>
+  <span class="badge">Registration {{if .Data.RegistrationOpen}}open{{else}}closed{{end}}</span>
 </div>
-{{with .Data}}{{if .Password}}
-<section class="notice secret" role="status">
-  <strong>Created {{.Created}}</strong>
-  <p>Temporary password. Must be changed at first sign-in.</p>
-  <code data-copy-value>{{.Password}}</code
-  ><button type="button" class="secondary small" data-copy>Copy password</button
-  ><span class="hint" data-copy-status role="status"></span>
-</section>
-{{end}}
+{{with .Data}}{{template "temporary-password" .}}
 <section class="panel">
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
           <th>Username</th>
-          <th>Account settings</th>
+          <th>Role</th>
+          <th>Status</th>
+          <th><span class="sr-only">Edit</span></th>
         </tr>
       </thead>
       <tbody>
         {{range .Users}}
         <tr>
-          <td>
-            <strong>{{.Username}}</strong>{{if .ForcePasswordChange}}<small
-              >Password change required</small
-            >{{end}}
-          </td>
-          <td>
-            <form
-              action="/admin/users/state"
-              method="post"
-              class="user-controls"
-            >
-              <input type="hidden" name="id" value="{{.ID}}" /><label
-                class="check"
-                ><input
-                  type="checkbox"
-                  name="admin"
-                  {{if
-                  .Admin}}
-                  checked
-                  {{end}}
-                />Administrator</label
-              ><label class="check"
-                ><input
-                  type="checkbox"
-                  name="disabled"
-                  {{if
-                  .Disabled}}
-                  checked
-                  {{end}}
-                />Disabled</label
-              ><button class="secondary small" type="submit">Save</button>
-            </form>
-          </td>
+          <td><a href="/-/admin/users/{{.Username}}">{{.Username}}</a></td>
+          <td>{{if .Admin}}Administrator{{else}}User{{end}}</td>
+          <td>{{if .Disabled}}Disabled{{else if .ForcePasswordChange}}Password change required{{else}}Active{{end}}</td>
+          <td class="align-right"><a href="/-/admin/users/{{.Username}}">Edit</a></td>
         </tr>
         {{end}}
       </tbody>
@@ -307,7 +272,7 @@
         >Username<input
           name="username"
           required
-          pattern="[a-z0-9_-]{3,32}"
+          pattern="[a-z0-9_\-]{3,32}"
           maxlength="32"
           autocomplete="off"
           spellcheck="false" /></label
@@ -321,3 +286,57 @@
   </div>
 </section>
 {{end}}{{template "settings-bottom" .}}{{template "bottom" .}}{{end}}
+
+{{define "admin-projects"}}{{template "top" .}}{{template "settings-top" .}}
+<div class="page-heading"><h1>Projects <span class="count">{{len .Data}}</span></h1></div>
+<section class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Project</th><th><span class="sr-only">Actions</span></th></tr></thead>
+      <tbody>
+        {{range .Data}}<tr>
+          <td>{{if .Deleting}}<strong>{{.Path}}</strong><small>Deletion pending</small>{{else}}<a href="/{{.Path}}">{{.Path}}</a>{{end}}</td>
+          <td class="align-right">{{if not .Deleting}}<a href="/{{.Path}}/members">Settings</a> · {{end}}<a class="danger" href="/{{.Path}}/delete">{{if .Deleting}}Complete deletion{{else}}Delete{{end}}</a></td>
+        </tr>{{else}}<tr><td colspan="2" class="table-empty">No projects.</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+</section>
+{{template "settings-bottom" .}}{{template "bottom" .}}{{end}}
+
+{{define "temporary-password"}}{{if .Password}}
+<section class="notice secret" role="status">
+  <strong>Temporary password for {{.Account.Username}}</strong>
+  <p>Shown once. Must be changed at next sign-in.</p>
+  <code data-copy-value>{{.Password}}</code><button type="button" class="secondary small" data-copy>Copy password</button><span class="hint" data-copy-status role="status"></span>
+</section>
+{{end}}{{end}}
+
+{{define "admin-user"}}{{template "top" .}}{{template "settings-top" .}}{{with .Data}}
+<div class="page-heading"><h1><a href="/-/admin/users">Users</a> / {{.Account.Username}}</h1></div>
+{{template "temporary-password" .}}
+<section class="panel">
+  <h2 class="panel-title">Account</h2>
+  <form method="post" class="stack panel-body narrow-form">
+    <input type="hidden" name="action" value="state" />
+    <label class="check"><input type="checkbox" name="admin" {{if .Account.Admin}}checked{{end}} />Administrator</label>
+    <label class="check"><input type="checkbox" name="disabled" {{if .Account.Disabled}}checked{{end}} />Disabled</label>
+    <p class="hint">Disabling sign-in preserves owned projects and their collaborators' access.</p>
+    <button type="submit">Save changes</button>
+  </form>
+</section>
+{{if ne .Account.ID $.User.ID}}
+<section class="panel">
+  <h2 class="panel-title">Reset access</h2>
+  <div class="panel-body">
+    <p>Replaces the password and revokes all sessions, keys, recovery codes and tokens.</p>
+    <details>
+      <summary>Reset credentials</summary>
+      <form method="post" class="stack narrow-form">
+        <input type="hidden" name="action" value="reset" />
+        <button class="secondary danger" type="submit">Reset {{.Account.Username}}</button>
+      </form>
+    </details>
+  </div>
+</section>
+{{end}}{{end}}{{template "settings-bottom" .}}{{template "bottom" .}}{{end}}

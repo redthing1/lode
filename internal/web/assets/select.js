@@ -25,7 +25,10 @@
     const label = select.labels[0];
     const caption = label?.cloneNode(true);
     caption?.querySelectorAll("select").forEach((node) => node.remove());
-    button.setAttribute("aria-label", caption?.textContent.trim() || select.name);
+    button.setAttribute(
+      "aria-label",
+      select.getAttribute("aria-label") || caption?.textContent.trim() || select.name,
+    );
     const value = document.createElement("span");
     button.append(value);
     const list = document.createElement("span");

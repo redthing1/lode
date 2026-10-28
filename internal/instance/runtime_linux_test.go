@@ -30,6 +30,15 @@ func newTestInstance(t *testing.T) (*Instance, string, string) {
 	return i, setupCode, directory
 }
 
+func setupTestOwner(t *testing.T, i *Instance, setupCode, username string) User {
+	t.Helper()
+	user, err := i.Setup(context.Background(), setupCode, username, "a sufficiently long test password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return user
+}
+
 func TestCanonicalURLNormalizesOriginsAndRejectsUnsafeForms(t *testing.T) {
 	for _, test := range []struct{ input, want string }{
 		{"https://EXAMPLE.com/", "https://example.com"},
@@ -83,11 +92,12 @@ func TestCreatePublishesInitializedInstanceAndOpenNeverRecreatesMissingDB(t *tes
 }
 
 func TestOpenOwnershipLockAndCloseWaitForProjectLeases(t *testing.T) {
-	i, _, directory := newTestInstance(t)
+	i, setupCode, directory := newTestInstance(t)
 	if _, err := Open(context.Background(), directory); err == nil || !strings.Contains(err.Error(), "instance is in use") {
 		t.Fatalf("second Open while active = %v", err)
 	}
-	info, err := i.CreateProject(context.Background(), "leased")
+	owner := setupTestOwner(t, i, setupCode, "owner")
+	info, err := i.CreateProject(context.Background(), owner.ID, "leased")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,11 +119,12 @@ func TestOpenOwnershipLockAndCloseWaitForProjectLeases(t *testing.T) {
 }
 
 func TestNativeProjectCacheIsBoundedAndOnlyEvictsIdleProjects(t *testing.T) {
-	i, _, _ := newTestInstance(t)
+	i, setupCode, _ := newTestInstance(t)
 	ctx := context.Background()
+	owner := setupTestOwner(t, i, setupCode, "owner")
 	var projects []Project
 	for index := 0; index < 9; index++ {
-		created, err := i.CreateProject(ctx, "project-"+string(rune('a'+index)))
+		created, err := i.CreateProject(ctx, owner.ID, "project-"+string(rune('a'+index)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -147,12 +158,73 @@ func TestNativeProjectCacheIsBoundedAndOnlyEvictsIdleProjects(t *testing.T) {
 	}
 }
 
+func TestOwnedProjectNamespacesAndPrivateListing(t *testing.T) {
+	ctx := context.Background()
+	i, setupCode, _ := newTestInstance(t)
+	setupTestOwner(t, i, setupCode, "admin")
+	owner, err := i.CreateUser(ctx, "owner", "temporary owner password", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err = i.SetPassword(ctx, owner.ID, "a permanent owner password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := i.CreateUser(ctx, "member", "temporary member password", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err = i.SetPassword(ctx, member.ID, "a permanent member password")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ownersProject, err := i.CreateProject(ctx, owner.ID, "shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	membersProject, err := i.CreateProject(ctx, member.ID, "shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ownersProject.ID == membersProject.ID || ownersProject.Path() != "owner/shared" || membersProject.Path() != "member/shared" {
+		t.Fatalf("project namespaces: owner=%+v member=%+v", ownersProject, membersProject)
+	}
+	if _, err := i.CreateProject(ctx, owner.ID, "shared"); err == nil {
+		t.Fatal("same owner created a duplicate project slug")
+	}
+	lookedUp, err := i.Project(ctx, "owner", "shared")
+	if err != nil || lookedUp.ID != ownersProject.ID || lookedUp.OwnerID != owner.ID || lookedUp.Path() != "owner/shared" {
+		t.Fatalf("owner project lookup = %+v, %v", lookedUp, err)
+	}
+	if _, err := i.Project(ctx, "missing", "shared"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("wrong owner project lookup = %v, want not found", err)
+	}
+
+	visible, err := i.Projects(ctx, owner.ID)
+	if err != nil || len(visible) != 1 || visible[0].ID != ownersProject.ID {
+		t.Fatalf("owner's private project list = %#v, %v", visible, err)
+	}
+	visible, err = i.Projects(ctx, member.ID)
+	if err != nil || len(visible) != 1 || visible[0].ID != membersProject.ID {
+		t.Fatalf("member's private project list = %#v, %v", visible, err)
+	}
+	if err := i.PutMembership(ctx, member.ID, ownersProject.ID, RoleWriter); err != nil {
+		t.Fatal(err)
+	}
+	visible, err = i.Projects(ctx, member.ID)
+	if err != nil || len(visible) != 2 {
+		t.Fatalf("member's shared project list = %#v, %v", visible, err)
+	}
+}
+
 func TestCreateProjectRegistrationFailurePreservesOrphanAndBackupRefusesIt(t *testing.T) {
-	i, _, directory := newTestInstance(t)
+	i, setupCode, directory := newTestInstance(t)
+	owner := setupTestOwner(t, i, setupCode, "owner")
 	if _, err := i.db.Exec(`CREATE TRIGGER fail_project_registration BEFORE INSERT ON projects BEGIN SELECT RAISE(FAIL,'injected registration failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	_, err := i.CreateProject(context.Background(), "orphan")
+	_, err := i.CreateProject(context.Background(), owner.ID, "orphan")
 	if err == nil || !strings.Contains(err.Error(), "preserved at") || !strings.Contains(err.Error(), "not registered") {
 		t.Fatalf("CreateProject failure = %v", err)
 	}

@@ -33,7 +33,7 @@ func TestExpiredBaseStillSupportsPartialUpdateAndSave(t *testing.T) {
 	base := w.State().Base
 	write(t, localDir, "selected", []byte("local work"))
 	write(t, sourceDir, "unloaded", []byte("new unloaded"))
-	current := publishWorkspace(t, sourceDir)
+	current := publishWorkspace(t, s, sourceDir)
 	expireHistory(t, s.p)
 	if _, err := s.p.Collect(context.Background()); err != nil {
 		t.Fatal(err)

@@ -70,14 +70,19 @@ func New(i *instance.Instance, version string) (http.Handler, error) {
 	assets, _ := fs.Sub(files, "assets")
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServerFS(assets)))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	mux.HandleFunc("/p/{slug}/v1/{rest...}", s.api)
 	mux.HandleFunc("GET /api/me", s.me)
+	// Separate wildcard project routes from reserved system paths, and keep
+	// streamed API requests outside browser sessions and the form body limit.
+	api := http.NewServeMux()
+	api.HandleFunc("/{owner}/{slug}/v1/{rest...}", s.api)
 	web := http.NewServeMux()
 	web.HandleFunc("GET /{$}", s.projects)
 	web.HandleFunc("GET /setup", s.setup)
 	web.HandleFunc("POST /setup", s.setup)
 	web.HandleFunc("GET /login", s.login)
 	web.HandleFunc("POST /login", s.login)
+	web.HandleFunc("GET /register", s.register)
+	web.HandleFunc("POST /register", s.register)
 	web.HandleFunc("POST /passkey/{step}", s.passkey)
 	web.HandleFunc("GET /verify", s.verify)
 	web.HandleFunc("POST /verify/recovery", s.recover)
@@ -97,24 +102,32 @@ func New(i *instance.Instance, version string) (http.Handler, error) {
 	web.HandleFunc("POST /settings/tokens/revoke", s.revokeToken)
 	web.HandleFunc("GET /projects/new", s.createProject)
 	web.HandleFunc("POST /projects/new", s.createProject)
-	web.HandleFunc("GET /p/{slug}", s.projectFiles)
-	web.HandleFunc("GET /p/{slug}/history", s.projectHistory)
-	web.HandleFunc("GET /p/{slug}/branches", s.projectBranches)
-	web.HandleFunc("POST /p/{slug}/branches", s.projectBranches)
-	web.HandleFunc("GET /p/{slug}/storage", s.projectStorage)
-	web.HandleFunc("POST /p/{slug}/storage", s.projectStorage)
-	web.HandleFunc("GET /p/{slug}/members", s.projectMembers)
-	web.HandleFunc("POST /p/{slug}/members", s.projectMembers)
-	web.HandleFunc("GET /p/{slug}/download", s.download)
-	web.HandleFunc("GET /p/{slug}/file", s.projectFile)
-	web.HandleFunc("GET /p/{slug}/raw", s.rawFile)
-	web.HandleFunc("GET /admin/users", s.users)
-	web.HandleFunc("POST /admin/users", s.users)
-	web.HandleFunc("POST /admin/users/state", s.userState)
-	mux.Handle("/", session.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	projects := http.NewServeMux()
+	projects.HandleFunc("GET /{owner}/{slug}", s.projectFiles)
+	projects.HandleFunc("GET /{owner}/{slug}/history", s.projectHistory)
+	projects.HandleFunc("GET /{owner}/{slug}/branches", s.projectBranches)
+	projects.HandleFunc("POST /{owner}/{slug}/branches", s.projectBranches)
+	projects.HandleFunc("GET /{owner}/{slug}/storage", s.projectStorage)
+	projects.HandleFunc("POST /{owner}/{slug}/storage", s.projectStorage)
+	projects.HandleFunc("GET /{owner}/{slug}/members", s.projectMembers)
+	projects.HandleFunc("POST /{owner}/{slug}/members", s.projectMembers)
+	projects.HandleFunc("GET /{owner}/{slug}/delete", s.deleteProject)
+	projects.HandleFunc("POST /{owner}/{slug}/delete", s.deleteProject)
+	projects.HandleFunc("GET /{owner}/{slug}/download", s.download)
+	projects.HandleFunc("GET /{owner}/{slug}/file", s.projectFile)
+	projects.HandleFunc("GET /{owner}/{slug}/raw", s.rawFile)
+	web.Handle("/", projects)
+	web.HandleFunc("GET /-/admin/users", s.users)
+	web.HandleFunc("POST /-/admin/users", s.users)
+	web.HandleFunc("GET /-/admin/users/{username}", s.adminUser)
+	web.HandleFunc("POST /-/admin/users/{username}", s.adminUser)
+	web.HandleFunc("GET /-/admin/projects", s.adminProjects)
+	browser := session.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		web.ServeHTTP(w, r)
-	})))
+	}))
+	api.Handle("/", browser)
+	mux.Handle("/", api)
 	protected := http.NewCrossOriginProtection().Handler(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -195,7 +208,7 @@ func (s *Server) require(w http.ResponseWriter, r *http.Request) (instance.User,
 
 func (s *Server) fresh(w http.ResponseWriter, r *http.Request) bool {
 	if time.Now().Unix()-s.sessions.GetInt64(r.Context(), "authenticated") > 600 {
-		s.fail(w, r, 403, "Sign in again before changing account security or creating an access token.")
+		s.fail(w, r, 403, "Sign in again to continue.")
 		return false
 	}
 	return true
@@ -207,7 +220,7 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) (instance.User, b
 		return u, false
 	}
 	if !u.Admin {
-		s.fail(w, r, 403, "Only instance administrators can manage users and create projects.")
+		s.fail(w, r, 403, "Instance administrator access is required.")
 		return u, false
 	}
 	return u, true
@@ -224,7 +237,7 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid or expired access token", 401)
 		return
 	}
-	info, err := s.i.Project(r.Context(), r.PathValue("slug"))
+	info, err := s.i.Project(r.Context(), r.PathValue("owner"), r.PathValue("slug"))
 	if err != nil {
 		if errors.Is(err, instance.ErrNotFound) {
 			http.NotFound(w, r)

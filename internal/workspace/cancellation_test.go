@@ -69,10 +69,10 @@ func sha256Bytes(data []byte) []byte {
 
 func TestResumeFinishesCommittedCleanupAfterCancellation(t *testing.T) {
 	oldBytes := bytes.Repeat([]byte{0x19}, 128<<10)
-	_, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"a": oldBytes}, nil)
+	s, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"a": oldBytes}, nil)
 	newBytes := bytes.Repeat([]byte{0x20}, 128<<10)
 	write(t, sourceDir, "a", newBytes)
-	newBase := publishWorkspace(t, sourceDir)
+	newBase := publishWorkspace(t, s, sourceDir)
 	client, err := w.client()
 	if err != nil {
 		t.Fatal(err)

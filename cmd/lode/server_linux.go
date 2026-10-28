@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/redthing1/lode/internal/instance"
@@ -39,11 +40,19 @@ func runServer(ctx context.Context, command string, args []string, address, publ
 		}
 		defer i.Close()
 		if command == "import" {
-			p, err := i.ImportProject(ctx, args[1], args[2])
+			ownerName, slug, ok := strings.Cut(args[1], "/")
+			if !ok {
+				return errors.New("import target must be OWNER/PROJECT")
+			}
+			owner, err := i.LookupUser(ctx, ownerName)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "Imported project: %s/p/%s\n", i.Config.URL, p.Slug)
+			p, err := i.ImportProject(ctx, owner.ID, slug, args[2])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Imported project: %s/%s\n", i.Config.URL, p.Path())
 			return nil
 		}
 		password := project.NewID()

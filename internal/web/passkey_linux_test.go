@@ -258,7 +258,7 @@ func TestPasskeyHTTPLoginIsPrimaryAndCookieIsNotAPIAuth(t *testing.T) {
 	}
 	api := b.get("/api/me")
 	wantStatus(t, api, http.StatusUnauthorized)
-	projectAPI := b.get("/p/no-project/v1/head?branch=main")
+	projectAPI := b.get("/owner/no-project/v1/head?branch=main")
 	wantStatus(t, projectAPI, http.StatusUnauthorized)
 	if replay := f.finish(t, b, challenge, 2); replay.status != http.StatusUnauthorized {
 		t.Fatalf("replayed assertion status %d, want 401: %s", replay.status, replay.body)

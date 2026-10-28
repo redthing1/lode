@@ -11,7 +11,7 @@ lode init -url https://lode.example.com ./instance
 lode serve -listen 127.0.0.1:8473 ./instance
 ```
 
-`init` prints a one-time setup code. Open the displayed `/setup` URL, create the first administrator, then create projects and accounts in the web interface. For local evaluation, `http://localhost:8473` is accepted without TLS. Use HTTPS for remote access; browsers allow WebAuthn on localhost for local evaluation.
+`init` prints a one-time setup code. Open the displayed `/setup` URL and create the first administrator. Signed-in users create private projects under their usernames at `/<username>/<project>`; administrators manage accounts at `/-/admin/users` and all projects at `/-/admin/projects`. For local evaluation, `http://localhost:8473` is accepted without TLS. Use HTTPS for remote access; browsers allow WebAuthn on localhost for local evaluation.
 
 Put a TLS reverse proxy on the host. For example, a [Caddy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy) site can use:
 
@@ -27,7 +27,9 @@ The server only listens on loopback. Do not expose its listener directly to a ne
 
 ## Accounts and recovery
 
-The first account is an instance administrator. Administrators create more accounts; there is no public registration. Each new account receives a temporary password that must be changed at first sign-in. Administrators can disable accounts and change their administrator status. Account password recovery is a local operator action described below.
+The first account is an instance administrator. Administrators create accounts at `/-/admin/users`; each new account receives a temporary password that must be changed at first sign-in. Administrators can disable accounts or change their administrator status. Disabling an account prevents sign-in but preserves its projects and data. Administrators can reset another account from the same page. Reset displays a temporary password once, invalidates sessions and tokens, removes security keys and recovery codes, and requires a password change. The reset preserves the account role, enabled state, and project data.
+
+Public registration is closed by default. To enable it, stop the server, set `"registration_open": true` in `instance.json`, and restart. New registrations create ordinary accounts. Set it to `false` and restart to close registration.
 
 Users can register up to ten FIDO2 credentials for passwordless sign-in, with or without entering a username. Password sign-in uses a registered key as a second factor; single-use recovery codes provide a fallback. Removing the final key disables the second factor. Recovery codes are shown only when generated.
 
@@ -38,6 +40,8 @@ lode recover ./instance USERNAME
 ```
 
 The command prints a generated temporary password, invalidates browser sessions and personal tokens, removes registered security keys and recovery codes, and requires a password change at next sign-in. It does not change the account's role or enabled state. Protect the terminal output as a credential.
+
+Project owners and instance administrators can delete projects from the web interface. A deletion request is refused while that project has active requests. If shutdown interrupts an accepted deletion, the next server start completes it.
 
 ## Run with Podman Compose
 
@@ -86,13 +90,13 @@ lode serve ./restored-instance
 
 Run only one copy at a time. Existing destinations are never replaced. Backup verifies the database and projects before publishing the copy. It does not hash every content payload. A failure before publication removes its owned staging directory; the final destination appears only after verification.
 
-To bring a legacy single-project store into a new instance, stop both servers and import the project under a new project slug:
+To add an existing native project store to an instance, stop any server using the source project store and the destination instance, then import it for an existing owner account under a project name that is unused for that owner:
 
 ```sh
-lode import ./instance example ./old-project-store
+lode import ./instance alice/assets ./project-store
 ```
 
-Import preserves the project's immutable ID and history. The old shared project token is not accepted by the instance; create accounts, memberships, and new personal tokens in the web interface. Clone the imported project into a new workspace. To carry unsaved edits forward, copy them into that workspace, review `lode status`, then save them. Resolve or cancel pending operations in the old workspace before moving the project.
+Import preserves the project ID and history. Create personal tokens and collaborator access in the web interface. Clone the imported project into a workspace; to carry unsaved edits forward, copy them into that workspace, review `lode status`, then save them. Resolve or cancel pending operations before moving the project.
 
 ## Storage and transfer limits
 

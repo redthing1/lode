@@ -32,7 +32,7 @@ func readerSource(data []byte) func(string) (io.ReadCloser, error) {
 func TestProjectURLPathRoutingAndValidation(t *testing.T) {
 	const id = "0123456789abcdef0123456789abcdef"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/p/demo-1/v1/info" {
+		if r.URL.Path != "/alice/demo-1/v1/info" {
 			t.Errorf("path=%q", r.URL.Path)
 		}
 		w.Header().Set(projectHeader, id)
@@ -40,16 +40,21 @@ func TestProjectURLPathRoutingAndValidation(t *testing.T) {
 		_, _ = io.WriteString(w, `{"id":"`+id+`"}`)
 	}))
 	defer srv.Close()
-	c, err := New(srv.URL+"/p/demo-1", "token", "")
+	c, err := New(srv.URL+"/alice/demo-1", "token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = c.Info(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	for _, suffix := range []string{"/p/Demo", "/p/a/b", "/p/demo/", "/p/d%65mo", "/other"} {
+	for _, suffix := range []string{"/Alice/demo", "/al/demo", "/" + strings.Repeat("a", 33) + "/demo", "/alice/" + strings.Repeat("a", 65), "/alice/a/b", "/alice/demo/", "/alice/d%65mo", "/alice/%2e%2e", "/p/demo"} {
 		if _, err := New(srv.URL+suffix, "token", ""); err == nil {
 			t.Errorf("accepted path %s", suffix)
+		}
+	}
+	for _, suffix := range []string{"/abc_1-x/project-2", "/a-b_c/project"} {
+		if _, err := New(srv.URL+suffix, "token", ""); err != nil {
+			t.Errorf("rejected valid path %s: %v", suffix, err)
 		}
 	}
 	canonical, err := CanonicalURL(srv.URL + "/")

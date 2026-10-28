@@ -157,7 +157,7 @@ func (s *Server) projectFile(w http.ResponseWriter, r *http.Request) {
 		if branch := r.URL.Query().Get("branch"); branch != "" {
 			query.Set("branch", branch)
 		}
-		http.Redirect(w, r, "/p/"+info.Slug+"?"+query.Encode(), http.StatusSeeOther)
+		http.Redirect(w, r, "/"+info.Path()+"?"+query.Encode(), http.StatusSeeOther)
 		return
 	}
 	entry, data, err := readPreviewBytes(func(consume func(model.Entry, io.Reader) error) error { return p.Read(r.Context(), id, name, consume) })
@@ -176,7 +176,7 @@ func (s *Server) projectFile(w http.ResponseWriter, r *http.Request) {
 	}
 	body := template.HTML("")
 	if presentation.Kind == previewMarkdown {
-		rendered, err := renderMarkdown(data, info.Slug, id, name)
+		rendered, err := renderMarkdown(data, info.Path(), id, name)
 		if err != nil {
 			s.internal(w, r, err)
 			return
@@ -307,7 +307,7 @@ func parseSingleRange(header string, size int64) (start, length int64, status in
 	return start, end - start + 1, http.StatusPartialContent, nil
 }
 
-func renderMarkdown(source []byte, slug, version, current string) (string, error) {
+func renderMarkdown(source []byte, projectPath, version, current string) (string, error) {
 	engine := goldmark.New(goldmark.WithExtensions(extension.GFM), goldmark.WithParserOptions(parser.WithAutoHeadingID()))
 	doc := engine.Parser().Parse(text.NewReader(source))
 	base := path.Dir(current)
@@ -351,11 +351,11 @@ func renderMarkdown(source []byte, slug, version, current string) (string, error
 		if resolved == "." {
 			resolved = ""
 		}
-		endpoint := "/p/" + url.PathEscape(slug) + "/file"
+		endpoint := "/" + projectPath + "/file"
 		if _, image := n.(*ast.Image); image {
-			endpoint = "/p/" + url.PathEscape(slug) + "/raw"
+			endpoint = "/" + projectPath + "/raw"
 		} else if strings.HasSuffix(parsed.Path, "/") {
-			endpoint = "/p/" + url.PathEscape(slug)
+			endpoint = "/" + projectPath
 		}
 		q := url.Values{"version": {version}, "path": {resolved}}
 		*dest = []byte(endpoint + "?" + q.Encode())
@@ -370,7 +370,7 @@ func renderMarkdown(source []byte, slug, version, current string) (string, error
 
 // readDirectoryReadme uses an explicit set of possible root README names, so it
 // remains bounded even when a directory has more entries than one listing page.
-func readDirectoryReadme(ctx context.Context, p *project.Project, slug, version, directory string) (string, model.Entry, template.HTML, error) {
+func readDirectoryReadme(ctx context.Context, p *project.Project, projectPath, version, directory string) (string, model.Entry, template.HTML, error) {
 	names := []string{"README.md", "readme.md", "Readme.md", "README.markdown", "readme.markdown", "README.mdown", "README.mkd", "README", "readme"}
 	for _, name := range names {
 		candidate := path.Join(directory, name)
@@ -400,7 +400,7 @@ func readDirectoryReadme(ctx context.Context, p *project.Project, slug, version,
 		if int64(len(data)) > maxTextPreview {
 			return candidate, e, "", nil
 		}
-		rendered, err := renderMarkdown(data, slug, version, candidate)
+		rendered, err := renderMarkdown(data, projectPath, version, candidate)
 		return candidate, e, template.HTML(rendered), err
 	}
 	return "", model.Entry{}, "", nil

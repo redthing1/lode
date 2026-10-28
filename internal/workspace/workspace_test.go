@@ -252,6 +252,7 @@ func TestInterruptedCheckoutResumesAndPreservesInstalledFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.UseToken(s.p.Token())
 	defer closeWorkspace(t, w)
 	if err := w.Resume(context.Background()); err != nil {
 		t.Fatalf("resume checkout: %v", err)
@@ -315,6 +316,7 @@ func TestResumeDoesNotTruncateInstalledHardlinkAndPreservesUnexpectedTarget(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.UseToken(s.p.Token())
 	if err := w.Resume(context.Background()); err != nil {
 		closeWorkspace(t, w)
 		t.Fatalf("resume after staged hardlink: %v", err)
@@ -340,6 +342,7 @@ func TestResumeDoesNotTruncateInstalledHardlinkAndPreservesUnexpectedTarget(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.UseToken(s.p.Token())
 	err = w.Resume(context.Background())
 	if err == nil {
 		closeWorkspace(t, w)

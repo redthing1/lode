@@ -4,22 +4,24 @@ Follow the [quickstart](../README.md#start-an-instance) to create a project and 
 
 ## Accounts and project access
 
-An instance administrator creates accounts and projects in the web interface. New accounts receive a temporary password and must choose a new password before using projects. Usernames are 3–32 lowercase letters, digits, underscores, or hyphens; passwords must be at least 12 characters. Registration is closed.
+Create a private project from **Projects → New project**. Its URL is `/<username>/<project>`, such as `https://lode.example.com/alice/assets`. Usernames use 3–32 lowercase letters, digits, underscores or hyphens; passwords require at least 12 characters. Administrator-created accounts must change their temporary password before using projects. Public registration is closed by default.
 
-Project maintainers can add existing accounts as readers, writers, or maintainers. Readers browse and download. Writers also save versions and manage branches. Maintainers can additionally manage project members and release historical contents. Instance administrators can maintain every project. A personal access token cannot administer the instance and cannot exceed its owner's current project permissions.
+Under **Project settings → Members**, add existing accounts as readers, writers or maintainers. Readers browse and download. Writers also save versions and manage branches. Maintainers also manage members and retention. Owners have maintainer access automatically; instance administrators can access every project. Tokens cannot exceed their owner's current project permissions or administer the instance.
+
+Owners and instance administrators can delete a project under its settings by confirming the full `username/project` name. Deletion removes all versions and contents and is refused while the project has active requests.
 
 Open **Settings → Access tokens** from the account menu. Choose one project or all projects you can access, a maximum role, and an expiry of 30, 90, or 365 days. Copy the token when it is created; it is shown only once. Revoke it from the same page when it is no longer needed.
 
 Log in to a project URL to save a project-specific credential:
 
 ```sh
-lode login https://lode.example.com/p/example
-lode attach https://lode.example.com/p/example ./work
+lode login https://lode.example.com/alice/example
+lode attach https://lode.example.com/alice/example ./work
 ```
 
 The prompt hides the token in a terminal. Lode verifies the account and project before saving it in your OS user configuration, with file permissions restricted to your account. Credentials are not stored in workspace state. A project-specific credential takes precedence; a credential saved for the instance origin is used as a fallback for its projects. `LODE_TOKEN` overrides either saved credential for the current command.
 
-`lode logout URL` removes the saved local credential for that URL. It does not revoke the server token; revoke tokens in the web interface. A local operator can reset an account with `lode recover INSTANCE USERNAME` while the server is stopped. The command prints a temporary password, invalidates sessions and tokens, removes security keys and recovery codes, and requires a password change at next sign-in.
+`lode logout URL` removes the saved local credential for that URL. It does not revoke the server token; revoke tokens in the web interface. An administrator can reset another account from `/-/admin/users`; the temporary password is shown once, sessions and tokens are invalidated, security keys and recovery codes are removed, and the account must change its password at next sign-in. The reset preserves the account role, enabled state, and project data. A local operator can do the same with `lode recover INSTANCE USERNAME` while the server is stopped.
 
 ## Browser sign-in and files
 

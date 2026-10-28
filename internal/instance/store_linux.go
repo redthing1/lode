@@ -82,16 +82,17 @@ CREATE TABLE users (
 	auth_version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL
 );
 CREATE TABLE memberships (
-	user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, project_id TEXT NOT NULL,
+	user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
 	role TEXT NOT NULL CHECK(role IN ('reader','writer','maintainer')), PRIMARY KEY(user_id, project_id)
 );
 CREATE TABLE projects (
-	id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, created INTEGER NOT NULL
+	id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), slug TEXT NOT NULL,
+	created INTEGER NOT NULL, deleting INTEGER NOT NULL DEFAULT 0 CHECK(deleting IN (0,1)), UNIQUE(owner_id,slug)
 );
 CREATE TABLE personal_tokens (
 	id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	name TEXT NOT NULL, prefix TEXT NOT NULL, secret_hash BLOB NOT NULL UNIQUE,
-	project_id TEXT, role TEXT NOT NULL CHECK(role IN ('reader','writer','maintainer')),
+	project_id TEXT REFERENCES projects(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('reader','writer','maintainer')),
 	created_at INTEGER NOT NULL, expires_at INTEGER, last_used_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1))
 );
 CREATE INDEX personal_tokens_owner ON personal_tokens(user_id,created_at);
@@ -107,7 +108,7 @@ CREATE TABLE sessions(token TEXT PRIMARY KEY,data BLOB NOT NULL,expiry INTEGER N
 			_, txErr = tx.Exec(schema)
 		}
 		if txErr == nil {
-			_, txErr = tx.Exec("PRAGMA user_version=2")
+			_, txErr = tx.Exec("PRAGMA user_version=3")
 		}
 		if txErr == nil {
 			txErr = tx.Commit()
@@ -119,24 +120,21 @@ CREATE TABLE sessions(token TEXT PRIMARY KEY,data BLOB NOT NULL,expiry INTEGER N
 			return nil, fmt.Errorf("initialize instance store: %w", txErr)
 		}
 	}
-	if err := migrateStore(context.Background(), db); err != nil {
+	if err := validateStore(context.Background(), db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return &Store{db: db}, nil
 }
 
-// migrateStore upgrades the original account-keyed ceremony table for anonymous
-// discoverable passkey challenges. Pending ceremonies are deliberately invalidated.
-func migrateStore(ctx context.Context, db *sql.DB) error {
+func validateStore(ctx context.Context, db *sql.DB) error {
 	var version int
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version != 1 && version != 2 {
-		return fmt.Errorf("unsupported instance database version %d (want 1 or 2)", version)
+	if version != 3 {
+		return fmt.Errorf("unsupported instance database version %d (want 3)", version)
 	}
-	// Both versions require the same durable tables. Never repair missing data.
 	for _, table := range []string{"instance_settings", "users", "memberships", "projects", "personal_tokens", "security_keys", "ceremonies", "recovery_codes", "sessions"} {
 		var exists int
 		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name=?", table).Scan(&exists); err != nil {
@@ -146,22 +144,7 @@ func migrateStore(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("instance database is missing required table %s", table)
 		}
 	}
-	if version == 2 {
-		return nil
-	}
-	return tx(ctx, db, func(t *sql.Tx) error {
-		if _, err := t.ExecContext(ctx, `CREATE TABLE ceremonies_v2(id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), binding TEXT NOT NULL, purpose TEXT NOT NULL, data BLOB NOT NULL, expires INTEGER NOT NULL, auth_version INTEGER NOT NULL)`); err != nil {
-			return err
-		}
-		if _, err := t.ExecContext(ctx, "DROP TABLE ceremonies"); err != nil {
-			return err
-		}
-		if _, err := t.ExecContext(ctx, "ALTER TABLE ceremonies_v2 RENAME TO ceremonies"); err != nil {
-			return err
-		}
-		_, err := t.ExecContext(ctx, "PRAGMA user_version=2")
-		return err
-	})
+	return nil
 }
 
 func tx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {

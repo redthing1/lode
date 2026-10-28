@@ -33,7 +33,7 @@
           </summary>
           <div class="popover menu">
             <a href="/settings/appearance">Settings</a>
-            {{if .User.Admin}}<a href="/admin/users">Site administration</a>{{end}}
+            {{if .User.Admin}}<a href="/-/admin/users">Site administration</a>{{end}}
             <form action="/logout" method="post">
               <button class="quiet" type="submit">Sign out</button>
             </form>
@@ -105,9 +105,10 @@
 >{{end}} {{define "settings-top"}}
 <div class="settings-layout">
   <nav class="settings-nav" aria-label="Settings">
-    {{if eq .Section "admin"}}
+    {{if or (eq .Section "admin-users") (eq .Section "admin-projects")}}
     <span class="nav-heading">Site administration</span>
-    <a href="/admin/users" aria-current="page">Users</a>
+    <a href="/-/admin/users" {{if eq .Section "admin-users"}}aria-current="page"{{end}}>Users</a>
+    <a href="/-/admin/projects" {{if eq .Section "admin-projects"}}aria-current="page"{{end}}>Projects</a>
     {{else}}
     <span class="nav-heading">Account settings</span>
     <a

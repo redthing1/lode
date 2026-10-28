@@ -31,17 +31,17 @@ func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
-	u, ok := s.admin(w, r)
+	u, ok := s.require(w, r)
 	if !ok {
 		return
 	}
 	p := page{Title: "New project", Section: "projects", User: u}
 	if r.Method == http.MethodPost {
-		created, err := s.i.CreateProject(r.Context(), r.FormValue("slug"))
+		created, err := s.i.CreateProject(r.Context(), u.ID, r.FormValue("slug"))
 		if err != nil {
 			p.Error = "Choose an unused project name with 1–64 lowercase letters, digits or internal hyphens."
 		} else {
-			redirect(w, r, "/p/"+created.Slug)
+			redirect(w, r, "/"+created.Path())
 			return
 		}
 	}
@@ -56,7 +56,7 @@ type projectView struct {
 	Info                                 instance.Project
 	URL, Tab, Branch, Path, Parent, Next string
 	Commit                               project.Commit
-	CanWrite, CanManage                  bool
+	CanWrite, CanManage, CanDelete       bool
 	Branches                             []project.Branch
 	Files                                []fileRow
 	History                              []project.Commit
@@ -73,7 +73,7 @@ func (s *Server) access(w http.ResponseWriter, r *http.Request, role instance.Ro
 	if !ok {
 		return u, instance.Project{}, false
 	}
-	info, err := s.i.Project(r.Context(), r.PathValue("slug"))
+	info, err := s.i.Project(r.Context(), r.PathValue("owner"), r.PathValue("slug"))
 	if err != nil {
 		if errors.Is(err, instance.ErrNotFound) {
 			s.fail(w, r, 404, "This project is unavailable.")
@@ -90,13 +90,55 @@ func (s *Server) access(w http.ResponseWriter, r *http.Request, role instance.Ro
 }
 
 func (s *Server) projectPage(info instance.Project, tab string) projectView {
-	return projectView{Info: info, URL: s.i.Config.URL + "/p/" + info.Slug, Tab: tab, Branch: "main", Keep: 10}
+	return projectView{Info: info, URL: s.i.Config.URL + "/" + info.Path(), Tab: tab, Branch: "main", Keep: 10}
 }
 
 func (s *Server) renderProject(w http.ResponseWriter, r *http.Request, u instance.User, v projectView, message string) {
 	v.CanWrite = s.i.Authorize(r.Context(), principal(u), v.Info.ID, instance.RoleWriter) == nil
 	v.CanManage = s.i.Authorize(r.Context(), principal(u), v.Info.ID, instance.RoleMaintainer) == nil
-	s.render(w, r, "project-"+v.Tab, page{Title: v.Info.Slug, Section: "projects", User: u, Error: message, Data: v}, 200)
+	v.CanDelete = u.Admin || v.Info.OwnerID == u.ID
+	s.render(w, r, "project-"+v.Tab, page{Title: v.Info.Path(), Section: "projects", User: u, Error: message, Data: v}, 200)
+}
+
+func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.require(w, r)
+	if !ok {
+		return
+	}
+	info, err := s.i.Project(r.Context(), r.PathValue("owner"), r.PathValue("slug"))
+	if err != nil {
+		s.fail(w, r, 404, "This project is unavailable.")
+		return
+	}
+	allowed, err := s.i.CanDeleteProject(r.Context(), principal(u), info.ID)
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	if !allowed {
+		s.fail(w, r, 403, "Only the owner or an instance administrator can delete this project.")
+		return
+	}
+	message := ""
+	if r.Method == http.MethodPost {
+		if !s.fresh(w, r) {
+			return
+		}
+		if r.FormValue("confirm") != info.Path() {
+			message = "Enter the full project name to confirm deletion."
+		} else if err := s.i.DeleteProject(r.Context(), principal(u), info.ID); err != nil {
+			if errors.Is(err, instance.ErrConflict) {
+				message = "This project has active requests. Try again when they finish."
+			} else {
+				s.internal(w, r, err)
+				return
+			}
+		} else {
+			redirect(w, r, "/")
+			return
+		}
+	}
+	s.renderProject(w, r, u, s.projectPage(info, "delete"), message)
 }
 
 func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +190,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request) {
 			v.Files = append(v.Files, fileRow{e, path.Base(e.Path)})
 		}
 		if v.Commit.Retained {
-			v.ReadmeName, _, v.ReadmeBody, err = readDirectoryReadme(r.Context(), p, info.Slug, id, v.Path)
+			v.ReadmeName, _, v.ReadmeBody, err = readDirectoryReadme(r.Context(), p, info.Path(), id, v.Path)
 			if err != nil && !errors.Is(err, project.ErrExpired) {
 				s.internal(w, r, err)
 				return
@@ -212,7 +254,7 @@ func (s *Server) projectBranches(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			message = "The branch could not be changed. Check its name and version, then refresh and try again."
 		} else {
-			redirect(w, r, "/p/"+info.Slug+"/branches")
+			redirect(w, r, "/"+info.Path()+"/branches")
 			return
 		}
 	}
@@ -245,7 +287,7 @@ func (s *Server) projectMembers(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			message = "Use an existing username and choose a project role."
 		} else {
-			redirect(w, r, "/p/"+info.Slug+"/members")
+			redirect(w, r, "/"+info.Path()+"/members")
 			return
 		}
 	}

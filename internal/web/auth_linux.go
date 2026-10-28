@@ -90,7 +90,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		redirect(w, r, "/setup")
 		return
 	}
-	p := page{Title: "Sign in"}
+	p := page{Title: "Sign in", Data: s.i.Config.RegistrationOpen}
 	if r.Method == http.MethodPost {
 		username := strings.ToLower(strings.TrimSpace(r.FormValue("username")))
 		if !s.attempts.allow("login:" + username) {
@@ -134,6 +134,48 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		status = 401
 	}
 	s.render(w, r, "login", p, status)
+}
+
+func (s *Server) register(w http.ResponseWriter, r *http.Request) {
+	if !s.i.Config.RegistrationOpen {
+		http.NotFound(w, r)
+		return
+	}
+	needed, err := s.i.SetupRequired(r.Context())
+	if err != nil {
+		s.internal(w, r, err)
+		return
+	}
+	if needed {
+		redirect(w, r, "/setup")
+		return
+	}
+	p := page{Title: "Create account"}
+	if r.Method == http.MethodPost {
+		if !s.attempts.allow("register") {
+			s.fail(w, r, 429, "Too many registration attempts. Try again in a minute.")
+			return
+		}
+		if r.FormValue("password") != r.FormValue("confirm") {
+			p.Error = "The passwords do not match."
+		} else {
+			u, err := s.i.Register(r.Context(), r.FormValue("username"), r.FormValue("password"))
+			if err != nil {
+				p.Error = "Choose an available username with 3–32 lowercase letters, digits, underscores or hyphens and a password of at least 12 characters."
+			} else if err := s.startSession(r, u, false); err != nil {
+				s.internal(w, r, err)
+				return
+			} else {
+				redirect(w, r, "/")
+				return
+			}
+		}
+	}
+	status := http.StatusOK
+	if p.Error != "" {
+		status = http.StatusBadRequest
+	}
+	s.render(w, r, "register", p, status)
 }
 
 // passkey handles discoverable and username-first passkey sign-in. The browser

@@ -43,7 +43,7 @@ func TestClassifyPreviewAllowlist(t *testing.T) {
 }
 
 func TestMarkdownPreviewEscapesHTMLAndRewritesLocalReferences(t *testing.T) {
-	got, err := renderMarkdown([]byte("<script>alert(1)</script>\n\n# Heading Name\n\n| one | two |\n| --- | --- |\n| a | b |\n\n[code](../src/main.go) ![photo](../assets/p.png) [web](https://example.test/x) ![remote](https://example.test/a.png)"), "demo", "v123", "docs/guide.md")
+	got, err := renderMarkdown([]byte("<script>alert(1)</script>\n\n# Heading Name\n\n| one | two |\n| --- | --- |\n| a | b |\n\n[code](../src/main.go) ![photo](../assets/p.png) [web](https://example.test/x) ![remote](https://example.test/a.png)"), "owner/demo", "v123", "docs/guide.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestMarkdownPreviewEscapesHTMLAndRewritesLocalReferences(t *testing.T) {
 			t.Fatalf("rendered Markdown contains unsafe content %q: %s", unsafe, got)
 		}
 	}
-	for _, want := range []string{"/p/demo/file?path=src%2Fmain.go&amp;version=v123", "/p/demo/raw?path=assets%2Fp.png&amp;version=v123", "https://example.test/x", `src=""`, `id="heading-name"`, "<table>"} {
+	for _, want := range []string{"/owner/demo/file?path=src%2Fmain.go&amp;version=v123", "/owner/demo/raw?path=assets%2Fp.png&amp;version=v123", "https://example.test/x", `src=""`, `id="heading-name"`, "<table>"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered Markdown lacks %q: %s", want, got)
 		}

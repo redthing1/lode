@@ -216,28 +216,28 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 		t.Fatalf("admin session missing after setup: %d %s", page.status, page.body)
 	}
 	wantStatus(t, admin.get("/setup"), http.StatusSeeOther)
-	wantStatus(t, admin.get("/admin/users"), http.StatusOK)
+	wantStatus(t, admin.get("/-/admin/users"), http.StatusOK)
 
 	// The administrator creates two projects, a member, and explicit access.
 	wantStatus(t, admin.post("/projects/new", postFields("slug", "binary-artifacts")), http.StatusSeeOther)
 	wantStatus(t, admin.post("/projects/new", postFields("slug", "private-notes")), http.StatusSeeOther)
-	firstProject, err := inst.Project(ctx, "binary-artifacts")
+	firstProject, err := inst.Project(ctx, "owner", "binary-artifacts")
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondProject, err := inst.Project(ctx, "private-notes")
+	secondProject, err := inst.Project(ctx, "owner", "private-notes")
 	if err != nil {
 		t.Fatal(err)
 	}
-	createUser := admin.post("/admin/users", postFields("username", "sam"))
+	createUser := admin.post("/-/admin/users", postFields("username", "sam"))
 	wantStatus(t, createUser, http.StatusOK)
 	temporaryPassword := secretFromPage(t, createUser.body)
-	adminAgain := admin.get("/admin/users")
+	adminAgain := admin.get("/-/admin/users")
 	wantStatus(t, adminAgain, http.StatusOK)
 	if strings.Contains(adminAgain.body, temporaryPassword) {
 		t.Fatal("temporary password was shown again")
 	}
-	wantStatus(t, admin.post("/p/binary-artifacts/members", postFields("username", "sam", "role", "writer")), http.StatusSeeOther)
+	wantStatus(t, admin.post("/owner/binary-artifacts/members", postFields("username", "sam", "role", "writer")), http.StatusSeeOther)
 	adminTokenPage := admin.post("/settings/tokens", postFields("name", "instance-maintenance", "project", firstProject.ID, "role", "maintainer", "days", "90"))
 	wantStatus(t, adminTokenPage, http.StatusOK)
 	adminToken := secretFromPage(t, adminTokenPage.body)
@@ -251,7 +251,7 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 	if login.header.Get("Location") != "/settings/security" {
 		t.Fatalf("forced password change redirected to %q", login.header.Get("Location"))
 	}
-	wantStatus(t, member.get("/p/binary-artifacts"), http.StatusSeeOther)
+	wantStatus(t, member.get("/owner/binary-artifacts"), http.StatusSeeOther)
 	changePassword := member.post("/settings/password", postFields("current", temporaryPassword, "password", "sam's permanent passphrase", "confirm", "sam's permanent passphrase"))
 	wantStatus(t, changePassword, http.StatusSeeOther)
 	if changePassword.header.Get("Location") != "/settings/security?changed=1" {
@@ -279,7 +279,7 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 		t.Fatalf("member tokens=%d err=%v", len(tokens), err)
 	}
 
-	client, err := remote.New(origin+"/p/binary-artifacts", memberToken, firstProject.ID)
+	client, err := remote.New(origin+"/owner/binary-artifacts", memberToken, firstProject.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,14 +325,14 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 	if branches, err := client.Branches(ctx); err != nil || len(branches) != 2 {
 		t.Fatalf("CLI branches %#v: %v", branches, err)
 	}
-	if page := member.get("/p/binary-artifacts/history"); page.status != http.StatusOK || !strings.Contains(page.body, "&lt;script&gt;") || strings.Contains(page.body, `<script>alert("unsafe")</script>`) {
+	if page := member.get("/owner/binary-artifacts/history"); page.status != http.StatusOK || !strings.Contains(page.body, "&lt;script&gt;") || strings.Contains(page.body, `<script>alert("unsafe")</script>`) {
 		t.Fatalf("history message was not safely rendered: %d %s", page.status, page.body)
 	}
-	branchPage := member.get("/p/binary-artifacts/branches")
+	branchPage := member.get("/owner/binary-artifacts/branches")
 	if branchPage.status != http.StatusOK || !strings.Contains(branchPage.body, "work") {
 		t.Fatalf("branch page omitted writer branch: %d %s", branchPage.status, branchPage.body)
 	}
-	filePage := member.get("/p/binary-artifacts")
+	filePage := member.get("/owner/binary-artifacts")
 	wantStatus(t, filePage, http.StatusOK)
 	if !strings.Contains(filePage.body, "&lt;svg onload=alert(1)&gt;.bin") || strings.Contains(filePage.body, "<svg onload=alert(1)>") {
 		t.Fatalf("file name was not escaped: %s", filePage.body)
@@ -340,7 +340,7 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 
 	// Follow the links rendered by the UI for opaque nested names. The branch
 	// context must survive directory navigation, parent navigation, and history.
-	branchFiles := member.get("/p/binary-artifacts?branch=work")
+	branchFiles := member.get("/owner/binary-artifacts?branch=work")
 	wantStatus(t, branchFiles, http.StatusOK)
 	if !selectedWorkBranch.MatchString(branchFiles.body) {
 		t.Fatalf("work branch was not selected: %s", branchFiles.body)
@@ -377,7 +377,7 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 	if !bytes.Equal([]byte(download.body), deepOne) {
 		t.Fatalf("nested file download %q, want opaque bytes %q", download.body, deepOne)
 	}
-	historyPage := member.get("/p/binary-artifacts/history?branch=work")
+	historyPage := member.get("/owner/binary-artifacts/history?branch=work")
 	wantStatus(t, historyPage, http.StatusOK)
 	versionHref := anchorWithText(t, historyPage.body, "Nested path version")
 	versionPage := member.get(versionHref)
@@ -393,7 +393,7 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 	if err := transfer.Signature(ctx, bytes.NewReader(two), int64(len(two)), signature); err != nil {
 		t.Fatal(err)
 	}
-	readURL := origin + "/p/binary-artifacts/v1/read?" + url.Values{"commit": {commitTwo.ID}, "path": {entryTwo.Path}}.Encode()
+	readURL := origin + "/owner/binary-artifacts/v1/read?" + url.Values{"commit": {commitTwo.ID}, "path": {entryTwo.Path}}.Encode()
 	readReq, err := http.NewRequestWithContext(ctx, http.MethodPost, readURL, signature)
 	if err != nil {
 		t.Fatal(err)
@@ -410,7 +410,7 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 		t.Fatalf("POST /read classification status=%d encoding=%q", readResp.StatusCode, readResp.Header.Get("Lode-Encoding"))
 	}
 
-	adminClient, err := remote.New(origin+"/p/binary-artifacts", adminToken, firstProject.ID)
+	adminClient, err := remote.New(origin+"/owner/binary-artifacts", adminToken, firstProject.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,13 +421,13 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 	if count, err := adminClient.ApplyCleanup(ctx, 1, planToken); err != nil || count != 1 {
 		t.Fatalf("cleanup expired %d versions: %v", count, err)
 	}
-	if page := member.get("/p/binary-artifacts?version=" + commitOne.ID); page.status != http.StatusOK || !strings.Contains(page.body, "Contents released") {
+	if page := member.get("/owner/binary-artifacts?version=" + commitOne.ID); page.status != http.StatusOK || !strings.Contains(page.body, "Contents released") {
 		t.Fatalf("released version metadata missing: %d %s", page.status, page.body)
 	}
-	expired := member.get("/p/binary-artifacts/download?" + url.Values{"version": {commitOne.ID}, "path": {entryOne.Path}}.Encode())
+	expired := member.get("/owner/binary-artifacts/download?" + url.Values{"version": {commitOne.ID}, "path": {entryOne.Path}}.Encode())
 	wantStatus(t, expired, http.StatusGone)
 
-	otherClient, err := remote.New(origin+"/p/private-notes", memberToken, secondProject.ID)
+	otherClient, err := remote.New(origin+"/owner/private-notes", memberToken, secondProject.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +436,7 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 	}
 
 	// A membership downgrade applies immediately to a previously issued token.
-	wantStatus(t, admin.post("/p/binary-artifacts/members", postFields("username", "sam", "role", "reader")), http.StatusSeeOther)
+	wantStatus(t, admin.post("/owner/binary-artifacts/members", postFields("username", "sam", "role", "reader")), http.StatusSeeOther)
 	if _, err := client.Entries(ctx, commitTwo.ID, model.Selection{{Path: "", Include: true}}); err != nil {
 		t.Fatalf("reader denied POST /entries: %v", err)
 	}
@@ -446,18 +446,18 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 	if _, err := client.PreviewCleanup(ctx, 1, nil); err == nil {
 		t.Fatal("reader previewed cleanup")
 	}
-	readerPage := member.get("/p/binary-artifacts/members")
+	readerPage := member.get("/owner/binary-artifacts/members")
 	wantStatus(t, readerPage, http.StatusForbidden)
-	wantStatus(t, member.get("/admin/users"), http.StatusForbidden)
+	wantStatus(t, member.get("/-/admin/users"), http.StatusForbidden)
 
 	// The account cannot remove the final enabled administrator.
 	adminUser, err := inst.LookupUser(ctx, "owner")
 	if err != nil {
 		t.Fatal(err)
 	}
-	lastAdmin := admin.post("/admin/users/state", postFields("id", adminUser.ID, "admin", "on", "disabled", "on"))
+	lastAdmin := admin.post("/-/admin/users/"+adminUser.Username, postFields("action", "state", "admin", "on", "disabled", "on"))
 	wantStatus(t, lastAdmin, http.StatusBadRequest)
-	wantStatus(t, admin.get("/admin/users"), http.StatusOK)
+	wantStatus(t, admin.get("/-/admin/users"), http.StatusOK)
 
 	// Password changes invalidate sibling browser sessions, while the active
 	// session continues with the updated auth version.
@@ -498,13 +498,13 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 		t.Fatalf("MFA user not sent to pending verification: %q", pendingLogin.header.Get("Location"))
 	}
 	wantStatus(t, member.get("/verify"), http.StatusOK)
-	if page := member.get("/p/binary-artifacts"); page.status != http.StatusSeeOther || page.header.Get("Location") != "/login" {
+	if page := member.get("/owner/binary-artifacts"); page.status != http.StatusSeeOther || page.header.Get("Location") != "/login" {
 		t.Fatalf("pending MFA opened project page: %d %q", page.status, page.header.Get("Location"))
 	}
 	if page := member.post("/settings/tokens", postFields("name", "pending", "project", firstProject.ID, "role", "reader", "days", "90")); page.status != http.StatusSeeOther || page.header.Get("Location") != "/login" {
 		t.Fatalf("pending MFA created token: %d %q", page.status, page.header.Get("Location"))
 	}
-	noBearer, err := http.Get(origin + "/p/binary-artifacts/v1/head?branch=main")
+	noBearer, err := http.Get(origin + "/owner/binary-artifacts/v1/head?branch=main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +532,7 @@ func TestHostedHTTPJourneyAndAuthorization(t *testing.T) {
 		t.Fatal("revoked token remained valid")
 	}
 	wantStatus(t, admin.get("/no-such-route"), http.StatusNotFound)
-	wantStatus(t, admin.post("/admin/users/state", postFields("id", memberUser.ID, "disabled", "on")), http.StatusSeeOther)
+	wantStatus(t, admin.post("/-/admin/users/"+memberUser.Username, postFields("action", "state", "disabled", "on")), http.StatusSeeOther)
 	if page := member.get("/"); page.status != http.StatusSeeOther || page.header.Get("Location") != "/login" {
 		t.Fatalf("disabled account retained browser access: %d %q", page.status, page.header.Get("Location"))
 	}

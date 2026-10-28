@@ -24,13 +24,13 @@ func TestHostedWorkspaceDoesNotPersistTokenAndStatusIsOffline(t *testing.T) {
 	const slug = "art"
 	h := remote.Handler(p)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/p/"+slug+"/v1/") {
+		if !strings.HasPrefix(r.URL.Path, "/owner/"+slug+"/v1/") {
 			http.NotFound(w, r)
 			return
 		}
 		r2 := r.Clone(r.Context())
 		u := *r.URL
-		u.Path = strings.TrimPrefix(u.Path, "/p/"+slug)
+		u.Path = strings.TrimPrefix(u.Path, "/owner/"+slug)
 		r2.URL = &u
 		h.ServeHTTP(w, r2)
 	}))
@@ -39,12 +39,9 @@ func TestHostedWorkspaceDoesNotPersistTokenAndStatusIsOffline(t *testing.T) {
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	w, err := Attach(context.Background(), srv.URL+"/p/"+slug, p.Token(), dir, nil)
+	w, err := Attach(context.Background(), srv.URL+"/owner/"+slug, p.Token(), dir, nil)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if w.State().Token != "" {
-		t.Fatal("hosted workspace retained a credential")
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
@@ -56,11 +53,17 @@ func TestHostedWorkspaceDoesNotPersistTokenAndStatusIsOffline(t *testing.T) {
 	if strings.Contains(string(data), p.Token()) {
 		t.Fatal("state file contains project token")
 	}
+	if strings.Contains(string(data), `"token"`) {
+		t.Fatal("state file contains the removed token field")
+	}
 	w, err = Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	if _, err := w.RemoteClient(); err == nil {
+		t.Fatal("reopened workspace supplied a credential")
+	}
 	if _, err := w.Status(context.Background()); err != nil {
 		t.Fatalf("offline status: %v", err)
 	}

@@ -38,12 +38,13 @@ func makeTransitionPair(t *testing.T, files map[string][]byte, selection model.S
 	return s, sourceDir, localDir, w
 }
 
-func publishWorkspace(t *testing.T, dir string) string {
+func publishWorkspace(t *testing.T, s *workspaceServer, dir string) string {
 	t.Helper()
 	w, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.UseToken(s.p.Token())
 	defer closeWorkspace(t, w)
 	return save(t, w).ID
 }
@@ -99,7 +100,7 @@ func TestUpdatePreservesLocalEditAndDoesNotFetchUnloadedFile(t *testing.T) {
 	localEdit := []byte("local dirty a")
 	write(t, localDir, "a", localEdit)
 	write(t, sourceDir, "b", []byte("b two"))
-	publishWorkspace(t, sourceDir)
+	publishWorkspace(t, s, sourceDir)
 	if err := w.Update(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +138,7 @@ func TestPartialStaleSaveCanUpdateThenSaveWithoutLosingOmittedChange(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	full.UseToken(s.p.Token())
 	write(t, fullDir, "b", []byte("b intervening"))
 	save(t, full)
 	closeWorkspace(t, full)
@@ -165,12 +167,12 @@ func TestUpdateConflictRequiresChoiceAndChoicesKeepWholeFile(t *testing.T) {
 		want string
 	}{{"ours", true, "local"}, {"theirs", false, "remote"}} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"a": []byte("base")}, nil)
+			s, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"a": []byte("base")}, nil)
 			local := []byte("local")
 			remote := []byte("remote")
 			write(t, localDir, "a", local)
 			write(t, sourceDir, "a", remote)
-			publishWorkspace(t, sourceDir)
+			publishWorkspace(t, s, sourceDir)
 			base := w.State().Base
 			if err := w.Update(context.Background(), nil); err == nil {
 				t.Fatal("conflicting update unexpectedly succeeded")
@@ -349,12 +351,12 @@ func TestSelectRefusesDirtyDeletionUntrackedAndNewChanges(t *testing.T) {
 
 func TestUpdateReplacesFileAndDirectoryAndPreflightsUnselectedChild(t *testing.T) {
 	t.Run("file to directory", func(t *testing.T) {
-		_, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"node": []byte("file")}, nil)
+		s, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"node": []byte("file")}, nil)
 		if err := os.Remove(filepath.Join(sourceDir, "node")); err != nil {
 			t.Fatal(err)
 		}
 		write(t, sourceDir, "node/child", []byte("child"))
-		publishWorkspace(t, sourceDir)
+		publishWorkspace(t, s, sourceDir)
 		if err := w.Update(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
@@ -363,7 +365,7 @@ func TestUpdateReplacesFileAndDirectoryAndPreflightsUnselectedChild(t *testing.T
 		}
 	})
 	t.Run("directory to file", func(t *testing.T) {
-		_, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"node/child": []byte("child")}, nil)
+		s, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"node/child": []byte("child")}, nil)
 		if err := os.Remove(filepath.Join(sourceDir, "node/child")); err != nil {
 			t.Fatal(err)
 		}
@@ -371,7 +373,7 @@ func TestUpdateReplacesFileAndDirectoryAndPreflightsUnselectedChild(t *testing.T
 			t.Fatal(err)
 		}
 		write(t, sourceDir, "node", []byte("file"))
-		publishWorkspace(t, sourceDir)
+		publishWorkspace(t, s, sourceDir)
 		if err := w.Update(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
@@ -380,7 +382,7 @@ func TestUpdateReplacesFileAndDirectoryAndPreflightsUnselectedChild(t *testing.T
 		}
 	})
 	t.Run("unselected child blocks", func(t *testing.T) {
-		_, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"node/selected": []byte("selected"), "node/hidden": []byte("hidden")}, model.Selection{{Path: "node", Include: true}, {Path: "node/hidden", Include: false}})
+		s, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"node/selected": []byte("selected"), "node/hidden": []byte("hidden")}, model.Selection{{Path: "node", Include: true}, {Path: "node/hidden", Include: false}})
 		if err := os.Remove(filepath.Join(sourceDir, "node/selected")); err != nil {
 			t.Fatal(err)
 		}
@@ -391,7 +393,7 @@ func TestUpdateReplacesFileAndDirectoryAndPreflightsUnselectedChild(t *testing.T
 			t.Fatal(err)
 		}
 		write(t, sourceDir, "node", []byte("file"))
-		publishWorkspace(t, sourceDir)
+		publishWorkspace(t, s, sourceDir)
 		write(t, localDir, "node/hidden", []byte("unselected local child"))
 		if err := w.Update(context.Background(), nil); err == nil {
 			t.Fatal("update replaced directory with unselected child")
@@ -440,7 +442,7 @@ func TestUpdateReplacesFileAndDirectoryAndPreflightsUnselectedChild(t *testing.T
 			t.Fatal(err)
 		}
 		write(t, sourceDir, "node", []byte("remote file outside selection"))
-		publishWorkspace(t, sourceDir)
+		publishWorkspace(t, s, sourceDir)
 		if err := w.Update(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
@@ -489,7 +491,7 @@ func TestTransitionResumeCompletesAndCancelRestores(t *testing.T) {
 			}
 			write(t, sourceDir, "a", []byte("new a"))
 			write(t, sourceDir, "b", []byte("new b"))
-			publishWorkspace(t, sourceDir)
+			publishWorkspace(t, s, sourceDir)
 			failB.Store(true)
 			if err := w.Update(context.Background(), nil); err == nil {
 				closeWorkspace(t, w)
@@ -504,6 +506,7 @@ func TestTransitionResumeCompletesAndCancelRestores(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			w.UseToken(s.p.Token())
 			defer closeWorkspace(t, w)
 			if cancel {
 				if err := w.Cancel(context.Background()); err != nil {
@@ -548,9 +551,9 @@ func TestTransitionPlanWithoutProgressRefusesResume(t *testing.T) {
 }
 
 func TestOrphanTransitionProgressIsOverwrittenByNextOperation(t *testing.T) {
-	_, sourceDir, _, w := makeTransitionPair(t, map[string][]byte{"a": []byte("one")}, nil)
+	s, sourceDir, _, w := makeTransitionPair(t, map[string][]byte{"a": []byte("one")}, nil)
 	write(t, sourceDir, "a", []byte("two"))
-	publishWorkspace(t, sourceDir)
+	publishWorkspace(t, s, sourceDir)
 	if err := w.Update(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -559,16 +562,16 @@ func TestOrphanTransitionProgressIsOverwrittenByNextOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, sourceDir, "a", []byte("three"))
-	publishWorkspace(t, sourceDir)
+	publishWorkspace(t, s, sourceDir)
 	if err := w.Update(context.Background(), nil); err != nil {
 		t.Fatalf("next transition was affected by orphan progress: %v", err)
 	}
 }
 
 func TestResumeUsesCommittedCursorToFinishCleanup(t *testing.T) {
-	_, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"a": []byte("old")}, nil)
+	s, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"a": []byte("old")}, nil)
 	write(t, sourceDir, "a", []byte("new"))
-	publishWorkspace(t, sourceDir)
+	publishWorkspace(t, s, sourceDir)
 	client, err := w.client()
 	if err != nil {
 		t.Fatal(err)
@@ -640,7 +643,7 @@ func TestCancelPreservesLaterEditUntilMovedAside(t *testing.T) {
 	}
 	write(t, sourceDir, "a", []byte("new a"))
 	write(t, sourceDir, "b", []byte("new b"))
-	publishWorkspace(t, sourceDir)
+	publishWorkspace(t, s, sourceDir)
 	failB.Store(true)
 	if err := w.Update(context.Background(), nil); err == nil {
 		closeWorkspace(t, w)
@@ -676,9 +679,9 @@ func TestCancelPreservesLaterEditUntilMovedAside(t *testing.T) {
 }
 
 func TestTransitionResumePreservesEditMadeAfterInstallBeforeProgress(t *testing.T) {
-	_, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"a": []byte("old")}, nil)
+	s, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"a": []byte("old")}, nil)
 	write(t, sourceDir, "a", []byte("new"))
-	publishWorkspace(t, sourceDir)
+	publishWorkspace(t, s, sourceDir)
 	client, err := w.client()
 	if err != nil {
 		t.Fatal(err)

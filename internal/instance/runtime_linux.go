@@ -25,24 +25,32 @@ import (
 )
 
 type Config struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
+	ID               string `json:"id"`
+	URL              string `json:"url"`
+	RegistrationOpen bool   `json:"registration_open"`
 }
 
 type Project struct {
-	ID      string
-	Slug    string
-	Created time.Time
+	ID       string
+	OwnerID  string
+	Owner    string
+	Slug     string
+	Created  time.Time
+	Deleting bool
 }
+
+func (p Project) Path() string { return p.Owner + "/" + p.Slug }
 
 type Member struct {
 	UserID, Username string
 	Role             Role
 	Disabled         bool
+	Owner            bool
 }
 
 func (i *Instance) Members(ctx context.Context, projectID string) ([]Member, error) {
-	rows, err := i.db.QueryContext(ctx, "SELECT u.id,u.username,m.role,u.disabled FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.project_id=? ORDER BY u.username", projectID)
+	rows, err := i.db.QueryContext(ctx, `SELECT u.id,u.username,'maintainer',u.disabled,1 FROM projects p JOIN users u ON u.id=p.owner_id WHERE p.id=?
+	 UNION ALL SELECT u.id,u.username,m.role,u.disabled,0 FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.project_id=? ORDER BY 5 DESC,2`, projectID, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +58,7 @@ func (i *Instance) Members(ctx context.Context, projectID string) ([]Member, err
 	var result []Member
 	for rows.Next() {
 		var m Member
-		if err := rows.Scan(&m.UserID, &m.Username, &m.Role, &m.Disabled); err != nil {
+		if err := rows.Scan(&m.UserID, &m.Username, &m.Role, &m.Disabled, &m.Owner); err != nil {
 			return nil, err
 		}
 		result = append(result, m)
@@ -250,10 +258,20 @@ func Open(ctx context.Context, directory string) (_ *Instance, err error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = i.finishProjectDeletions(ctx); err != nil {
+		return nil, err
+	}
 	if err = i.validateRegisteredProjects(ctx); err != nil {
 		return nil, err
 	}
 	return i, nil
+}
+
+func (i *Instance) Register(ctx context.Context, username, password string) (User, error) {
+	if !i.Config.RegistrationOpen {
+		return User{}, ErrUnauthorized
+	}
+	return i.Store.Register(ctx, username, password)
 }
 
 // Close is called after the HTTP server drains its requests.
@@ -297,7 +315,7 @@ func validSlug(s string) bool {
 	return true
 }
 
-func (i *Instance) CreateProject(ctx context.Context, slug string) (Project, error) {
+func (i *Instance) CreateProject(ctx context.Context, ownerID, slug string) (Project, error) {
 	if !validSlug(slug) {
 		return Project{}, errors.New("project name must use 1–64 lowercase letters, digits or internal hyphens")
 	}
@@ -306,8 +324,15 @@ func (i *Instance) CreateProject(ctx context.Context, slug string) (Project, err
 	if i.closed || i.Store == nil {
 		return Project{}, errors.New("instance is closed")
 	}
+	owner, err := i.GetUser(ctx, ownerID)
+	if err != nil {
+		return Project{}, err
+	}
+	if owner.Disabled || owner.ForcePasswordChange {
+		return Project{}, ErrUnauthorized
+	}
 	var exists int
-	if err := i.db.QueryRowContext(ctx, "SELECT count(*) FROM projects WHERE slug=?", slug).Scan(&exists); err != nil {
+	if err := i.db.QueryRowContext(ctx, "SELECT count(*) FROM projects WHERE owner_id=? AND slug=?", ownerID, slug).Scan(&exists); err != nil {
 		return Project{}, err
 	}
 	if exists != 0 {
@@ -318,7 +343,7 @@ func (i *Instance) CreateProject(ctx context.Context, slug string) (Project, err
 	if err != nil {
 		return Project{}, fmt.Errorf("project creation failed; staging data is preserved at %s: %w", stage, err)
 	}
-	info := Project{ID: p.ID(), Slug: slug, Created: time.Now().UTC()}
+	info := Project{ID: p.ID(), OwnerID: owner.ID, Owner: owner.Username, Slug: slug, Created: time.Now().UTC()}
 	if err := p.Close(); err != nil {
 		return Project{}, fmt.Errorf("project %s could not close; data is preserved at %s: %w", info.ID, stage, err)
 	}
@@ -329,14 +354,14 @@ func (i *Instance) CreateProject(ctx context.Context, slug string) (Project, err
 	if err := syncDirectory(filepath.Dir(destination)); err != nil {
 		return Project{}, fmt.Errorf("project %s is preserved at %s but its directory sync failed: %w", info.ID, destination, err)
 	}
-	_, err = i.db.ExecContext(ctx, "INSERT INTO projects(id,slug,created) VALUES(?,?,?)", info.ID, info.Slug, info.Created.Unix())
+	_, err = i.db.ExecContext(ctx, "INSERT INTO projects(id,owner_id,slug,created) VALUES(?,?,?,?)", info.ID, info.OwnerID, info.Slug, info.Created.Unix())
 	if err != nil {
 		return Project{}, fmt.Errorf("project %s is preserved at %s but is not registered: %w; stop the instance, move it outside projects, then import it to recover", info.ID, destination, err)
 	}
 	return info, nil
 }
 
-// ResetAccount is an explicit local-operator recovery operation. It does not
+// ResetAccount is an administrator or local-operator recovery operation. It does not
 // change account roles or enabled state; it invalidates sessions and
 // credentials and requires the account to choose a new password at next login.
 func (i *Instance) ResetAccount(ctx context.Context, username, newPassword string) (User, error) {
@@ -377,10 +402,10 @@ func (i *Instance) ResetAccount(ctx context.Context, username, newPassword strin
 	return result, err
 }
 
-// ImportProject copies a stopped legacy project into this instance without
+// ImportProject copies a stopped project store into this instance without
 // changing its immutable project ID. Registration follows durable publication;
 // a crash in between leaves recoverable project data rather than a false row.
-func (i *Instance) ImportProject(ctx context.Context, slug, source string) (Project, error) {
+func (i *Instance) ImportProject(ctx context.Context, ownerID, slug, source string) (Project, error) {
 	if !validSlug(slug) {
 		return Project{}, errors.New("project name must use 1–64 lowercase letters, digits or internal hyphens")
 	}
@@ -402,8 +427,12 @@ func (i *Instance) ImportProject(ctx context.Context, slug, source string) (Proj
 	if i.closed || i.Store == nil {
 		return Project{}, errors.New("instance is closed")
 	}
+	owner, err := i.GetUser(ctx, ownerID)
+	if err != nil {
+		return Project{}, err
+	}
 	var count int
-	if err := i.db.QueryRowContext(ctx, "SELECT count(*) FROM projects WHERE slug=?", slug).Scan(&count); err != nil {
+	if err := i.db.QueryRowContext(ctx, "SELECT count(*) FROM projects WHERE owner_id=? AND slug=?", ownerID, slug).Scan(&count); err != nil {
 		return Project{}, err
 	}
 	if count != 0 {
@@ -433,20 +462,20 @@ func (i *Instance) ImportProject(ctx context.Context, slug, source string) (Proj
 		return Project{}, fmt.Errorf("publish imported project %s: %w", config.ID, err)
 	}
 	published = true
-	info := Project{ID: config.ID, Slug: slug, Created: time.Now().UTC()}
+	info := Project{ID: config.ID, OwnerID: owner.ID, Owner: owner.Username, Slug: slug, Created: time.Now().UTC()}
 	if err := syncDirectory(filepath.Dir(destination)); err != nil {
 		return Project{}, fmt.Errorf("imported project %s is preserved at %s but directory sync failed: %w", info.ID, destination, err)
 	}
-	if _, err := i.db.ExecContext(ctx, "INSERT INTO projects(id,slug,created) VALUES(?,?,?)", info.ID, info.Slug, info.Created.Unix()); err != nil {
+	if _, err := i.db.ExecContext(ctx, "INSERT INTO projects(id,owner_id,slug,created) VALUES(?,?,?,?)", info.ID, info.OwnerID, info.Slug, info.Created.Unix()); err != nil {
 		return Project{}, fmt.Errorf("imported project %s is preserved at %s but is not registered: %w", info.ID, destination, err)
 	}
 	return info, nil
 }
 
-func (i *Instance) Project(ctx context.Context, slug string) (Project, error) {
+func (i *Instance) Project(ctx context.Context, owner, slug string) (Project, error) {
 	var p Project
 	var created int64
-	err := i.db.QueryRowContext(ctx, "SELECT id,slug,created FROM projects WHERE slug=?", slug).Scan(&p.ID, &p.Slug, &created)
+	err := i.db.QueryRowContext(ctx, `SELECT p.id,p.owner_id,u.username,p.slug,p.created,p.deleting FROM projects p JOIN users u ON u.id=p.owner_id WHERE u.username=? AND p.slug=?`, owner, slug).Scan(&p.ID, &p.OwnerID, &p.Owner, &p.Slug, &created, &p.Deleting)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}
@@ -455,8 +484,8 @@ func (i *Instance) Project(ctx context.Context, slug string) (Project, error) {
 }
 
 func (i *Instance) Projects(ctx context.Context, userID string) ([]Project, error) {
-	rows, err := i.db.QueryContext(ctx, `SELECT p.id,p.slug,p.created FROM projects p JOIN users u ON u.id=?
-	 WHERE NOT u.disabled AND (u.admin OR EXISTS(SELECT 1 FROM memberships m WHERE m.project_id=p.id AND m.user_id=u.id)) ORDER BY p.slug`, userID)
+	rows, err := i.db.QueryContext(ctx, `SELECT p.id,p.owner_id,owner.username,p.slug,p.created,p.deleting FROM projects p JOIN users owner ON owner.id=p.owner_id JOIN users u ON u.id=?
+	 WHERE NOT u.disabled AND (u.admin OR p.owner_id=u.id OR (NOT p.deleting AND EXISTS(SELECT 1 FROM memberships m WHERE m.project_id=p.id AND m.user_id=u.id))) ORDER BY owner.username,p.slug`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -465,7 +494,7 @@ func (i *Instance) Projects(ctx context.Context, userID string) ([]Project, erro
 	for rows.Next() {
 		var p Project
 		var created int64
-		if err := rows.Scan(&p.ID, &p.Slug, &created); err != nil {
+		if err := rows.Scan(&p.ID, &p.OwnerID, &p.Owner, &p.Slug, &created, &p.Deleting); err != nil {
 			return nil, err
 		}
 		p.Created = time.Unix(created, 0).UTC()
@@ -489,7 +518,7 @@ func (i *Instance) Acquire(ctx context.Context, id string) (*project.Project, fu
 			return nil, nil, project.ErrInvalid
 		}
 		var present int
-		if err := i.db.QueryRowContext(ctx, "SELECT count(*) FROM projects WHERE id=?", id).Scan(&present); err != nil {
+		if err := i.db.QueryRowContext(ctx, "SELECT count(*) FROM projects WHERE id=? AND NOT deleting", id).Scan(&present); err != nil {
 			return nil, nil, err
 		}
 		if present != 1 {

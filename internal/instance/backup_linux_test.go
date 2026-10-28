@@ -56,7 +56,7 @@ func TestBackupCreatesColdSelfContainedInstance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := i.CreateProject(ctx, "assets")
+	created, err := i.CreateProject(ctx, user.ID, "assets")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestBackupCreatesColdSelfContainedInstance(t *testing.T) {
 		t.Fatalf("backup account = %+v, %v", principal, err)
 	}
 	projects, err := copy.Projects(ctx, user.ID)
-	if err != nil || len(projects) != 1 || projects[0].ID != created.ID || projects[0].Slug != created.Slug {
+	if err != nil || len(projects) != 1 || projects[0].ID != created.ID || projects[0].Slug != created.Slug || projects[0].OwnerID != user.ID || projects[0].Owner != user.Username {
 		t.Fatalf("backup projects = %#v, %v", projects, err)
 	}
 	versioned, releaseCopy, err := copy.Acquire(ctx, created.ID)
@@ -133,7 +133,7 @@ func TestBackupCreatesColdSelfContainedInstance(t *testing.T) {
 	}
 }
 
-func TestBackupMigratesLegacyDatabaseOnlyInBackup(t *testing.T) {
+func TestBackupPreservesCurrentSchemaAndCredentials(t *testing.T) {
 	ctx := context.Background()
 	i, setupCode, source := newTestInstance(t)
 	user, err := i.Setup(ctx, setupCode, "owner", "correct horse battery staple")
@@ -150,13 +150,6 @@ func TestBackupMigratesLegacyDatabaseOnlyInBackup(t *testing.T) {
 	if err != nil || len(keysBefore) != 1 {
 		t.Fatalf("legacy key count %d: %v", len(keysBefore), err)
 	}
-	if _, err := i.db.ExecContext(ctx, `CREATE TABLE ceremonies_v1(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), binding TEXT NOT NULL, purpose TEXT NOT NULL, data BLOB NOT NULL, expires INTEGER NOT NULL, auth_version INTEGER NOT NULL);
-		INSERT INTO ceremonies_v1 SELECT * FROM ceremonies;
-		DROP TABLE ceremonies;
-		ALTER TABLE ceremonies_v1 RENAME TO ceremonies;
-		PRAGMA user_version=1`); err != nil {
-		t.Fatal(err)
-	}
 	if err := i.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -165,9 +158,9 @@ func TestBackupMigratesLegacyDatabaseOnlyInBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	destination := filepath.Join(t.TempDir(), "legacy-backup")
+	destination := filepath.Join(t.TempDir(), "current-backup")
 	if err := Backup(ctx, source, destination); err != nil {
-		t.Fatalf("backup legacy source: %v", err)
+		t.Fatalf("backup current source: %v", err)
 	}
 	sourceAfter, err := os.ReadFile(dbPath)
 	if err != nil {
@@ -179,10 +172,10 @@ func TestBackupMigratesLegacyDatabaseOnlyInBackup(t *testing.T) {
 
 	copy, err := Open(ctx, destination)
 	if err != nil {
-		t.Fatalf("open migrated backup: %v", err)
+		t.Fatalf("open backup: %v", err)
 	}
 	var version int
-	if err := copy.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+	if err := copy.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 3 {
 		t.Fatalf("backup schema version = %d, err %v", version, err)
 	}
 	backupSecurity, err := NewSecurity(copy.Store, testOrigin)
@@ -191,7 +184,7 @@ func TestBackupMigratesLegacyDatabaseOnlyInBackup(t *testing.T) {
 	}
 	keysAfter, err := backupSecurity.Keys(ctx, user.ID)
 	if err != nil || len(keysAfter) != 1 || !bytes.Equal(keysAfter[0].raw, keysBefore[0].raw) {
-		t.Fatalf("migrated backup key count %d, error %v", len(keysAfter), err)
+		t.Fatalf("backup key count %d, error %v", len(keysAfter), err)
 	}
 	if err := copy.Close(); err != nil {
 		t.Fatal(err)
@@ -233,8 +226,9 @@ func TestBackupRejectsDestinationsAndCleansCancelledWork(t *testing.T) {
 }
 
 func TestBackupRefusesAnIndependentlyOpenProject(t *testing.T) {
-	i, _, source := newTestInstance(t)
-	created, err := i.CreateProject(context.Background(), "locked")
+	i, setupCode, source := newTestInstance(t)
+	owner := setupTestOwner(t, i, setupCode, "owner")
+	created, err := i.CreateProject(context.Background(), owner.ID, "locked")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,15 +269,16 @@ func TestImportProjectPreservesIDAndContent(t *testing.T) {
 	if err := source.Close(); err != nil {
 		t.Fatal(err)
 	}
-	i, _, _ := newTestInstance(t)
-	imported, err := i.ImportProject(ctx, "legacy", sourceDir)
+	i, setupCode, _ := newTestInstance(t)
+	owner := setupTestOwner(t, i, setupCode, "owner")
+	imported, err := i.ImportProject(ctx, owner.ID, "legacy", sourceDir)
 	if err != nil {
 		t.Fatalf("import project: %v", err)
 	}
-	if imported.ID != projectID || imported.Slug != "legacy" {
+	if imported.ID != projectID || imported.Slug != "legacy" || imported.OwnerID != owner.ID || imported.Owner != owner.Username {
 		t.Fatalf("imported metadata = %+v; source ID %s", imported, projectID)
 	}
-	if _, err := i.ImportProject(ctx, "legacy-again", sourceDir); err == nil || !strings.Contains(err.Error(), "already registered") {
+	if _, err := i.ImportProject(ctx, owner.ID, "legacy-again", sourceDir); err == nil || !strings.Contains(err.Error(), "already registered") {
 		t.Fatalf("duplicate ID import = %v", err)
 	}
 	p, release, err := i.Acquire(ctx, projectID)

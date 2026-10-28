@@ -38,8 +38,8 @@ func Backup(ctx context.Context, source, destination string) (retErr error) {
 		return err
 	}
 
-	// Lock the cold source without opening it: Open applies schema migrations,
-	// which must only happen in the staged copy during backup.
+	// Lock without opening the source: recovery and SQLite writes belong only
+	// in the staged copy. A backup never changes the source's durable state.
 	owner, err := os.OpenFile(filepath.Join(source, "lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return fmt.Errorf("open backup source (stop its server first): %w", err)
@@ -101,14 +101,20 @@ func Backup(ctx context.Context, source, destination string) (retErr error) {
 			return err
 		}
 	}
-	// Migrate only the staged database, then use its registry to select project
-	// stores. The source database and any security keys remain byte-for-byte
-	// untouched, including legacy schema versions.
+	// Inspect the staged database, then use its registry to select project stores.
 	stagedStore, err := openStore(filepath.Join(stage, "instance.sqlite"), false)
 	if err != nil {
 		return fmt.Errorf("open staged instance database: %w", err)
 	}
-	projectIDs, err := registeredProjectIDs(ctx, stagedStore.db)
+	var deleting int
+	err = stagedStore.db.QueryRowContext(ctx, "SELECT count(*) FROM projects WHERE deleting").Scan(&deleting)
+	if err == nil && deleting != 0 {
+		err = errors.New("project deletion is unfinished; start the instance to complete it before backup")
+	}
+	var projectIDs []string
+	if err == nil {
+		projectIDs, err = registeredProjectIDs(ctx, stagedStore.db)
+	}
 	var userIDs []string
 	if err == nil {
 		userIDs, err = accountIDs(ctx, stagedStore.db)

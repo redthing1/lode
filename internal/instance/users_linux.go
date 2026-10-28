@@ -52,7 +52,17 @@ type Principal struct {
 	TokenID             string `json:"tokenId,omitempty"`
 }
 
-func validUsername(name string) bool { return usernamePattern.MatchString(name) }
+func validUsername(name string) bool {
+	if !usernamePattern.MatchString(name) {
+		return false
+	}
+	switch name {
+	case "api", "assets", "settings", "projects", "security", "passkey", "verify", "healthz", "login", "logout", "setup", "register":
+		return false
+	default:
+		return true
+	}
+}
 
 func validatePassword(password string) error {
 	if len(password) < passwordMin || len(password) > passwordMax {
@@ -185,6 +195,17 @@ func (s *Store) Setup(ctx context.Context, code, username, password string) (Use
 }
 
 func (s *Store) CreateUser(ctx context.Context, username, password string, admin bool) (User, error) {
+	return s.createUser(ctx, username, password, admin, true)
+}
+
+// Register creates an ordinary account after the one-time administrator setup
+// has completed. The completion check and insertion share one transaction so
+// registration cannot race or precede bootstrap.
+func (s *Store) Register(ctx context.Context, username, password string) (User, error) {
+	return s.createUser(ctx, username, password, false, false)
+}
+
+func (s *Store) createUser(ctx context.Context, username, password string, admin, temporaryPassword bool) (User, error) {
 	if !validUsername(username) {
 		return User{}, ErrInvalid
 	}
@@ -198,12 +219,21 @@ func (s *Store) CreateUser(ctx context.Context, username, password string, admin
 	}
 	var user User
 	err = s.tx(ctx, func(tx *sql.Tx) error {
+		if !temporaryPassword {
+			var users, used int
+			if e := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM users),setup_used FROM instance_settings WHERE id=1`).Scan(&users, &used); e != nil {
+				return e
+			}
+			if users == 0 || used != 1 {
+				return ErrSetupUnavailable
+			}
+		}
 		p := currentPasswordParams
-		_, e := tx.ExecContext(ctx, `INSERT INTO users(id,username,password_salt,password_hash,password_version,password_memory,password_iterations,password_parallelism,password_key_len,admin,force_password_change,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,1,?)`, id, username, salt, hash, p.version, p.memory, p.iterations, p.parallelism, p.keyLen, boolInt(admin), time.Now().Unix())
+		_, e := tx.ExecContext(ctx, `INSERT INTO users(id,username,password_salt,password_hash,password_version,password_memory,password_iterations,password_parallelism,password_key_len,admin,force_password_change,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, id, username, salt, hash, p.version, p.memory, p.iterations, p.parallelism, p.keyLen, boolInt(admin), boolInt(temporaryPassword), time.Now().Unix())
 		if e != nil {
 			return mapConflict(e)
 		}
-		user = User{ID: id, Username: username, Admin: admin, ForcePasswordChange: true, AuthVersion: 1}
+		user = User{ID: id, Username: username, Admin: admin, ForcePasswordChange: temporaryPassword, AuthVersion: 1}
 		return nil
 	})
 	return user, err

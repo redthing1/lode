@@ -15,7 +15,7 @@ import (
 func TestCredentialExactProjectThenInstanceFallback(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	origin := "https://example.test"
-	projectURL := origin + "/p/art"
+	projectURL := origin + "/alice/art"
 	if err := saveCredential(origin, credential{Token: "instance-token"}); err != nil {
 		t.Fatal(err)
 	}
@@ -76,21 +76,21 @@ func TestLoginVerifiesAndStoresProjectCredential(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"ID": "user-id", "Username": "alice", "Instance": "Lode"})
 	})
-	mux.HandleFunc("/p/art/v1/info", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/alice/art/v1/info", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Lode-Project-ID", id)
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": id})
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	var out strings.Builder
-	if err := login(context.Background(), srv.URL+"/p/art", strings.NewReader("secret\n"), &out); err != nil {
+	if err := login(context.Background(), srv.URL+"/alice/art", strings.NewReader("secret\n"), &out); err != nil {
 		t.Fatal(err)
 	}
-	c, ok, err := findCredential(srv.URL + "/p/art")
+	c, ok, err := findCredential(srv.URL + "/alice/art")
 	if err != nil || !ok || c.Token != "secret" || c.User != "user-id" {
 		t.Fatalf("saved=%#v ok=%v err=%v", c, ok, err)
 	}
-	if checked, ok, err := verifiedCredential(context.Background(), srv.URL+"/p/art"); err != nil || !ok || checked.User != "user-id" {
+	if checked, ok, err := verifiedCredential(context.Background(), srv.URL+"/alice/art"); err != nil || !ok || checked.User != "user-id" {
 		t.Fatalf("verified=%#v ok=%v err=%v", checked, ok, err)
 	}
 	if !strings.Contains(out.String(), "alice") {

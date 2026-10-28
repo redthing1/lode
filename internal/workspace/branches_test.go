@@ -83,7 +83,7 @@ func TestMergePublishesWithoutChangingDirtyWorkspaceAndHasTwoParents(t *testing.
 	topicCommit := save(t, topic)
 	closeWorkspace(t, topic)
 	write(t, sourceDir, "main", []byte("main saved"))
-	mainCommit := publishWorkspace(t, sourceDir)
+	mainCommit := publishWorkspace(t, s, sourceDir)
 	if err := main.Update(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestLostAcceptedMergeReplyResumesOriginalSourceAfterSourceMoves(t *testing.
 		t.Fatal(err)
 	}
 	write(t, rootDir, "main", []byte("main advanced"))
-	mainHead := publishWorkspace(t, rootDir)
+	mainHead := publishWorkspace(t, s, rootDir)
 	if err := main.Update(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -224,10 +224,10 @@ func TestLostAcceptedMergeReplyResumesOriginalSourceAfterSourceMoves(t *testing.
 }
 
 func TestRestoreSelectedHistoricalPathKeepsCurrentBase(t *testing.T) {
-	_, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"a": []byte("old a"), "b": []byte("old b")}, model.Selection{{Include: true}, {Path: "b", Include: false}})
+	s, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{"a": []byte("old a"), "b": []byte("old b")}, model.Selection{{Include: true}, {Path: "b", Include: false}})
 	historical := w.State().Base
 	write(t, sourceDir, "a", []byte("new a"))
-	current := publishWorkspace(t, sourceDir)
+	current := publishWorkspace(t, s, sourceDir)
 	if err := w.Update(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestRestoreResumeFetchesOriginalHistoricalSource(t *testing.T) {
 	}
 	write(t, sourceDir, "a", []byte("current a"))
 	write(t, sourceDir, "b", []byte("current b"))
-	current := publishWorkspace(t, sourceDir)
+	current := publishWorkspace(t, s, sourceDir)
 	if err := w.Update(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -320,6 +320,7 @@ func TestRestoreResumeFetchesOriginalHistoricalSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.UseToken(s.p.Token())
 	defer closeWorkspace(t, w)
 	if err := w.Resume(context.Background()); err != nil {
 		t.Fatal(err)
@@ -363,7 +364,7 @@ func TestRestoreCancelPreservesPreRestoreBytes(t *testing.T) {
 	defer closeWorkspace(t, w)
 	write(t, sourceDir, "a", []byte("later a"))
 	write(t, sourceDir, "b", []byte("later b"))
-	publishWorkspace(t, sourceDir)
+	publishWorkspace(t, s, sourceDir)
 	if err := w.Update(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}

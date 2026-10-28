@@ -2,23 +2,20 @@
 <div class="project-index">
 <div class="page-heading">
   <h1>Projects <span class="count">{{len .Data}}</span></h1>
-  {{if .User.Admin}}<a class="button" href="/projects/new">New project</a
-  >{{end}}
+  <a class="button" href="/projects/new">New project</a>
 </div>
 <section class="panel project-list">
   {{range .Data}}
   <div class="project-row">
     <div class="project-name">
-      {{template "repo-icon"}}<a href="/p/{{.Slug}}">{{.Slug}}</a
+      {{template "repo-icon"}}<a href="/{{.Path}}{{if .Deleting}}/delete{{end}}">{{.Owner}}/{{.Slug}}</a
       ><span class="badge">Private</span>
+      {{if .Deleting}}<span class="badge">Deletion pending</span>{{end}}
     </div>
   </div>
   {{else}}
   <div class="empty">
-    <p>No projects.</p>
-    {{if .User.Admin}}<a href="/projects/new">Create a project</a>{{else}}
-    <p class="muted">Ask an administrator or project maintainer for access.</p>
-    {{end}}
+    <p>No projects yet. Create one to get started.</p>
   </div>
   {{end}}
 </section>
@@ -32,7 +29,7 @@
         name="slug"
         required
         maxlength="64"
-        pattern="[a-z0-9]+(-[a-z0-9]+)*"
+        pattern="[a-z0-9]([a-z0-9\-]{0,62}[a-z0-9])?"
         spellcheck="false"
         autocomplete="off"
     /></label>
@@ -49,29 +46,29 @@
   <div class="project-title">
     {{template "repo-icon"}}<a href="/" class="muted">Projects</a
     ><span class="muted">/</span>
-    <h1><a href="/p/{{.Info.Slug}}">{{.Info.Slug}}</a></h1>
+    <h1><a href="/{{.Info.Path}}">{{.Info.Owner}}/{{.Info.Slug}}</a></h1>
     <span class="badge">Private</span>
   </div>
 </div>
 <nav class="tabs" aria-label="Project navigation">
   <a
-    href="/p/{{.Info.Slug}}?branch={{.Branch}}"
+    href="/{{.Info.Path}}?branch={{.Branch}}"
     {{if or (eq .Tab "files") (eq .Tab "history")}}
     aria-current="page"
     {{end}}
     >{{template "file"}}Files</a
   >
   <a
-    href="/p/{{.Info.Slug}}/branches"
+    href="/{{.Info.Path}}/branches"
     {{if eq .Tab "branches"}}
     aria-current="page"
     {{end}}
     >{{template "branch-icon"}}Branches</a
   >
-  {{if .CanManage}}<a
+  {{if or .CanManage .CanDelete}}<a
     class="project-settings-link"
-    href="/p/{{.Info.Slug}}/members"
-    {{if or (eq .Tab "members") (eq .Tab "storage")}}
+    href="/{{.Info.Path}}/members"
+    {{if or (eq .Tab "members") (eq .Tab "storage") (eq .Tab "delete")}}
     aria-current="page"
     {{end}}
     >Settings</a
@@ -81,19 +78,20 @@
 <div class="settings-layout">
   <nav class="settings-nav" aria-label="Project settings">
     <span class="nav-heading">Project settings</span>
-    <a
-      href="/p/{{.Info.Slug}}/members"
+    {{if not .Info.Deleting}}<a
+      href="/{{.Info.Path}}/members"
       {{if eq .Tab "members"}} aria-current="page" {{end}}
       >Members</a
     >
     <a
-      href="/p/{{.Info.Slug}}/storage"
+      href="/{{.Info.Path}}/storage"
       {{if eq .Tab "storage"}} aria-current="page" {{end}}
       >Retention</a
-    >
+    >{{end}}
+    {{if .CanDelete}}<a href="/{{.Info.Path}}/delete" {{if eq .Tab "delete"}}aria-current="page"{{end}}>Delete project</a>{{end}}
   </nav>
   <div class="settings-content">
-    <div class="page-heading"><h1>{{if eq .Tab "members"}}Members{{else}}Version retention{{end}}</h1></div>
+    <div class="page-heading"><h1>{{if eq .Tab "members"}}Members{{else if eq .Tab "delete"}}Delete project{{else}}Version retention{{end}}</h1></div>
 {{end}} {{define "branch-picker"}}
 <form class="inline branch-picker" method="get">
   <label class="sr-only" for="branch">Branch</label>{{template
@@ -114,11 +112,11 @@
   ><strong>{{.Commit.Author}}</strong
   ><a
     class="hash"
-    href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}"
+    href="/{{.Info.Path}}?branch={{.Branch}}&amp;version={{.Commit.ID}}"
     >{{short .Commit.ID}}</a
   ><span class="commit-message">{{.Commit.Message}}</span
   ><time class="muted">{{date .Commit.Created}}</time>
-  <a class="history-link" href="/p/{{.Info.Slug}}/history?branch={{.Branch}}">History</a>
+  <a class="history-link" href="/{{.Info.Path}}/history?branch={{.Branch}}">History</a>
 </div>
 {{end}} {{define "project-files"}}{{template "top" .}}{{with .Data}}{{template
 "project-top" .}} {{if .Commit.ID}}
@@ -126,8 +124,8 @@
   {{template "branch-picker" .}}
   <div class="file-breadcrumb">
     <a
-      href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}"
-      >{{.Info.Slug}}</a
+      href="/{{.Info.Path}}?branch={{.Branch}}&amp;version={{.Commit.ID}}"
+      >{{.Info.Path}}</a
     >{{if .Path}}<span>/</span><span>{{.Path}}</span>{{end}}
   </div>
   {{if not .Commit.Retained}}<span class="badge amber">Contents released</span
@@ -157,7 +155,7 @@ lode clone {{.URL}} {{.Info.Slug}}</code></pre>
         <tr>
           <td colspan="3">
             <a
-              href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.Parent}}"
+              href="/{{.Info.Path}}?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.Parent}}"
               aria-label="Parent directory"
               >..</a
             >
@@ -168,10 +166,10 @@ lode clone {{.URL}} {{.Info.Slug}}</code></pre>
           <td>
             <div class="file-name">
               {{if eq .Kind "directory"}}{{template "folder"}}<a
-                href="/p/{{$.Data.Info.Slug}}?branch={{$.Data.Branch}}&amp;version={{$.Data.Commit.ID}}&amp;path={{.Path}}"
+                href="/{{$.Data.Info.Path}}?branch={{$.Data.Branch}}&amp;version={{$.Data.Commit.ID}}&amp;path={{.Path}}"
                 >{{.Name}}</a
               >{{else}}{{template "file"}}<a
-                href="/p/{{$.Data.Info.Slug}}/file?branch={{$.Data.Branch}}&amp;version={{$.Data.Commit.ID}}&amp;path={{.Path}}"
+                href="/{{$.Data.Info.Path}}/file?branch={{$.Data.Branch}}&amp;version={{$.Data.Commit.ID}}&amp;path={{.Path}}"
                 >{{.Name}}</a
               >{{end}}
             </div>
@@ -182,7 +180,7 @@ lode clone {{.URL}} {{.Info.Slug}}</code></pre>
           <td class="align-right file-action">
             {{if and (eq .Kind "file") $.Data.Commit.Retained}}<a
               class="muted"
-              href="/p/{{$.Data.Info.Slug}}/download?version={{$.Data.Commit.ID}}&amp;path={{.Path}}"
+              href="/{{$.Data.Info.Path}}/download?version={{$.Data.Commit.ID}}&amp;path={{.Path}}"
               aria-label="Download {{.Name}}"
               >Download</a
             >{{end}}
@@ -201,7 +199,7 @@ lode clone {{.URL}} {{.Info.Slug}}</code></pre>
 <div class="pagination">
   <a
     class="button secondary"
-    href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.Path}}&amp;after={{.Next}}"
+    href="/{{.Info.Path}}?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.Path}}&amp;after={{.Next}}"
     >Next files</a
   >
 </div>
@@ -209,7 +207,7 @@ lode clone {{.URL}} {{.Info.Slug}}</code></pre>
 <section class="panel readme-panel">
   <h2 class="panel-title">
     {{template "file"}}<a
-      href="/p/{{.Info.Slug}}/file?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.ReadmeName}}"
+      href="/{{.Info.Path}}/file?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.ReadmeName}}"
       >{{.ReadmeName}}</a
     >
   </h2>
@@ -236,16 +234,16 @@ lode save -m 'Initial version'</code></pre>
 <div class="toolbar">
   <div class="file-breadcrumb">
     <a
-      href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}"
-      >{{.Info.Slug}}</a
+      href="/{{.Info.Path}}?branch={{.Branch}}&amp;version={{.Commit.ID}}"
+      >{{.Info.Path}}</a
     ><span>/</span>{{if .Path}}<a
-      href="/p/{{.Info.Slug}}?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.Path}}"
+      href="/{{.Info.Path}}?branch={{.Branch}}&amp;version={{.Commit.ID}}&amp;path={{.Path}}"
       >{{.Path}}</a
     ><span>/</span>{{end}}<strong>{{base .Name}}</strong>
   </div>
   <a
     class="button secondary small"
-    href="/p/{{.Info.Slug}}/download?version={{.Commit.ID}}&amp;path={{.Name}}"
+    href="/{{.Info.Path}}/download?version={{.Commit.ID}}&amp;path={{.Name}}"
     >Download</a
   >
 </div>
@@ -262,7 +260,7 @@ lode save -m 'Initial version'</code></pre>
   {{else if eq .Kind "image"}}
   <div class="media-preview">
     <img
-      src="/p/{{.Info.Slug}}/raw?version={{.Commit.ID}}&amp;path={{.Name}}"
+      src="/{{.Info.Path}}/raw?version={{.Commit.ID}}&amp;path={{.Name}}"
       alt="{{base .Name}}"
     />
   </div>
@@ -271,7 +269,7 @@ lode save -m 'Initial version'</code></pre>
     <audio
       controls
       preload="metadata"
-      src="/p/{{.Info.Slug}}/raw?version={{.Commit.ID}}&amp;path={{.Name}}"
+      src="/{{.Info.Path}}/raw?version={{.Commit.ID}}&amp;path={{.Name}}"
     >
       Audio preview unavailable.
     </audio>
@@ -281,7 +279,7 @@ lode save -m 'Initial version'</code></pre>
     <video
       controls
       preload="metadata"
-      src="/p/{{.Info.Slug}}/raw?version={{.Commit.ID}}&amp;path={{.Name}}"
+      src="/{{.Info.Path}}/raw?version={{.Commit.ID}}&amp;path={{.Name}}"
     >
       Video preview unavailable.
     </video>
@@ -291,7 +289,7 @@ lode save -m 'Initial version'</code></pre>
     <p>{{.Notice}}</p>
     <a
       class="button secondary"
-      href="/p/{{.Info.Slug}}/download?version={{.Commit.ID}}&amp;path={{.Name}}"
+      href="/{{.Info.Path}}/download?version={{.Commit.ID}}&amp;path={{.Name}}"
       >Download file</a
     >
   </div>
@@ -310,14 +308,14 @@ lode save -m 'Initial version'</code></pre>
     >
     <div class="history-copy">
       <a
-        href="/p/{{$.Data.Info.Slug}}?branch={{$.Data.Branch}}&amp;version={{.ID}}"
+        href="/{{$.Data.Info.Path}}?branch={{$.Data.Branch}}&amp;version={{.ID}}"
         ><strong>{{.Message}}</strong></a
       ><small>{{if .Author}}{{.Author}} · {{end}}{{date .Created}}</small>
     </div>
     {{if not .Retained}}<span class="badge amber">Contents released</span
     >{{end}}<a
       class="hash"
-      href="/p/{{$.Data.Info.Slug}}?branch={{$.Data.Branch}}&amp;version={{.ID}}"
+      href="/{{$.Data.Info.Path}}?branch={{$.Data.Branch}}&amp;version={{.ID}}"
       >{{short .ID}}</a
     >
   </article>
@@ -329,7 +327,7 @@ lode save -m 'Initial version'</code></pre>
 <div class="pagination">
   <a
     class="button secondary"
-    href="/p/{{.Info.Slug}}/history?branch={{.Branch}}&amp;before={{.Next}}"
+    href="/{{.Info.Path}}/history?branch={{.Branch}}&amp;before={{.Next}}"
     >Older versions</a
   >
 </div>
@@ -355,14 +353,14 @@ lode save -m 'Initial version'</code></pre>
           <td>
             <div class="file-name">
               {{template "branch-icon"}}<a
-                href="/p/{{$.Data.Info.Slug}}?branch={{.Name}}"
+                href="/{{$.Data.Info.Path}}?branch={{.Name}}"
                 >{{.Name}}</a
               >{{if eq .Name "main"}}<span class="badge">Default</span>{{end}}
             </div>
           </td>
           <td class="mono">
             {{if .Tip}}<a
-              href="/p/{{$.Data.Info.Slug}}?branch={{.Name}}&amp;version={{.Tip}}"
+              href="/{{$.Data.Info.Path}}?branch={{.Name}}&amp;version={{.Tip}}"
               >{{short .Tip}}</a
             >{{else}}Empty{{end}}
           </td>
@@ -424,15 +422,25 @@ lode save -m 'Initial version'</code></pre>
             <strong>{{.Username}}</strong>{{if .Disabled}}
             <span class="badge">Disabled</span>{{end}}
           </td>
-          <td>{{.Role}}</td>
+          <td>{{if .Owner}}Owner{{else}}
+            <form method="post" class="inline">
+              <input type="hidden" name="username" value="{{.Username}}" />
+              <select name="role" aria-label="Role for {{.Username}}">
+                <option value="reader" {{if eq .Role "reader"}}selected{{end}}>Reader</option>
+                <option value="writer" {{if eq .Role "writer"}}selected{{end}}>Writer</option>
+                <option value="maintainer" {{if eq .Role "maintainer"}}selected{{end}}>Maintainer</option>
+              </select>
+              <button class="secondary small" type="submit">Save</button>
+            </form>
+          {{end}}</td>
           <td class="align-right">
-            <form method="post">
+            {{if not .Owner}}<form method="post">
               <input type="hidden" name="action" value="remove" /><input
                 type="hidden"
                 name="user"
                 value="{{.UserID}}"
               /><button class="quiet danger" type="submit">Remove</button>
-            </form>
+            </form>{{end}}
           </td>
         </tr>
         {{else}}
@@ -536,5 +544,17 @@ lode save -m 'Initial version'</code></pre>
       /><button type="submit" class="secondary">Reclaim space</button>
     </form>
   </div>
+</section>
+{{template "settings-bottom" .}}{{end}}{{template "bottom" .}}{{end}}
+
+{{define "project-delete"}}{{template "top" .}}{{with .Data}}{{template "project-top" .}}{{template "project-settings-top" .}}
+<section class="panel">
+  <h2 class="panel-title">Delete {{.Info.Path}}</h2>
+  <form method="post" class="stack panel-body narrow-form">
+    <p>Permanently deletes this project, all versions and files, and project-scoped access tokens.</p>
+    {{if .Info.Deleting}}<p class="hint">Deletion has started. Submit again to finish, or restart the instance.</p>{{end}}
+    <label>Type <strong>{{.Info.Path}}</strong> to confirm<input name="confirm" required autocomplete="off" spellcheck="false" /></label>
+    <button class="secondary danger" type="submit">Delete project</button>
+  </form>
 </section>
 {{template "settings-bottom" .}}{{end}}{{template "bottom" .}}{{end}}

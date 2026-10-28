@@ -84,7 +84,7 @@ func TestSelectNoMatchingIncludeRefusesUnloadButEmptyAndNewSelectionWork(t *test
 }
 
 func TestRestoreExplicitPathsMustBeKnownAndValidSetIsApplied(t *testing.T) {
-	_, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{
+	s, sourceDir, localDir, w := makeTransitionPair(t, map[string][]byte{
 		"a.bin":   []byte("historical a"),
 		"removed": []byte("removed in current version"),
 	}, nil)
@@ -95,7 +95,7 @@ func TestRestoreExplicitPathsMustBeKnownAndValidSetIsApplied(t *testing.T) {
 	}
 	write(t, sourceDir, "present-only.bin", []byte("added in current version"))
 	write(t, sourceDir, "deleted-only.bin", []byte("added then locally deleted"))
-	current := publishWorkspace(t, sourceDir)
+	current := publishWorkspace(t, s, sourceDir)
 	if err := w.Update(context.Background(), nil); err != nil {
 		t.Fatalf("advance workspace to current version: %v", err)
 	}

@@ -30,6 +30,7 @@ func TestBranchAndSwitchCLIWorkflow(t *testing.T) {
 	defer p.Close()
 	srv := httptest.NewServer(remote.Handler(p))
 	defer srv.Close()
+	t.Setenv("LODE_TOKEN", p.Token())
 
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "scene.bin"), []byte("scene"), 0600); err != nil {
@@ -142,7 +143,23 @@ func TestBackupCLIIsAvailableOutsideAWorkspace(t *testing.T) {
 	if err := run(ctx, []string{"init", "-url", "https://example.test", instanceDir}, &out, &diagnostics); err != nil {
 		t.Fatalf("init instance: %v (%s)", err, diagnostics.String())
 	}
-	if err := run(ctx, []string{"import", instanceDir, "art", source}, &out, &diagnostics); err != nil {
+	setupLine := strings.SplitN(out.String(), "Setup code: ", 2)
+	if len(setupLine) != 2 {
+		t.Fatalf("init did not print the setup code: %q", out.String())
+	}
+	setupCode := strings.Fields(setupLine[1])[0]
+	initialized, err := instance.Open(ctx, instanceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := initialized.Setup(ctx, setupCode, "owner", "a sufficiently long test password"); err != nil {
+		initialized.Close()
+		t.Fatalf("create import owner: %v", err)
+	}
+	if err := initialized.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(ctx, []string{"import", instanceDir, "owner/art", source}, &out, &diagnostics); err != nil {
 		t.Fatalf("import legacy project: %v (%s)", err, diagnostics.String())
 	}
 	inst, err := instance.Open(ctx, instanceDir)
@@ -201,6 +218,7 @@ func TestTagAndCleanupPreviewCLI(t *testing.T) {
 	defer p.Close()
 	srv := httptest.NewServer(remote.Handler(p))
 	defer srv.Close()
+	t.Setenv("LODE_TOKEN", p.Token())
 	dir := t.TempDir()
 	file := filepath.Join(dir, "scene.bin")
 	if err := os.WriteFile(file, []byte("one"), 0600); err != nil {

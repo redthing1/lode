@@ -125,16 +125,6 @@ func open(ctx context.Context, directory string, create bool) (_ *Project, err e
 	} else {
 		var version int
 		err = p.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
-		if err == nil && version == 2 {
-			_, err = p.db.ExecContext(ctx, `BEGIN IMMEDIATE;
-ALTER TABLE commits ADD COLUMN actor_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE operations ADD COLUMN actor_id TEXT NOT NULL DEFAULT '';
-PRAGMA user_version=3;
-COMMIT;`)
-			if err == nil {
-				version = 3
-			}
-		}
 		if err == nil && version != 3 {
 			err = errors.New("unsupported project database version")
 		}

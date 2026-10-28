@@ -1049,12 +1049,6 @@ tbody tr:hover {
   font-weight: 400;
   white-space: nowrap;
 }
-.user-controls {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 20px;
-}
 .key-row {
   display: flex;
   align-items: center;
@@ -1254,11 +1248,6 @@ details .stack {
   }
   .form-row > button {
     align-self: flex-end;
-  }
-  .user-controls {
-    gap: 10px;
-    flex-wrap: wrap;
-    justify-content: flex-start;
   }
   .panel-body {
     padding: 14px;

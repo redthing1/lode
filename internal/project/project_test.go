@@ -445,26 +445,3 @@ func TestActorOwnsCancellationTombstoneAndPendingOperation(t *testing.T) {
 		t.Fatalf("foreign pending cancel = %v", err)
 	}
 }
-
-func TestVersionTwoDatabaseMigratesLegacyActorlessRows(t *testing.T) {
-	tp := newTestProject(t)
-	id := NewID()
-	if _, err := tp.p.db.ExecContext(tp.ctx, `INSERT INTO operations(id,fingerprint,outcome,actor_id) VALUES(?,?,?,'')`, id, "legacy-fingerprint", "cancelled"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tp.p.db.ExecContext(tp.ctx, `ALTER TABLE commits DROP COLUMN actor_id; ALTER TABLE operations DROP COLUMN actor_id; PRAGMA user_version=2;`); err != nil {
-		t.Fatal(err)
-	}
-	tp.reopen()
-	var version int
-	if err := tp.p.db.QueryRowContext(tp.ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 3 {
-		t.Fatalf("migrated version=%d err=%v", version, err)
-	}
-	var fingerprint, outcome, actor string
-	if err := tp.p.db.QueryRowContext(tp.ctx, "SELECT fingerprint,outcome,actor_id FROM operations WHERE id=?", id).Scan(&fingerprint, &outcome, &actor); err != nil {
-		t.Fatal(err)
-	}
-	if fingerprint != "legacy-fingerprint" || outcome != "cancelled" || actor != "" {
-		t.Fatalf("legacy row = %q,%q,%q", fingerprint, outcome, actor)
-	}
-}

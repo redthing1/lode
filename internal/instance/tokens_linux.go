@@ -57,6 +57,9 @@ func (s *Store) PutMembership(ctx context.Context, userID, projectID string, rol
 		return ErrInvalid
 	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
+		if err := mutableMembership(ctx, tx, userID, projectID); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO memberships(user_id,project_id,role) VALUES(?,?,?) ON CONFLICT(user_id,project_id) DO UPDATE SET role=excluded.role`, userID, projectID, string(role))
 		if err != nil {
 			return mapConflict(err)
@@ -69,16 +72,41 @@ func (s *Store) RemoveMembership(ctx context.Context, userID, projectID string) 
 	if len(userID) == 0 || len(userID) > 64 || len(projectID) == 0 || len(projectID) > 128 {
 		return ErrInvalid
 	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM memberships WHERE user_id=? AND project_id=?`, userID, projectID)
-	return err
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if err := mutableMembership(ctx, tx, userID, projectID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM memberships WHERE user_id=? AND project_id=?`, userID, projectID)
+		return err
+	})
 }
+
+func mutableMembership(ctx context.Context, tx *sql.Tx, userID, projectID string) error {
+	var ownerID string
+	err := tx.QueryRowContext(ctx, "SELECT owner_id FROM projects WHERE id=? AND NOT deleting", projectID).Scan(&ownerID)
+	if err == sql.ErrNoRows {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if userID == ownerID {
+		return ErrConflict
+	}
+	return nil
+}
+
+const projectRoleQuery = `SELECT CASE WHEN u.admin OR p.owner_id=u.id THEN 'maintainer' ELSE COALESCE(m.role,'') END
+	FROM projects p JOIN users u ON u.id=? LEFT JOIN memberships m ON m.project_id=p.id AND m.user_id=u.id
+	WHERE p.id=? AND NOT p.deleting`
+
 func (s *Store) RoleFor(ctx context.Context, userID, projectID string) (Role, error) {
 	if len(userID) == 0 || len(userID) > 64 || len(projectID) == 0 || len(projectID) > 128 {
 		return "", ErrInvalid
 	}
 	var role string
-	err := s.db.QueryRowContext(ctx, `SELECT role FROM memberships WHERE user_id=? AND project_id=?`, userID, projectID).Scan(&role)
-	if err == sql.ErrNoRows {
+	err := s.db.QueryRowContext(ctx, projectRoleQuery, userID, projectID).Scan(&role)
+	if err == sql.ErrNoRows || err == nil && role == "" {
 		return "", ErrNotFound
 	}
 	return Role(role), err
@@ -89,26 +117,21 @@ func (s *Store) Authorize(ctx context.Context, p Principal, projectID string, re
 	if len(p.UserID) == 0 || len(p.UserID) > 64 || len(projectID) == 0 || len(projectID) > 128 || !validRole(required) {
 		return ErrInvalid
 	}
-	var admin, disabled, force int
+	var disabled, force int
 	var version int64
-	err := s.db.QueryRowContext(ctx, `SELECT admin,disabled,force_password_change,auth_version FROM users WHERE id=?`, p.UserID).Scan(&admin, &disabled, &force, &version)
+	err := s.db.QueryRowContext(ctx, `SELECT disabled,force_password_change,auth_version FROM users WHERE id=?`, p.UserID).Scan(&disabled, &force, &version)
 	if err == sql.ErrNoRows || disabled != 0 || force != 0 || version != p.AuthVersion {
 		return ErrUnauthorized
 	}
 	if err != nil {
 		return err
 	}
-	var current Role
-	if admin != 0 {
-		current = RoleMaintainer
-	} else {
-		current, err = s.RoleFor(ctx, p.UserID, projectID)
-		if err == ErrNotFound {
-			return ErrUnauthorized
-		}
-		if err != nil {
-			return err
-		}
+	current, err := s.RoleFor(ctx, p.UserID, projectID)
+	if err == ErrNotFound {
+		return ErrUnauthorized
+	}
+	if err != nil {
+		return err
 	}
 	if p.TokenID != "" {
 		var scope sql.NullString
@@ -163,8 +186,8 @@ func (s *Store) CreateToken(ctx context.Context, ownerID, name string, role Role
 		pid = projectID
 	}
 	err = s.tx(ctx, func(tx *sql.Tx) error {
-		var admin, disabled, force int
-		if e := tx.QueryRowContext(ctx, `SELECT admin,disabled,force_password_change FROM users WHERE id=?`, ownerID).Scan(&admin, &disabled, &force); e == sql.ErrNoRows {
+		var disabled, force int
+		if e := tx.QueryRowContext(ctx, `SELECT disabled,force_password_change FROM users WHERE id=?`, ownerID).Scan(&disabled, &force); e == sql.ErrNoRows {
 			return ErrUnauthorized
 		} else if e != nil {
 			return e
@@ -173,19 +196,13 @@ func (s *Store) CreateToken(ctx context.Context, ownerID, name string, role Role
 			return ErrUnauthorized
 		}
 		if projectID != "" {
-			current := Role("")
-			if admin != 0 {
-				current = RoleMaintainer
-			} else {
-				var roleName string
-				e := tx.QueryRowContext(ctx, `SELECT role FROM memberships WHERE user_id=? AND project_id=?`, ownerID, projectID).Scan(&roleName)
-				if e == sql.ErrNoRows {
-					return ErrUnauthorized
-				}
-				if e != nil {
-					return e
-				}
-				current = Role(roleName)
+			var current Role
+			e := tx.QueryRowContext(ctx, projectRoleQuery, ownerID, projectID).Scan(&current)
+			if e == sql.ErrNoRows {
+				return ErrUnauthorized
+			}
+			if e != nil {
+				return e
 			}
 			if rank(current) < rank(role) {
 				return ErrUnauthorized

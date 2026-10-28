@@ -109,16 +109,25 @@ func ValidateURL(baseURL string) error {
 		return errors.New("remote URL path must be canonical")
 	}
 	if u.Path != "" && u.Path != "/" && !validProjectPath(u.Path) {
-		return errors.New("remote URL path must be /p/SLUG")
+		return errors.New("remote URL path must be /USERNAME/PROJECT")
 	}
 	return nil
 }
 
 func validProjectPath(path string) bool {
-	if !strings.HasPrefix(path, "/p/") || strings.Contains(path[3:], "/") || len(path) < 4 || len(path) > 67 {
+	if !strings.HasPrefix(path, "/") || strings.Count(path[1:], "/") != 1 {
 		return false
 	}
-	for _, c := range path[3:] {
+	owner, slug, ok := strings.Cut(path[1:], "/")
+	if !ok || len(owner) < 3 || len(owner) > 32 || len(slug) < 1 || len(slug) > 64 || slug[0] == '-' || slug[len(slug)-1] == '-' {
+		return false
+	}
+	for _, c := range owner {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	for _, c := range slug {
 		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
 			return false
 		}

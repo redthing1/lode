@@ -55,7 +55,7 @@ func Backup(ctx context.Context, source, destination string) (retErr error) {
 	}
 
 	// Hold the ownership lock while copying a cold source. Opening it here
-	// would run schema migrations and native-root reconciliation in place.
+	// would reconcile native roots in place.
 	owner, err := os.OpenFile(filepath.Join(source, "lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return fmt.Errorf("open backup source (stop its server first): %w", err)

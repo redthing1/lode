@@ -43,7 +43,7 @@ func TestLargeSwitchAndRestoreUseTheirExactContentSource(t *testing.T) {
 	}
 	target := editBytes(old, 2<<20, 0x4a)
 	write(t, sourceDir, "asset.bin", target)
-	head := publishWorkspace(t, sourceDir)
+	head := publishWorkspace(t, s, sourceDir)
 	if err := w.Update(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestUpdateUsesLocalBasisAfterBaseExpiryAndTheirsChoice(t *testing.T) {
 	write(t, localDir, "asset.bin", localBytes)
 	target := editBytes(baseBytes, 3<<20, 0xa5)
 	write(t, sourceDir, "asset.bin", target)
-	current := publishWorkspace(t, sourceDir)
+	current := publishWorkspace(t, s, sourceDir)
 	expireHistory(t, s.p)
 	if _, err := s.p.Collect(context.Background()); err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestUpdateBadDownloadNeverInstallsAndCanResume(t *testing.T) {
 			before := append([]byte(nil), current...)
 			next := editBytes(current, len(current)/2, byte(len(bad)+1))
 			write(t, sourceDir, "asset.bin", next)
-			currentBase := publishWorkspace(t, sourceDir)
+			currentBase := publishWorkspace(t, s, sourceDir)
 			// publishWorkspace opens the saved source workspace and publishes its edit.
 			if currentBase == w.State().Base {
 				t.Fatal("source update did not advance the server")
@@ -262,7 +262,7 @@ func TestDeltaUpdateInterruptionCanResumeOrCancel(t *testing.T) {
 			newA, newB := editBytes(oldA, 1<<20, 0x31), editBytes(oldB, 2<<20, 0x72)
 			write(t, sourceDir, "a.bin", newA)
 			write(t, sourceDir, "b.bin", newB)
-			newBase := publishWorkspace(t, sourceDir)
+			newBase := publishWorkspace(t, s, sourceDir)
 			failB.Store(true)
 			if err := w.Update(context.Background(), nil); err == nil {
 				closeWorkspace(t, w)
@@ -281,6 +281,7 @@ func TestDeltaUpdateInterruptionCanResumeOrCancel(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			w.UseToken(s.p.Token())
 			defer closeWorkspace(t, w)
 			if cancel {
 				if err := w.Cancel(context.Background()); err != nil {

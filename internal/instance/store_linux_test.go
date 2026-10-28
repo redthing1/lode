@@ -24,6 +24,13 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
+func insertTestProject(t *testing.T, s *Store, ownerID, projectID string) {
+	t.Helper()
+	if _, err := s.db.Exec(`INSERT INTO projects(id,owner_id,slug,created) VALUES(?,?,?,?)`, projectID, ownerID, projectID, time.Now().Unix()); err != nil {
+		t.Fatalf("insert test project %q: %v", projectID, err)
+	}
+}
+
 func TestMalformedCredentialsFailWithoutPanicking(t *testing.T) {
 	s := testStore(t)
 	for _, tc := range []struct{ username, password string }{
@@ -221,9 +228,19 @@ func TestMembershipTokenIntersectionAndRevocation(t *testing.T) {
 	if _, err = s.SetPassword(ctx, admin.ID, "a sufficiently long password"); err != nil {
 		t.Fatal(err)
 	}
+	insertTestProject(t, s, admin.ID, "project-a")
 	user, err := s.CreateUser(ctx, "member", "another sufficiently long password", false)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err = s.PutMembership(ctx, admin.ID, "project-a", RoleReader); !errors.Is(err, ErrConflict) {
+		t.Fatalf("owner membership mutation = %v, want conflict", err)
+	}
+	if err = s.RemoveMembership(ctx, admin.ID, "project-a"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("owner membership removal = %v, want conflict", err)
+	}
+	if role, err := s.RoleFor(ctx, admin.ID, "project-a"); err != nil || role != RoleMaintainer {
+		t.Fatalf("implicit owner role = %q, %v", role, err)
 	}
 	if _, err = s.SetPassword(ctx, user.ID, "another sufficiently long password"); err != nil {
 		t.Fatal(err)
@@ -279,6 +296,51 @@ func TestMembershipTokenIntersectionAndRevocation(t *testing.T) {
 	_ = admin
 }
 
+func TestOwnerRoleAndTokenCeilingRespectProjectLifecycle(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	owner, err := s.CreateUser(ctx, "owner", "temporary owner password", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err = s.SetPassword(ctx, owner.ID, "a permanent owner password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertTestProject(t, s, owner.ID, "owned-project")
+	if role, err := s.RoleFor(ctx, owner.ID, "owned-project"); err != nil || role != RoleMaintainer {
+		t.Fatalf("implicit owner role = %q, %v", role, err)
+	}
+	if _, err := s.RoleFor(ctx, owner.ID, "missing-project"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing project role = %v, want not found", err)
+	}
+
+	secret, _, err := s.CreateToken(ctx, owner.ID, "limited", RoleWriter, "owned-project", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := s.AuthenticateToken(ctx, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Authorize(ctx, principal, "owned-project", RoleWriter); err != nil {
+		t.Fatalf("owner token below owner authority was denied: %v", err)
+	}
+	if err := s.Authorize(ctx, principal, "owned-project", RoleMaintainer); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("owner token exceeded its role ceiling: %v", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx, "UPDATE projects SET deleting=1 WHERE id=?", "owned-project"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RoleFor(ctx, owner.ID, "owned-project"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleting project role = %v, want not found", err)
+	}
+	if err := s.Authorize(ctx, principal, "owned-project", RoleReader); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("deleting project remained authorized: %v", err)
+	}
+}
+
 func TestTokenExpiryAndLastAdministratorProtection(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
@@ -317,6 +379,14 @@ func TestTokenExpiryAndLastAdministratorProtection(t *testing.T) {
 func TestForcePasswordChangeAndAuthVersionRecheck(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
+	owner, err := s.CreateUser(ctx, "owner", "temporary owner password", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err = s.SetPassword(ctx, owner.ID, "a permanent owner password")
+	if err != nil {
+		t.Fatal(err)
+	}
 	u, err := s.CreateUser(ctx, "member", "temporary password", false)
 	if err != nil {
 		t.Fatal(err)
@@ -324,6 +394,7 @@ func TestForcePasswordChangeAndAuthVersionRecheck(t *testing.T) {
 	if !u.ForcePasswordChange {
 		t.Fatal("new account does not require a password change")
 	}
+	insertTestProject(t, s, owner.ID, "project-a")
 	if err = s.PutMembership(ctx, u.ID, "project-a", RoleMaintainer); err != nil {
 		t.Fatal(err)
 	}

@@ -20,7 +20,6 @@ var ErrPending = errors.New("workspace has an unfinished operation; use resume o
 type State struct {
 	Version   int             `json:"version"`
 	URL       string          `json:"url"`
-	Token     string          `json:"token"`
 	Project   string          `json:"project"`
 	Branch    string          `json:"branch"`
 	Base      string          `json:"base"`
@@ -103,9 +102,6 @@ func (s State) validate() error {
 	if err := remote.ValidateURL(s.URL); err != nil {
 		return err
 	}
-	if s.Token == "" && !remote.HasProjectPath(s.URL) {
-		return errors.New("invalid workspace state")
-	}
 	return nil
 }
 
@@ -136,11 +132,7 @@ func connect(ctx context.Context, url, token, branch string, selection model.Sel
 	if err != nil {
 		return nil, State{}, err
 	}
-	storedToken := token
-	if remote.HasProjectPath(canonicalURL) {
-		storedToken = ""
-	}
-	return client, State{Version: 1, URL: canonicalURL, Token: storedToken, Project: info.ID, Branch: branch, Base: head, Selection: selection}, nil
+	return client, State{Version: 1, URL: canonicalURL, Project: info.ID, Branch: branch, Base: head, Selection: selection}, nil
 }
 
 func initialize(directory string) (*Workspace, error) {
@@ -183,21 +175,16 @@ func Attach(ctx context.Context, url, token, directory string, selection model.S
 }
 
 func (w *Workspace) client() (*remote.Client, error) {
-	token := w.token
-	if token == "" {
-		token = w.state.Token
-	}
-	if token == "" {
+	if w.token == "" {
 		return nil, errors.New("no workspace credential; run lode login with this instance or project URL")
 	}
-	return remote.New(w.state.URL, token, w.state.Project)
+	return remote.New(w.state.URL, w.token, w.state.Project)
 }
 
-// UseToken sets a per-process credential without writing it into workspace state.
+// UseToken sets the credential used by remote workspace operations.
 func (w *Workspace) UseToken(token string) { w.token = token }
 
-// RemoteClient returns the workspace client using the process credential override
-// or the legacy token stored in older workspaces.
+// RemoteClient returns the authenticated client for this workspace.
 func (w *Workspace) RemoteClient() (*remote.Client, error) { return w.client() }
 
 func (w *Workspace) pending() error {
