@@ -62,11 +62,14 @@ func printHelp(out io.Writer) {
 }
 
 func printVersion(out io.Writer) {
-	version := "devel"
+	fmt.Fprintln(out, "lode", buildVersion())
+}
+
+func buildVersion() string {
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		version = info.Main.Version
+		return info.Main.Version
 	}
-	fmt.Fprintln(out, "lode", version)
+	return "devel"
 }
 
 func selectionText(selection model.Selection) string {

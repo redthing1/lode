@@ -161,56 +161,66 @@ select {
   background-position: right 10px center;
   cursor: pointer;
 }
-@supports (appearance: base-select) and selector(select::picker(select)) {
-  select,
-  select::picker(select) {
-    appearance: base-select;
-  }
-  select {
-    background-image: none;
-    padding-right: 10px;
-    gap: 16px;
-    align-items: center;
-  }
-  select::picker-icon {
-    content: "";
-    width: 7px;
-    height: 7px;
-    border-right: 1.5px solid var(--muted);
-    border-bottom: 1.5px solid var(--muted);
-    transform: translateY(-2px) rotate(45deg);
-    margin-left: auto;
-    margin-right: 2px;
-  }
-  select::picker(select) {
-    margin-top: 4px;
-    padding: 4px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--raised);
-    color: var(--text);
-    box-shadow: 0 6px 20px #0003;
-    font: inherit;
-    max-height: 320px;
-    overflow: auto;
-  }
-  option {
-    padding: 7px 10px;
-    border-radius: 3px;
-    gap: 16px;
-  }
-  option:hover,
-  option:focus {
-    background: var(--hover);
-    outline: none;
-  }
-  option:checked {
-    color: var(--link);
-  }
-  option::checkmark {
-    order: 1;
-    margin-left: auto;
-  }
+.select {
+  display: block;
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+.select-trigger,
+.select-trigger:hover {
+  width: 100%;
+  min-width: 0;
+  justify-content: space-between;
+  padding: 5px 10px;
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 400;
+  text-align: left;
+}
+.select-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.select-trigger::after {
+  flex-shrink: 0;
+}
+.select-options {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 100%;
+  z-index: 30;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--raised);
+  box-shadow: 0 6px 20px #0003;
+  overflow: auto;
+  font-weight: 400;
+}
+.select.above .select-options {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+.select-options [role="option"] {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 3px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.select-options .active,
+.select-options [role="option"]:hover {
+  background: var(--hover);
+}
+.select-options [aria-selected="true"] {
+  color: var(--link);
+}
+.select-options [aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
 }
 input[type="checkbox"],
 input[type="radio"] {
@@ -396,7 +406,8 @@ p.hint:empty {
   list-style: none;
 }
 .account-menu > summary::after,
-.connect > summary::after {
+.connect > summary::after,
+.select-trigger::after {
   content: "";
   width: 6px;
   height: 6px;
@@ -484,8 +495,6 @@ summary::-webkit-details-marker {
   border-top: 1px solid var(--border);
   background: var(--surface);
   font-size: 12px;
-}
-.footer a {
   color: var(--muted);
 }
 .page-heading {
@@ -538,10 +547,6 @@ summary::-webkit-details-marker {
   margin-bottom: 0;
 }
 .project-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
   padding: 13px 16px;
   border-bottom: 1px solid var(--line);
 }
@@ -559,8 +564,9 @@ summary::-webkit-details-marker {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
-.project-row time {
-  font-size: 12px;
+.project-index {
+  max-width: 900px;
+  margin: 0 auto;
 }
 .badge {
   display: inline-flex;
@@ -658,7 +664,12 @@ summary::-webkit-details-marker {
   position: relative;
   gap: 6px;
 }
+.branch-picker .select {
+  min-width: 160px;
+  max-width: 260px;
+}
 .branch-picker > .icon {
+  z-index: 1;
   position: absolute;
   left: 10px;
   width: 15px;
@@ -666,7 +677,8 @@ summary::-webkit-details-marker {
   pointer-events: none;
   color: var(--muted);
 }
-.branch-picker select {
+.branch-picker select,
+.branch-picker .select-trigger {
   min-width: 120px;
   padding-left: 32px;
   background-color: var(--surface);
@@ -696,6 +708,10 @@ summary::-webkit-details-marker {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+.history-link {
+  flex-shrink: 0;
+  font-size: 12px;
 }
 .version-strip time {
   margin-left: auto;
@@ -1178,6 +1194,9 @@ details .stack {
   .version-strip time {
     display: none;
   }
+  .version-strip .history-link {
+    margin-left: auto;
+  }
   .version-strip .commit-message {
     flex-basis: 100%;
     order: 4;
@@ -1187,14 +1206,6 @@ details .stack {
   }
   .file-table .file-action {
     display: none;
-  }
-  .project-row {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 5px;
-  }
-  .project-row time {
-    padding-left: 27px;
   }
   .markdown {
     padding: 16px;

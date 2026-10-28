@@ -80,7 +80,7 @@ func serve(ctx context.Context, directory, address string, out io.Writer) error 
 		return err
 	}
 	defer i.Close()
-	handler, err := web.New(i)
+	handler, err := web.New(i, buildVersion())
 	if err != nil {
 		return err
 	}

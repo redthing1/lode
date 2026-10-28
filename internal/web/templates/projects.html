@@ -1,4 +1,5 @@
 {{define "projects"}}{{template "top" .}}
+<div class="project-index">
 <div class="page-heading">
   <h1>Projects <span class="count">{{len .Data}}</span></h1>
   {{if .User.Admin}}<a class="button" href="/projects/new">New project</a
@@ -11,7 +12,6 @@
       {{template "repo-icon"}}<a href="/p/{{.Slug}}">{{.Slug}}</a
       ><span class="badge">Private</span>
     </div>
-    <time class="muted">Created {{date .Created}}</time>
   </div>
   {{else}}
   <div class="empty">
@@ -22,6 +22,7 @@
   </div>
   {{end}}
 </section>
+</div>
 {{template "bottom" .}}{{end}} {{define "new-project"}}{{template "top" .}}
 <section class="auth-panel panel">
   <h1 class="panel-title">New project</h1>
@@ -55,17 +56,10 @@
 <nav class="tabs" aria-label="Project navigation">
   <a
     href="/p/{{.Info.Slug}}?branch={{.Branch}}"
-    {{if eq .Tab "files"}}
+    {{if or (eq .Tab "files") (eq .Tab "history")}}
     aria-current="page"
     {{end}}
     >{{template "file"}}Files</a
-  >
-  <a
-    href="/p/{{.Info.Slug}}/history?branch={{.Branch}}"
-    {{if eq .Tab "history"}}
-    aria-current="page"
-    {{end}}
-    >History</a
   >
   <a
     href="/p/{{.Info.Slug}}/branches"
@@ -95,11 +89,11 @@
     <a
       href="/p/{{.Info.Slug}}/storage"
       {{if eq .Tab "storage"}} aria-current="page" {{end}}
-      >Storage</a
+      >Retention</a
     >
   </nav>
   <div class="settings-content">
-    <div class="page-heading"><h1>{{if eq .Tab "members"}}Members{{else}}Storage{{end}}</h1></div>
+    <div class="page-heading"><h1>{{if eq .Tab "members"}}Members{{else}}Version retention{{end}}</h1></div>
 {{end}} {{define "branch-picker"}}
 <form class="inline branch-picker" method="get">
   <label class="sr-only" for="branch">Branch</label>{{template
@@ -124,6 +118,7 @@
     >{{short .Commit.ID}}</a
   ><span class="commit-message">{{.Commit.Message}}</span
   ><time class="muted">{{date .Commit.Created}}</time>
+  <a class="history-link" href="/p/{{.Info.Slug}}/history?branch={{.Branch}}">History</a>
 </div>
 {{end}} {{define "project-files"}}{{template "top" .}}{{with .Data}}{{template
 "project-top" .}} {{if .Commit.ID}}
@@ -305,7 +300,7 @@ lode save -m 'Initial version'</code></pre>
 {{end}}{{template "bottom" .}}{{end}} {{define "project-history"}}{{template
 "top" .}}{{with .Data}}{{template "project-top" .}}
 <div class="toolbar">
-  {{template "branch-picker" .}}<span class="muted">First-parent history</span>
+  {{template "branch-picker" .}}<strong>History</strong>
 </div>
 <section class="panel">
   {{range .History}}
@@ -452,7 +447,7 @@ lode save -m 'Initial version'</code></pre>
   </div>
 </section>
 <section class="panel">
-  <h2 class="panel-title">Add or update member</h2>
+  <h2 class="panel-title">Set member access</h2>
   <div class="panel-body">
     <form method="post" class="form-row">
       <label
@@ -467,11 +462,11 @@ lode save -m 'Initial version'</code></pre>
           <option value="writer">Writer</option>
           <option value="maintainer">Maintainer</option>
         </select></label
-      ><button type="submit">Save membership</button>
+      ><button type="submit">Save access</button>
     </form>
     <p class="hint">
       Reader: browse and download. Writer: save and branch. Maintainer: also
-      manage members and storage.
+      manage members and retention.
     </p>
   </div>
 </section>
@@ -480,15 +475,15 @@ lode save -m 'Initial version'</code></pre>
 <div class="notice" role="status">{{.Notice}}</div>
 {{end}}
 <section class="panel">
-  <h2 class="panel-title">Release historical contents</h2>
+  <h2 class="panel-title">Remove old file contents</h2>
   <div class="panel-body">
     <p>
-      Branch tips and tags stay protected. Released versions keep metadata, but
-      their files become unavailable.
+      Branch tips and tags are always protected. Removed files become unavailable
+      for download; version history remains.
     </p>
     <form method="post" class="form-row">
       <input type="hidden" name="action" value="preview" /><label
-        >Versions to keep per branch<input
+        >Recent versions to keep per branch<input
           type="number"
           min="0"
           name="keep"
@@ -496,6 +491,7 @@ lode save -m 'Initial version'</code></pre>
           required /></label
       ><button type="submit" class="secondary">Preview cleanup</button>
     </form>
+    <p class="hint">Includes the branch tip. Set 0 to keep only tips and tags.</p>
   </div>
 </section>
 {{if .PlanToken}}
@@ -504,8 +500,8 @@ lode save -m 'Initial version'</code></pre>
   <div class="panel-body">
     <div class="stats">
       <span><strong>{{.Protected}}</strong> protected</span
-      ><span><strong>{{.Eligible}}</strong> eligible</span
-      ><span><strong>{{.Expired}}</strong> already released</span>
+      ><span><strong>{{.Eligible}}</strong> to remove</span
+      ><span><strong>{{.Expired}}</strong> already removed</span>
     </div>
     <form method="post">
       <input type="hidden" name="action" value="apply" /><input
@@ -519,25 +515,25 @@ lode save -m 'Initial version'</code></pre>
         disabled
         {{end}}
       >
-        Release {{.Eligible}} historical versions
+        Remove contents from {{.Eligible}} versions
       </button>
     </form>
   </div>
 </section>
 {{end}}
 <section class="panel">
-  <h2 class="panel-title">Collect released contents</h2>
+  <h2 class="panel-title">Reclaim disk space</h2>
   <div class="panel-body">
     <p>
-      Reclaim unreferenced data. Storage-engine safety delays may postpone
-      reclamation.
+      Run after cleanup to reclaim unreferenced data. Some space may become
+      available on a later run.
     </p>
     <form method="post">
       <input type="hidden" name="action" value="collect" /><input
         type="hidden"
         name="keep"
         value="{{.Keep}}"
-      /><button type="submit" class="secondary">Run collection</button>
+      /><button type="submit" class="secondary">Reclaim space</button>
     </form>
   </div>
 </section>

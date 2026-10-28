@@ -43,7 +43,7 @@ type page struct {
 	Data    any
 }
 
-func New(i *instance.Instance) (http.Handler, error) {
+func New(i *instance.Instance, version string) (http.Handler, error) {
 	u, _ := url.Parse(i.Config.URL)
 	session := sessions(i.DB(), u.Scheme == "https")
 	security, err := instance.NewSecurity(i.Store, i.Config.URL)
@@ -57,9 +57,10 @@ func New(i *instance.Instance) (http.Handler, error) {
 			}
 			return s
 		},
-		"date":  func(t time.Time) string { return t.UTC().Format("02 Jan 2006 · 15:04 UTC") },
-		"bytes": formatBytes,
-		"base":  path.Base,
+		"version": func() string { return version },
+		"date":    func(t time.Time) string { return t.UTC().Format("02 Jan 2006 · 15:04 UTC") },
+		"bytes":   formatBytes,
+		"base":    path.Base,
 	}).ParseFS(files, "templates/*.html")
 	if err != nil {
 		return nil, err

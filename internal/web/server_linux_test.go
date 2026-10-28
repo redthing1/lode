@@ -107,7 +107,7 @@ func testServer(t *testing.T) (*instance.Instance, string, string) {
 		_ = listener.Close()
 		t.Fatal(err)
 	}
-	handler, err := New(inst)
+	handler, err := New(inst, "test")
 	if err != nil {
 		_ = listener.Close()
 		_ = inst.Close()
