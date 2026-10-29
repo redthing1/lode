@@ -128,7 +128,7 @@ CREATE TABLE recovery_codes(user_id TEXT NOT NULL REFERENCES users(id),hash TEXT
 CREATE TABLE projects(id TEXT PRIMARY KEY,owner TEXT NOT NULL REFERENCES users(id),name TEXT NOT NULL,created INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'creating' CHECK(state IN ('creating','ready','deleting')),UNIQUE(owner,name));
 CREATE TABLE members(project TEXT NOT NULL REFERENCES projects(id),user_id TEXT NOT NULL REFERENCES users(id),role TEXT NOT NULL CHECK(role IN ('reader','writer','maintainer')),PRIMARY KEY(project,user_id));
 CREATE INDEX member_user ON members(user_id,project);
-PRAGMA user_version=6;`)
+PRAGMA user_version=7;`)
 	if err != nil {
 		return "", err
 	}
@@ -229,7 +229,7 @@ func Open(ctx context.Context, directory string) (_ *Store, err error) {
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&format); err != nil {
 		return nil, err
 	}
-	if format != 6 {
+	if format != 7 {
 		return nil, errors.New("unsupported instance format; create a new instance")
 	}
 	if err := s.db.QueryRowContext(ctx, "SELECT id,secret FROM instance").Scan(&s.ID, &s.key); err != nil {

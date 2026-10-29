@@ -32,7 +32,7 @@ func TestMergeReusesCompleteTreesAndRecordsBothParents(t *testing.T) {
 	source := branchSave(t, s, "experiment", first.ID, []model.Entry{file("assets/a", "experiment"), file("references/extra", "never downloaded")}, map[string]string{"assets/a": "experiment", "references/extra": "never downloaded"})
 	target := publish(t, s, first.ID, []model.Entry{file("local", "independent")}, map[string]string{"local": "independent"})
 	// Expired ancestor contents are unnecessary while comparison metadata exists.
-	if _, err := f.db.Exec("UPDATE versions SET retained=0 WHERE id=?", first.ID); err != nil {
+	if _, err := f.db.Exec("UPDATE versions SET protection='' WHERE id=?", first.ID); err != nil {
 		t.Fatal(err)
 	}
 	r := model.Save{ID: operation(t), Branch: "main", Base: target.ID, Merge: source.ID, Message: "Integrate experiment"}
@@ -171,7 +171,7 @@ func TestMergeWholeSubtreeChoicesAndCancellation(t *testing.T) {
 	if head, _ := s.Head(ctx, "bad-stream"); head != first.ID {
 		t.Fatal("bad stream published")
 	}
-	if _, err := f.db.Exec("UPDATE versions SET retained=0 WHERE id=?", source.ID); err != nil {
+	if _, err := f.db.Exec("UPDATE versions SET protection='' WHERE id=?", source.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Save(ctx, "alice", r, Source{}); !errors.Is(err, ErrExpired) {
@@ -204,7 +204,7 @@ func TestMergeBasePrunedAndAmbiguousAncestry(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, n := range tc.nodes {
-				if _, err := f.db.Exec("INSERT INTO versions VALUES('project',?,?,?,'alice','',0,'','','',1)", n.id, n.parent, n.merge); err != nil {
+				if _, err := f.db.Exec("INSERT INTO versions VALUES('project',?,?,?,'alice','',0,'','','')", n.id, n.parent, n.merge); err != nil {
 					t.Fatal(err)
 				}
 			}

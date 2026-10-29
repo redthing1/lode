@@ -62,7 +62,7 @@ func (c *Client) Save(ctx context.Context, owner, name string, request model.Sav
 			files = append(files, e)
 		}
 	}
-	// The project rewrites directories depth-first, with sorted child names.
+	// File parts follow the protocol's depth-first, sorted-component order.
 	sort.Slice(files, func(i, j int) bool {
 		return strings.ReplaceAll(files[i].Path, "/", "\x00") < strings.ReplaceAll(files[j].Path, "/", "\x00")
 	})

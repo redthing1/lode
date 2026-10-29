@@ -20,6 +20,7 @@ import (
 var ErrNoChanges = errors.New("no selected changes")
 
 // Source supplies changed bytes and validates stream completion before acceptance.
+// Write visits files depth-first, with sorted path components.
 type Source struct {
 	Write    func(model.Entry, io.Writer, *Basis) error
 	Complete func() error
@@ -238,7 +239,7 @@ func (s *Store) publish(ctx context.Context, actor string, r model.Save, intent 
 	if err := s.writeDirectories(ctx, tx, dirs); err != nil {
 		return model.Version{}, err
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO versions VALUES(?,?,?,?,?,?,?,?,?,?,1)", s.id, r.ID, r.Base, r.Merge, actor, r.Message, now.UnixMilli(), root.ID, protection, intent)
+	_, err = tx.ExecContext(ctx, "INSERT INTO versions VALUES(?,?,?,?,?,?,?,?,?,?)", s.id, r.ID, r.Base, r.Merge, actor, r.Message, now.UnixMilli(), root.ID, protection, intent)
 	if err != nil {
 		return model.Version{}, err
 	}

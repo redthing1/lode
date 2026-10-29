@@ -108,7 +108,7 @@ func (s *Store) applyCleanup(ctx context.Context, p cleanupPlan) (model.CleanupP
 		query string
 		ids   []string
 	}{
-		{"UPDATE versions SET retained=0,protection='' WHERE project=? AND id=?", p.expire},
+		{"UPDATE versions SET protection='' WHERE project=? AND id=?", p.expire},
 		{"DELETE FROM versions WHERE project=? AND id=?", p.forget},
 		{"DELETE FROM directories WHERE project=? AND id=?", p.directories},
 		{"DELETE FROM groups WHERE project=? AND id=?", p.groups},
@@ -158,7 +158,7 @@ func (s *Store) planCleanup(ctx context.Context, when time.Time) (cleanupPlan, e
 	}
 	p.preview.Policy = policy
 	p.cutoff = max(floor, operationCutoff(when))
-	rows, err := s.db.QueryContext(ctx, "SELECT id,parent,merge_parent,actor,message,created,root,retained FROM versions WHERE project=? ORDER BY created DESC,id", s.id)
+	rows, err := s.db.QueryContext(ctx, "SELECT id,parent,merge_parent,actor,message,created,root,protection<>'' FROM versions WHERE project=? ORDER BY created DESC,id", s.id)
 	if err != nil {
 		return p, err
 	}

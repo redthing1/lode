@@ -207,7 +207,7 @@ func backupProjects(ctx context.Context, stage string) (_ []string, err error) {
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&format); err != nil {
 		return nil, err
 	}
-	if format != 6 {
+	if format != 7 {
 		return nil, errors.New("unsupported instance format; create a new instance")
 	}
 	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM tokens t LEFT JOIN projects p ON p.id=t.project WHERE t.project<>'' AND p.id IS NULL").Scan(&invalid); err != nil {

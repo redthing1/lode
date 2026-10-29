@@ -64,7 +64,7 @@ func TestVerifyRejectsBrokenTreesAndReferences(t *testing.T) {
 			case "tag":
 				_, err = f.db.Exec("INSERT INTO tags VALUES(?,'bad','')", f.store.id)
 			case "expired metadata":
-				_, err = f.db.Exec("UPDATE versions SET retained=0; UPDATE branches SET tip=''; DELETE FROM directories")
+				_, err = f.db.Exec("UPDATE versions SET protection=''; UPDATE branches SET tip=''; DELETE FROM directories")
 			}
 			if err != nil {
 				t.Fatal(err)

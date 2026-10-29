@@ -247,7 +247,7 @@ func TestCleanupTransactionAndReleaseRecovery(t *testing.T) {
 	}
 	// Reconstruct the committed-expiry boundary before native release. Startup
 	// must finish release without touching retained roots.
-	if _, err := f.db.Exec("UPDATE versions SET retained=0,protection='' WHERE id=?", first.ID); err != nil {
+	if _, err := f.db.Exec("UPDATE versions SET protection='' WHERE id=?", first.ID); err != nil {
 		t.Fatal(err)
 	}
 	if roots, err := f.content.Roots(ctx); err != nil || len(roots) != 2 {

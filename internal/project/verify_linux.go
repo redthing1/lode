@@ -31,7 +31,7 @@ func (s *Store) Verify(ctx context.Context) error {
 SELECT tip AS id,0 AS tag FROM branches WHERE project=?
 UNION ALL SELECT version,1 FROM tags WHERE project=?
 ) refs LEFT JOIN versions v ON v.project=? AND v.id=refs.id
-WHERE (refs.id<>'' OR refs.tag=1) AND (v.id IS NULL OR v.retained<>1)`, s.id, s.id, s.id).Scan(&invalid)
+WHERE (refs.id<>'' OR refs.tag=1) AND (v.id IS NULL OR v.protection='')`, s.id, s.id, s.id).Scan(&invalid)
 	if err != nil {
 		return err
 	}
@@ -43,7 +43,7 @@ WHERE (refs.id<>'' OR refs.tag=1) AND (v.id IS NULL OR v.retained<>1)`, s.id, s.
 	for {
 		var id, root string
 		var retained bool
-		err := s.db.QueryRowContext(ctx, "SELECT id,root,retained FROM versions WHERE project=? AND id>? ORDER BY id LIMIT 1", s.id, last).Scan(&id, &root, &retained)
+		err := s.db.QueryRowContext(ctx, "SELECT id,root,protection<>'' FROM versions WHERE project=? AND id>? ORDER BY id LIMIT 1", s.id, last).Scan(&id, &root, &retained)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}

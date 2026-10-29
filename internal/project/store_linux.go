@@ -41,7 +41,7 @@ func Initialize(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `
 CREATE TABLE directories(project TEXT NOT NULL,id TEXT NOT NULL,body BLOB NOT NULL,PRIMARY KEY(project,id));
 CREATE TABLE groups(project TEXT NOT NULL,id TEXT NOT NULL,body BLOB NOT NULL,PRIMARY KEY(project,id));
-CREATE TABLE versions(project TEXT NOT NULL,id TEXT NOT NULL,parent TEXT NOT NULL,merge_parent TEXT NOT NULL,actor TEXT NOT NULL,message TEXT NOT NULL,created INTEGER NOT NULL,root TEXT NOT NULL,protection TEXT NOT NULL,intent TEXT NOT NULL,retained INTEGER NOT NULL,PRIMARY KEY(project,id));
+CREATE TABLE versions(project TEXT NOT NULL,id TEXT NOT NULL,parent TEXT NOT NULL,merge_parent TEXT NOT NULL,actor TEXT NOT NULL,message TEXT NOT NULL,created INTEGER NOT NULL,root TEXT NOT NULL,protection TEXT NOT NULL,intent TEXT NOT NULL,PRIMARY KEY(project,id));
 CREATE INDEX version_history ON versions(project,created DESC,id);
 CREATE TABLE cancelled(project TEXT NOT NULL,id TEXT NOT NULL,actor TEXT NOT NULL,intent TEXT NOT NULL,PRIMARY KEY(project,id,actor));
 CREATE TABLE branches(project TEXT NOT NULL,name TEXT NOT NULL,tip TEXT NOT NULL,PRIMARY KEY(project,name));
@@ -101,8 +101,9 @@ type savedVersion struct {
 func (s *Store) version(ctx context.Context, id string) (savedVersion, error) {
 	var v savedVersion
 	var created int64
-	err := s.db.QueryRowContext(ctx, "SELECT id,parent,merge_parent,actor,message,created,root,protection,intent,retained FROM versions WHERE project=? AND id=?", s.id, id).Scan(&v.ID, &v.Parent, &v.MergeParent, &v.Actor, &v.Message, &created, &v.root, &v.protection, &v.intent, &v.Retained)
+	err := s.db.QueryRowContext(ctx, "SELECT id,parent,merge_parent,actor,message,created,root,protection,intent FROM versions WHERE project=? AND id=?", s.id, id).Scan(&v.ID, &v.Parent, &v.MergeParent, &v.Actor, &v.Message, &created, &v.root, &v.protection, &v.intent)
 	v.Created = fromMillis(created)
+	v.Retained = v.protection != ""
 	return v, err
 }
 
@@ -111,7 +112,7 @@ func (s *Store) reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT id,root,protection FROM versions WHERE project=? AND retained=1", s.id)
+	rows, err := s.db.QueryContext(ctx, "SELECT id,root,protection FROM versions WHERE project=? AND protection<>''", s.id)
 	if err != nil {
 		return err
 	}

@@ -59,7 +59,7 @@ func TestBranchesKeepIndependentTipsAndResolveVersions(t *testing.T) {
 	if read(t, s, second.ID, "asset") != "experiment" {
 		t.Fatal("deleting a branch removed its contents")
 	}
-	if _, err := f.db.Exec("UPDATE versions SET retained=0 WHERE project=? AND id=?", s.id, second.ID); err != nil {
+	if _, err := f.db.Exec("UPDATE versions SET protection='' WHERE project=? AND id=?", s.id, second.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CreateBranch(ctx, "expired", second.ID); !errors.Is(err, ErrExpired) {
