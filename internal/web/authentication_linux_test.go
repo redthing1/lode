@@ -274,7 +274,7 @@ func TestBrowserKeyLoginAndPasswordVerification(t *testing.T) {
 	// Both passwordless paths exercise the same credential; only discovery needs
 	// its opaque account handle. Use fresh browsers to prove no password session.
 	for i, name := range []string{"", "alice"} {
-		time.Sleep(600 * time.Millisecond) // respect the public sign-in limiter
+		time.Sleep(time.Second) // both start and finish consume a sign-in attempt
 		b := newBrowserSession(t, f.origin)
 		c = beginBrowserKey(t, b, "/login/key", url.Values{"username": {name}})
 		if (name == "") != (len(c.Options.PublicKey.AllowCredentials) == 0) {
@@ -285,10 +285,12 @@ func TestBrowserKeyLoginAndPasswordVerification(t *testing.T) {
 		b.request("GET", "/alice/project", nil, 200)
 	}
 	pending.request("POST", "/logout", nil, 303)
+	time.Sleep(time.Second)
 	pending.request("POST", "/login", url.Values{"username": {"alice"}, "password": {browserPassword}}, 303)
 	pending.request("POST", "/verify/recovery", url.Values{"code": {codes[0]}}, 303)
 	pending.request("GET", "/alice/project", nil, 200)
 	pending.request("POST", "/logout", nil, 303)
+	time.Sleep(time.Second)
 	pending.request("POST", "/login", url.Values{"username": {"alice"}, "password": {browserPassword}}, 303)
 	pending.request("POST", "/verify/recovery", url.Values{"code": {codes[0]}}, 400)
 	pending.request("GET", "/alice/project", nil, 303)

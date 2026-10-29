@@ -159,7 +159,7 @@ func TestBackupRestoresHostedInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close(ctx)
-	if r.ID != s.ID || !bytes.Equal(r.key, s.key) || r.Config != s.Config {
+	if r.ID != s.ID || !bytes.Equal(r.key, s.key) || !reflect.DeepEqual(r.Config, s.Config) {
 		t.Fatal("instance identity/config changed")
 	}
 	if got, err := r.Password(ctx, alice.Name, originalPassword); err != nil || got != alice {

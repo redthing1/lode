@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/redthing1/lode/internal/instance"
-	"golang.org/x/time/rate"
 )
 
 var errSignInRate = errors.New("too many attempts; try again shortly")
@@ -33,6 +32,7 @@ func (s *Server) startSession(r *http.Request, user instance.User, pending bool)
 	s.sessions.Put(r.Context(), "user", user.ID)
 	s.sessions.Put(r.Context(), "generation", user.Generation)
 	if pending {
+		s.sessions.SetDeadline(r.Context(), time.Now().Add(5*time.Minute))
 		s.sessions.Put(r.Context(), "pending", true)
 		s.sessions.Put(r.Context(), "pending-until", time.Now().Add(5*time.Minute).Unix())
 	}
@@ -44,6 +44,9 @@ func (s *Server) challengeBinding(r *http.Request) string {
 	if binding == "" {
 		binding = rand.Text()
 		s.sessions.Put(r.Context(), "challenge-binding", binding)
+		if s.sessions.GetString(r.Context(), "user") == "" {
+			s.sessions.SetDeadline(r.Context(), time.Now().Add(5*time.Minute))
+		}
 	}
 	return binding
 }
@@ -55,7 +58,11 @@ type keyReply struct {
 
 func (s *Server) browserJSON(h func(*http.Request) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		result, err := h(r)
+		var result any
+		err := errSignInRate
+		if s.attempts.allow(r) {
+			result, err = h(r)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if err != nil {
 			status, message := 500, "The request could not be completed."
@@ -80,14 +87,10 @@ func (s *Server) browserJSON(h func(*http.Request) (any, error)) http.HandlerFun
 }
 
 func (s *Server) initAuthentication(mux *http.ServeMux) {
-	limit := rate.NewLimiter(2, 5)
 	for _, route := range []string{"GET /setup", "POST /setup", "GET /login", "POST /login"} {
-		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) { s.passwordSignIn(w, r, limit) })
+		mux.HandleFunc(route, s.passwordSignIn)
 	}
 	mux.HandleFunc("POST /login/key", s.browserJSON(func(r *http.Request) (any, error) {
-		if !limit.Allow() {
-			return nil, errSignInRate
-		}
 		if err := r.ParseForm(); err != nil {
 			return nil, err
 		}
@@ -103,9 +106,6 @@ func (s *Server) initAuthentication(mux *http.ServeMux) {
 	mux.HandleFunc("GET /verify", s.verifyPage)
 	mux.HandleFunc("POST /verify/recovery", s.verifyPage)
 	mux.HandleFunc("POST /verify/key", s.browserJSON(func(r *http.Request) (any, error) {
-		if !limit.Allow() {
-			return nil, errSignInRate
-		}
 		u, err := s.sessionUser(r, true)
 		if err != nil {
 			return nil, err
@@ -150,7 +150,7 @@ func (s *Server) initAuthentication(mux *http.ServeMux) {
 	}))
 }
 
-func (s *Server) passwordSignIn(w http.ResponseWriter, r *http.Request, limit *rate.Limiter) {
+func (s *Server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	setup, err := s.instance.NeedsSetup(r.Context())
 	if err != nil {
 		http.Error(w, "Unable to read instance", 500)
@@ -172,7 +172,7 @@ func (s *Server) passwordSignIn(w http.ResponseWriter, r *http.Request, limit *r
 		render(w, 200, "auth", p)
 		return
 	}
-	if !limit.Allow() {
+	if !s.attempts.allow(r) {
 		p.Error = "Too many attempts. Try again shortly."
 		render(w, 429, "auth", p)
 		return
@@ -214,6 +214,10 @@ func (s *Server) passwordSignIn(w http.ResponseWriter, r *http.Request, limit *r
 }
 
 func (s *Server) verifyPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" && !s.attempts.allow(r) {
+		http.Error(w, "Too many attempts. Try again shortly.", http.StatusTooManyRequests)
+		return
+	}
 	if !s.sessions.GetBool(r.Context(), "pending") {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return

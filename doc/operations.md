@@ -66,6 +66,7 @@ Edit `data/state/config.json` (under your configured data directory):
 
 - `url` is the browser and CLI origin. Use HTTPS with a hostname; HTTP at `localhost` is allowed for local development.
 - `listen` is the server's HTTP address behind the proxy. Set it during initialization with `--listen`, if needed.
+- `trusted_proxies` is an optional list of IP prefixes, such as `["127.0.0.1/32", "::1/128"]`. Only listed peers may supply `X-Forwarded-For` for per-client sign-in limits. List only your proxy addresses; the default trusts none and limits by the direct peer.
 
 Stop the server before editing this file. Unknown fields are refused.
 
@@ -74,6 +75,8 @@ Keep the canonical URL when restoring an instance. Changing it affects saved CLI
 ## Accounts and recovery
 
 Public registration is closed. Administrators create accounts under **Site administration → Users**; users create and share their own projects. See [sharing and access](guide.md#sharing-and-access) for roles and token scope.
+
+All projects are private. Anonymous requests can access sign-in, static assets, health, and initial setup with its one-use code. Project pages, file contents, the client API, and administration require authentication and current permissions. Personal tokens do not inherit administrator authority.
 
 Administrators can reset passwords, change administrator access, and disable accounts. These changes end the affected account's sessions and revoke its tokens. Disabling an account preserves its projects; re-enabling it requires fresh sign-in. The last enabled administrator cannot be disabled or demoted.
 

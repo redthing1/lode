@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -30,8 +31,9 @@ import (
 )
 
 type Config struct {
-	URL    string `json:"url"`
-	Listen string `json:"listen"`
+	URL            string         `json:"url"`
+	Listen         string         `json:"listen"`
+	TrustedProxies []netip.Prefix `json:"trusted_proxies,omitempty"`
 }
 
 func (c Config) Validate() error {
@@ -51,6 +53,11 @@ func (c Config) Validate() error {
 	host, port, err := net.SplitHostPort(c.Listen)
 	if err != nil || !validPort(port) || net.ParseIP(host) == nil {
 		return errors.New("listen requires an IP address and port, such as 127.0.0.1:8473")
+	}
+	for _, prefix := range c.TrustedProxies {
+		if !prefix.IsValid() {
+			return errors.New("trusted_proxies requires IP prefixes")
+		}
 	}
 	return nil
 }

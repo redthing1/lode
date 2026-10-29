@@ -35,6 +35,10 @@ func (s *Server) initBrowser(secure bool) http.Handler {
 	type handler func(http.ResponseWriter, *http.Request, instance.Principal) error
 	bind := func(pattern string, h handler) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			if sessions.GetString(r.Context(), "user") == "" {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
 			if sessions.GetBool(r.Context(), "pending") {
 				http.Redirect(w, r, "/verify", http.StatusSeeOther)
 				return
@@ -140,8 +144,9 @@ func (s *Server) initBrowser(secure bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		w.Header().Set("Referrer-Policy", "same-origin")
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(30 * time.Second))
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		protected.ServeHTTP(w, r)
+		protected.ServeHTTP(&response{ResponseWriter: w}, r)
 	})
 }
 

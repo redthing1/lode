@@ -257,6 +257,7 @@ func TestConfigurationRejectsUnknownFieldsAndInvalidListen(t *testing.T) {
 	}
 	for _, config := range []string{
 		`{"url":"http://localhost:8474","listen":"127.0.0.1:8474","registration":true}`,
+		`{"url":"http://localhost:8474","listen":"127.0.0.1:8474","trusted_proxies":["invalid"]}`,
 		`{"url":"http://localhost:8474","listen":"127.0.0.1:8474"} {}`,
 	} {
 		if err := os.WriteFile(filepath.Join(s.directory, "state", "config.json"), []byte(config), 0600); err != nil {

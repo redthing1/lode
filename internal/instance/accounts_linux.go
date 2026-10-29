@@ -64,6 +64,9 @@ func (s *Store) SetupCode(ctx context.Context) (string, error) {
 }
 
 func (s *Store) Setup(ctx context.Context, code, name, password string) (User, error) {
+	if subtle.ConstantTimeCompare([]byte(code), []byte(setupCode(s.key))) != 1 {
+		return User{}, ErrCredentials
+	}
 	if !validUsername(name) {
 		return User{}, ErrUsername
 	}
@@ -103,13 +106,15 @@ func (s *Store) Password(ctx context.Context, name, password string) (User, erro
 	var user User
 	var hash []byte
 	err := s.db.QueryRowContext(ctx, "SELECT id,name,password,admin,disabled,generation FROM users WHERE name=?", name).Scan(&user.ID, &user.Name, &hash, &user.Admin, &user.Disabled, &user.Generation)
-	if errors.Is(err, sql.ErrNoRows) {
-		return User{}, ErrCredentials
-	}
-	if err != nil {
+	missing := errors.Is(err, sql.ErrNoRows)
+	if err != nil && !missing {
 		return User{}, err
 	}
-	if user.Disabled || bcrypt.CompareHashAndPassword(hash, []byte(password)) != nil {
+	if missing {
+		// Use the same bcrypt cost for unavailable and existing accounts.
+		hash = []byte("$2a$12$Bstd5zrZoDzwrc0LoSLEM.kECyH7/.PwY/l.ehKl/LJUbimZca.au")
+	}
+	if bcrypt.CompareHashAndPassword(hash, []byte(password)) != nil || missing || user.Disabled {
 		return User{}, ErrCredentials
 	}
 	return user, nil

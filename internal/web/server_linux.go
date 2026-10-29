@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -25,13 +26,15 @@ type Server struct {
 	mux      *http.ServeMux
 	host     string
 	sessions *scs.SessionManager
+	attempts signInLimit
 }
 
 func New(store *instance.Store) *Server {
 	u, _ := url.Parse(store.Config.URL)
-	s := &Server{instance: store, mux: http.NewServeMux(), host: u.Host}
+	s := &Server{instance: store, mux: http.NewServeMux(), host: u.Host, attempts: signInLimit{trusted: store.Config.TrustedProxies}}
 	s.mux.Handle("/api/", http.NotFoundHandler())
-	s.mux.Handle("GET /assets/", http.FileServer(http.FS(browserFiles)))
+	assets, _ := fs.Sub(browserFiles, "assets")
+	s.mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assets))))
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	s.mux.HandleFunc("GET /api/me", s.api(s.me))
 	s.mux.HandleFunc("GET /api/projects", s.api(s.projects))

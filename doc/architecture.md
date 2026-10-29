@@ -74,6 +74,8 @@ Sessions carry the account generation captured during authentication. Security c
 
 Browser forms have same-origin protection. Text previews are escaped; Markdown omits embedded HTML and external images. Local links and media identify immutable versions and use the same authorized content reader as downloads. Inline HTML and SVG are refused.
 
+Sign-in attempts are throttled by source address in a bounded table. Forwarded addresses are accepted only through configured trusted proxies. Browser forms have size and time limits; streamed transfers refresh an idle deadline. Unfinished sign-in sessions expire after five minutes. Username-first security-key login exposes credential descriptors to the requesting browser; account names and key enrollment are not confidential.
+
 ## Resource costs
 
 Changed large files use librsync deltas when a suitable basis exists; other files transfer whole. Small downloads use bounded batches. Every reconstructed file is checked against its complete size and hash before installation.

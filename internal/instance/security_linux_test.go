@@ -9,6 +9,15 @@ import (
 const originalPassword = "a sufficiently long test password"
 const replacementPassword = "a different sufficiently long password"
 
+func TestUnavailablePasswordAccount(t *testing.T) {
+	s, _ := instanceFixture(t)
+	for _, password := range []string{originalPassword, "unused password comparison"} {
+		if _, err := s.Password(context.Background(), "missing", password); !errors.Is(err, ErrCredentials) {
+			t.Fatalf("missing account: %v", err)
+		}
+	}
+}
+
 func TestPasswordChangeRevokesCredentialsAtomically(t *testing.T) {
 	ctx := context.Background()
 	s, user := instanceFixture(t)

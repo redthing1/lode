@@ -6,7 +6,7 @@ Lode is experimental. The server runs on Linux; the client uses portable Go code
 
 ## Install
 
-From a source checkout, install Go 1.27.2 or later, a C compiler, and the librsync development library. Keep the librsync shared library installed to run Lode.
+From a source checkout, install Go 1.27.3 or later, a C compiler, and the librsync development library. Keep the librsync shared library installed to run Lode.
 
 On macOS with Homebrew:
 

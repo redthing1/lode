@@ -1,4 +1,4 @@
-FROM docker.io/library/golang:1.27.2-trixie AS build
+FROM docker.io/library/golang:1.27.3-trixie AS build
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends librsync-dev \
