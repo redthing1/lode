@@ -2,25 +2,16 @@
 
 Lode versions large binary projects in ordinary folders. Work on a shared branch, download only the paths you need, and browse files and history in the web interface.
 
-Lode is experimental. The server runs on Linux; the client uses portable Go code with native librsync.
+Lode is experimental. The client targets Linux, macOS, and Windows; the server runs on Linux.
 
 ## Install
 
-From a source checkout, install Go 1.27.3 or later, a C compiler, and the librsync development library. Keep the librsync shared library installed to run Lode.
+From a source checkout, install Go 1.26 or later, a C compiler, and librsync. See [build prerequisites](doc/build.md) for platform setup.
 
-On macOS with Homebrew:
-
-```sh
-brew install librsync
-export CGO_CPPFLAGS="-I$(brew --prefix librsync)/include"
-export CGO_LDFLAGS="-L$(brew --prefix librsync)/lib"
-```
-
-Install the command:
+Install the command, then add Go's binary installation directory to your `PATH` (`go env GOBIN`, or `bin` under `go env GOPATH` when unset):
 
 ```sh
-GOBIN="$HOME/.local/bin" go install ./cmd/lode
-export PATH="$HOME/.local/bin:$PATH"
+go install -mod=readonly ./cmd/lode
 lode --help
 ```
 
