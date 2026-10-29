@@ -1,119 +1,144 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/redthing1/lode/internal/instance"
-	"github.com/redthing1/lode/internal/project"
 	"github.com/redthing1/lode/internal/web"
+	"golang.org/x/term"
 )
 
-func runServer(ctx context.Context, command string, args []string, address, publicURL string, out, diagnostics io.Writer) error {
-	if command == "backup" {
-		if len(args) != 2 {
-			return errors.New("usage: lode backup SOURCE DEST")
-		}
-		if err := instance.Backup(ctx, args[0], args[1]); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Backup created: %s\n", args[1])
-		return nil
+func serverCommand(ctx context.Context, command string, args []string, directory string, out io.Writer) error {
+	usage := "Usage: lode " + command + " [options] <instance-directory>"
+	arguments := 1
+	if command == "recover-user" {
+		usage += " <username>\nRead a new password from the terminal or one line on stdin."
+		arguments = 2
 	}
-	if command == "import" || command == "recover" {
-		count := 3
-		if command == "recover" {
-			count = 2
-		}
-		if len(args) != count {
-			return fmt.Errorf("use lode help %s for syntax", command)
-		}
-		i, err := instance.Open(ctx, args[0])
+	if command == "backup" {
+		usage = "Usage: lode backup <source-instance> <new-destination>\nThe source must be stopped. Restore uses the same command."
+		arguments = 2
+	}
+	f := flags(command, usage, out)
+	var origin, listen string
+	if command == "init" {
+		f.StringVar(&origin, "url", "http://localhost:8473", "canonical server origin")
+		f.StringVar(&listen, "listen", "127.0.0.1:8473", "HTTP listen address")
+	}
+	if err := f.Parse(args); err != nil {
+		return err
+	}
+	if f.NArg() != arguments {
+		return errors.New(usage)
+	}
+	dir := f.Arg(0)
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(directory, dir)
+	}
+	if command == "init" {
+		code, err := instance.Initialize(ctx, dir, instance.Config{URL: origin, Listen: listen})
 		if err != nil {
 			return err
 		}
-		defer i.Close()
-		if command == "import" {
-			ownerName, slug, ok := strings.Cut(args[1], "/")
-			if !ok {
-				return errors.New("import target must be OWNER/PROJECT")
-			}
-			owner, err := i.LookupUser(ctx, ownerName)
-			if err != nil {
-				return err
-			}
-			p, err := i.ImportProject(ctx, owner.ID, slug, args[2])
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(out, "Imported project: %s/%s\n", i.Config.URL, p.Path())
-			return nil
-		}
-		password := project.NewID()
-		if _, err := i.ResetAccount(ctx, args[1], password); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Temporary password for %s: %s\nSign in and change it. Existing sessions, keys and tokens were revoked.\n", args[1], password)
+		fmt.Fprintf(out, "Instance created.\nSetup code: %s\nRun lode serve %s\n", code, dir)
 		return nil
 	}
-	if len(args) != 1 {
-		return fmt.Errorf("usage: lode %s [options] DIR", command)
+	if command == "backup" {
+		destination := f.Arg(1)
+		if !filepath.IsAbs(destination) {
+			destination = filepath.Join(directory, destination)
+		}
+		if err := instance.Backup(ctx, dir, destination); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Backup verified: %s\n", destination)
+		return nil
 	}
-	if command == "serve" {
-		return serve(ctx, args[0], address, diagnostics)
-	}
-	i, code, err := instance.Create(ctx, args[0], publicURL)
+	store, err := instance.Open(ctx, dir)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Instance: %s\nSetup: %s/setup\nSetup code: %s\nRun lode serve %s, then open the setup page.\n", i.Config.ID, i.Config.URL, code, args[0])
-	return i.Close()
-}
-
-func serve(ctx context.Context, directory, address string, out io.Writer) error {
-	host, _, err := net.SplitHostPort(address)
+	defer store.Close(context.Background())
+	if command == "recover-user" {
+		password, err := recoveryPassword(out)
+		if err != nil {
+			return err
+		}
+		if err := store.RecoverAccount(ctx, f.Arg(1), password); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "Account recovered. Existing sessions, tokens, keys and recovery codes are invalid.")
+		return nil
+	}
+	setup, err := store.NeedsSetup(ctx)
 	if err != nil {
 		return err
 	}
-	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return errors.New("serve requires a loopback address; use a TLS reverse proxy for remote access")
+	if setup {
+		code, err := store.SetupCode(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Administrator setup: %s/setup\nSetup code: %s\n", store.Config.URL, code)
 	}
-	i, err := instance.Open(ctx, directory)
-	if err != nil {
-		return err
-	}
-	defer i.Close()
-	handler, err := web.New(i, buildVersion())
-	if err != nil {
-		return err
-	}
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return err
-	}
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute, BaseContext: func(net.Listener) context.Context { return ctx }}
-	result := make(chan error, 1)
-	go func() { result <- server.Serve(listener) }()
-	fmt.Fprintf(out, "Serving %s on %s\n", i.Config.URL, listener.Addr())
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM)
+	defer stop()
+	server := &http.Server{Addr: store.Config.Listen, Handler: web.New(store), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
+	done := make(chan error, 1)
+	go func() { done <- server.ListenAndServe() }()
+	fmt.Fprintf(out, "Lode at %s\n", store.Config.URL)
 	select {
-	case err := <-result:
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdown); err != nil {
+			server.Close()
+			<-done
+			return err
+		}
+		err := <-done
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
-	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdown); err != nil {
-			_ = server.Close()
-			return err
-		}
-		return nil
 	}
+}
+
+func recoveryPassword(out io.Writer) (string, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		line, err := bufio.NewReader(io.LimitReader(os.Stdin, 75)).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		return strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"), nil
+	}
+	fmt.Fprint(out, "New password: ")
+	password, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(out)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprint(out, "Confirm password: ")
+	confirmation, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(out)
+	if err != nil {
+		return "", err
+	}
+	if string(password) != string(confirmation) {
+		return "", errors.New("passwords do not match")
+	}
+	return string(password), nil
 }

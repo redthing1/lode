@@ -1,0 +1,52 @@
+{{define "project-settings-nav"}}<nav aria-label="Project settings"><h2>Project settings</h2>
+{{if ne .Project.State "deleting"}}
+<a href="{{projectURL .Project}}/settings/members" {{if eq .Section "members"}}aria-current="page"{{end}}>Collaborators</a>
+<a href="{{projectURL .Project}}/settings/storage" {{if eq .Section "storage"}}aria-current="page"{{end}}>Storage</a>
+{{end}}
+{{if or .User.Admin (eq .User.Name .Project.Owner)}}<a href="{{projectURL .Project}}/settings/delete" {{if eq .Section "delete"}}aria-current="page"{{end}}>Delete project</a>{{end}}
+</nav>{{end}}
+
+{{define "storage"}}{{template "top" .}}{{template "project-heading" .}}
+<div class="settings">{{template "project-settings-nav" .}}<div class="settings-content">
+<h1>Storage</h1>
+<section class="panel padded token-form"><h2>Retention</h2>
+<form method="post"><input type="hidden" name="action" value="policy">
+<label>Recent versions per branch<input type="number" name="versions" min="1" max="10000" value="{{.Policy.Versions}}" required></label>
+<label>History (days)<input type="number" name="history_days" min="1" max="36500" value="{{.Policy.HistoryDays}}" required></label>
+<p class="muted">Branch tips and <a href="{{projectURL .Project}}/tags">tagged versions</a> keep their contents. Saving this policy removes nothing.</p>
+<button>Save policy</button></form></section>
+<section class="panel padded token-form"><h2>{{if .Applied}}Cleanup applied{{else}}Cleanup{{end}}</h2>
+{{if .Cleanup}}
+<p><strong>{{.Cleanup.Retained}}</strong> versions keep contents · <strong>{{.Cleanup.Expire}}</strong> {{if .Applied}}expired{{else}}lose contents{{end}} · <strong>{{.Cleanup.Forget}}</strong> history records {{if .Applied}}removed{{else}}removed on apply{{end}}</p>
+{{if not .Applied}}
+{{if .Cleanup.Expire}}<h3>Contents to expire ({{len .Cleanup.ExpireExamples}} of {{.Cleanup.Expire}})</h3>
+{{range .Cleanup.ExpireExamples}}<div class="history-row"><a href="{{tree $.Project .ID "" ""}}">{{if .Message}}{{.Message}}{{else}}Saved version{{end}}</a><span class="ref">{{short .ID}}</span></div>{{end}}{{end}}
+{{if .Cleanup.Forget}}<h3>History to remove ({{len .Cleanup.ForgetExamples}} of {{.Cleanup.Forget}})</h3>
+{{range .Cleanup.ForgetExamples}}<div class="history-row"><span>{{if .Message}}{{.Message}}{{else}}Saved version{{end}}</span><span class="ref">{{short .ID}}</span></div>{{end}}{{end}}
+<p>Expired contents cannot be downloaded or restored. Removed history can prevent later automatic merges. Local files are unchanged.</p>
+{{else}}<p class="muted">Collect storage below to reclaim unreferenced contents.</p>{{end}}
+{{else}}<p>Review content expiry and history removal before applying cleanup.</p>{{end}}
+<form method="post" class="actions">
+{{if and .Cleanup (not .Applied)}}<input type="hidden" name="token" value="{{.Cleanup.Token}}"><button name="action" value="apply" class="secondary danger">Apply cleanup</button>{{end}}
+<button name="action" value="preview" class="secondary">Preview cleanup</button></form>
+</section>
+<section class="panel padded token-form" id="collection"><h2>{{if .Collection}}Collection complete{{else}}Content storage{{end}}</h2>
+{{if .Collection}}<p>Allocated space: {{size .Collection.Before.Allocated}} → <strong>{{size .Collection.After.Allocated}}</strong></p>
+{{else}}<p><strong>{{size .Usage.Allocated}}</strong> allocated · {{size .Usage.Bytes}} in repository files</p>{{end}}
+<p class="muted">Excludes the database and cache. Collection reclaims unreferenced contents; retained and shared contents remain. It temporarily pauses this project's reads and saves and needs free space for rewriting.</p>
+<form method="post" action="#collection"><button name="action" value="collect" class="secondary">Collect storage</button></form>
+</section>
+</div></div>{{template "bottom" .}}{{end}}
+
+{{define "tags"}}{{template "top" .}}{{template "project-heading" .}}
+<div class="toolbar"><a class="button secondary" href="{{projectURL .Project}}">← Files</a><h2>Tags</h2></div>
+<p class="muted">Tags protect complete saved versions from cleanup.</p>
+<div class="panel">{{range .Tags}}<div class="member-row"><a href="{{tree $.Project .Version "" ""}}">{{.Name}}</a><span class="ref">{{short .Version}}</span>
+{{if eq $.Project.Role "maintainer"}}<form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="name" value="{{.Name}}"><input type="hidden" name="version" value="{{.Version}}"><button class="secondary danger">Remove</button></form>{{end}}
+</div>{{else}}<p class="empty">No tags.</p>{{end}}</div>
+{{if .Next}}<div class="pagination"><a class="button secondary" href="{{projectURL .Project}}/tags?after={{urlquery .Next}}">Next tags →</a></div>{{end}}
+{{if .Project.Role.Allows "writer"}}<section class="panel padded token-form"><h2>New tag</h2><form method="post">
+<label>Name<input name="name" value="{{.Tag.Name}}" required maxlength="128" autocomplete="off"></label>
+<label>Branch or version<input name="from" value="{{.Ref}}" required maxlength="136" autocomplete="off"></label>
+<button>Create tag</button></form></section>{{end}}
+{{template "bottom" .}}{{end}}

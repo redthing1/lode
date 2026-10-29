@@ -1,0 +1,80 @@
+{{define "users"}}{{template "top" .}}
+<div class="settings">
+  {{template "admin-nav" .}}
+  <div class="settings-content">
+    <div class="heading"><h1>Users</h1><a class="button" href="/admin/users/new">New user</a></div>
+    <div class="panel">
+    {{range .Users}}<div class="member-row"><a href="/admin/users/{{.Name}}/edit"><strong>{{.Name}}</strong></a><span class="badge">{{if .Admin}}Administrator{{else}}User{{end}}</span>{{if .Disabled}}<span class="badge">Disabled</span>{{end}}</div>{{end}}
+    </div>
+    {{if .Next}}<div class="pagination"><a class="button secondary" href="/admin/users?after={{.Next}}">Next users →</a></div>{{end}}
+  </div>
+</div>
+{{template "bottom" .}}{{end}}
+
+{{define "edit-user"}}{{template "top" .}}
+<div class="settings">
+  {{template "admin-nav" .}}
+  <div class="settings-content"><h1>{{.Subject.Name}}</h1>
+    <section class="panel padded token-form"><form method="post">
+      <input type="text" name="username" value="{{.Subject.Name}}" autocomplete="username" class="sr-only" aria-label="Username" readonly tabindex="-1">
+      <input type="hidden" name="generation" value="{{.Subject.Generation}}">
+      <fieldset><legend>Account</legend>
+        <label class="choice"><input type="checkbox" name="enabled" value="1" {{if not .Subject.Disabled}}checked{{end}}>Enabled</label>
+        <label class="choice"><input type="checkbox" name="admin" value="1" {{if .Subject.Admin}}checked{{end}}>Administrator</label>
+      </fieldset>
+      <label>Reset password (optional)<input type="password" name="password" minlength="12" maxlength="72" autocomplete="new-password"></label>
+      <label>Confirm new password<input type="password" name="confirm" minlength="12" maxlength="72" autocomplete="new-password"></label>
+      <p class="muted">Account changes sign this user out and revoke their access tokens. Disabling preserves their projects and files.</p>
+      <p class="muted">Resetting the password also removes their keys and recovery codes.</p>
+      <div class="actions"><button>Save account</button><a href="/admin/users">Cancel</a></div>
+    </form></section>
+  </div>
+</div>
+{{template "bottom" .}}{{end}}
+
+{{define "new-user"}}{{template "top" .}}
+<section class="form-page panel"><h1>New user</h1>
+<form method="post">
+  <label>Username<input name="username" value="{{.Username}}" required autofocus pattern="[a-z0-9][a-z0-9_\-]*" maxlength="64" autocomplete="off"></label>
+  <label>Password<input type="password" name="password" required minlength="12" maxlength="72" autocomplete="new-password"></label>
+  <div class="actions"><button>Create user</button><a href="/admin/users">Cancel</a></div>
+</form>
+</section>
+{{template "bottom" .}}{{end}}
+
+{{define "members"}}{{template "top" .}}{{template "project-heading" .}}
+<div class="settings">
+  {{template "project-settings-nav" .}}
+  <div class="settings-content">
+    <h1>Collaborators</h1>
+    <div class="panel">
+    {{range .Members}}<div class="member-row">
+      <strong>{{.User.Name}}</strong>{{if .User.Disabled}}<span class="badge">Disabled</span>{{end}}
+      {{if .Owner}}<span class="badge">Owner</span>{{else}}
+      <form method="post" class="member-access">
+        <input type="hidden" name="username" value="{{.User.Name}}">
+        <details class="role-picker"><summary>{{.Role}}</summary><fieldset class="menu"><legend class="sr-only">Access for {{.User.Name}}</legend>
+          <label class="choice"><input type="radio" name="role" value="reader" {{if eq .Role "reader"}}checked{{end}}>Reader</label>
+          <label class="choice"><input type="radio" name="role" value="writer" {{if eq .Role "writer"}}checked{{end}}>Writer</label>
+          <label class="choice"><input type="radio" name="role" value="maintainer" {{if eq .Role "maintainer"}}checked{{end}}>Maintainer</label>
+          <button class="secondary">Save access</button>
+        </fieldset></details>
+      </form>
+      <form method="post" action="{{projectURL $.Project}}/settings/members/{{.User.Name}}/remove"><button class="secondary danger">Remove</button></form>
+      {{end}}
+    </div>{{end}}
+    </div>
+    <section class="panel padded token-form"><h2>Add collaborator</h2>
+      <form method="post">
+        <label>Username<input name="username" value="{{.Username}}" required maxlength="64" autocomplete="off"></label>
+        <fieldset><legend>Access</legend>
+          <label class="choice"><input type="radio" name="role" value="reader">Reader <span class="muted">Browse and download</span></label>
+          <label class="choice"><input type="radio" name="role" value="writer" checked>Writer <span class="muted">Also save changes</span></label>
+          <label class="choice"><input type="radio" name="role" value="maintainer">Maintainer <span class="muted">Also manage project access</span></label>
+        </fieldset>
+        <button>Add collaborator</button>
+      </form>
+    </section>
+  </div>
+</div>
+{{template "bottom" .}}{{end}}

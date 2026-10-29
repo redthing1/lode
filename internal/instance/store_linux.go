@@ -1,168 +1,298 @@
-//go:build linux
-
+// Package instance owns accounts, project access and the server's local resources.
 package instance
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 
+	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/webauthn"
+	"github.com/gofrs/flock"
+	"github.com/google/uuid"
+	"github.com/redthing1/lode/internal/project"
+	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
 
-var ErrNotFound = errors.New("not found")
-var ErrConflict = errors.New("conflict")
-var ErrUnauthorized = errors.New("unauthorized")
-
-// Store owns identity, membership, and personal-token records for one instance.
-type Store struct{ db *sql.DB }
-
-func OpenStore(path string) (*Store, error) {
-	return openStore(path, true)
+type Config struct {
+	URL    string `json:"url"`
+	Listen string `json:"listen"`
 }
 
-func openStore(path string, create bool) (*Store, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, err
+func (c Config) Validate() error {
+	u, err := url.Parse(c.URL)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" || (u.Path != "" && u.Path != "/") || (u.Scheme != "http" && u.Scheme != "https") {
+		return errors.New("config requires an http(s) origin and listen address")
 	}
-	newFile := false
-	if create {
-		file, openErr := os.OpenFile(abs, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
-		if openErr == nil {
-			newFile = true
-			if closeErr := file.Close(); closeErr != nil {
-				return nil, closeErr
-			}
-		} else if !errors.Is(openErr, os.ErrExist) {
-			return nil, openErr
-		}
+	if strings.HasSuffix(u.Host, ":") || u.Port() != "" && !validPort(u.Port()) {
+		return errors.New("canonical URL has an invalid port")
 	}
-	info, err := os.Lstat(abs)
-	if err != nil {
-		if !create && errors.Is(err, os.ErrNotExist) {
-			return nil, errors.New("instance database is missing; refusing to create a replacement (restore a backup or initialize a new instance explicitly)")
-		}
-		return nil, err
+	if err := protocol.ValidateRPID(u.Hostname()); err != nil {
+		return fmt.Errorf("invalid canonical URL hostname (use localhost for local access): %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, errors.New("instance database is not a regular file")
+	if u.Scheme == "http" && !strings.EqualFold(u.Hostname(), "localhost") {
+		return errors.New("canonical URL requires HTTPS except on localhost")
 	}
-	if err := os.Chmod(abs, 0600); err != nil {
-		return nil, err
-	}
-	u := url.URL{Scheme: "file", Path: abs}
-	query := u.Query()
-	query.Add("_busy_timeout", "5000")
-	query.Add("_pragma", "foreign_keys(1)")
-	query.Add("_pragma", "synchronous(EXTRA)")
-	u.RawQuery = query.Encode()
-	db, err := sql.Open("sqlite", u.String())
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	const schema = `
-CREATE TABLE instance_settings (
-	id INTEGER PRIMARY KEY CHECK (id=1), setup_hash BLOB, setup_used INTEGER NOT NULL DEFAULT 0 CHECK(setup_used IN (0,1))
-);
-INSERT INTO instance_settings(id) VALUES (1);
-CREATE TABLE users (
-	id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE BINARY, password_salt BLOB NOT NULL,
-	password_hash BLOB NOT NULL, password_version INTEGER NOT NULL DEFAULT 1,
-	password_memory INTEGER NOT NULL DEFAULT 65536, password_iterations INTEGER NOT NULL DEFAULT 3,
-	password_parallelism INTEGER NOT NULL DEFAULT 1, password_key_len INTEGER NOT NULL DEFAULT 32,
-	admin INTEGER NOT NULL DEFAULT 0 CHECK(admin IN (0,1)),
-	disabled INTEGER NOT NULL DEFAULT 0 CHECK(disabled IN (0,1)), force_password_change INTEGER NOT NULL DEFAULT 0 CHECK(force_password_change IN (0,1)),
-	auth_version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL
-);
-CREATE TABLE memberships (
-	user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-	role TEXT NOT NULL CHECK(role IN ('reader','writer','maintainer')), PRIMARY KEY(user_id, project_id)
-);
-CREATE TABLE projects (
-	id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), slug TEXT NOT NULL,
-	created INTEGER NOT NULL, deleting INTEGER NOT NULL DEFAULT 0 CHECK(deleting IN (0,1)), UNIQUE(owner_id,slug)
-);
-CREATE TABLE personal_tokens (
-	id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-	name TEXT NOT NULL, prefix TEXT NOT NULL, secret_hash BLOB NOT NULL UNIQUE,
-	project_id TEXT REFERENCES projects(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('reader','writer','maintainer')),
-	created_at INTEGER NOT NULL, expires_at INTEGER, last_used_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1))
-);
-CREATE INDEX personal_tokens_owner ON personal_tokens(user_id,created_at);
-CREATE TABLE security_keys(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, credential BLOB NOT NULL, created INTEGER NOT NULL);
-CREATE INDEX security_keys_owner ON security_keys(user_id);
-CREATE TABLE ceremonies(id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), binding TEXT NOT NULL, purpose TEXT NOT NULL, data BLOB NOT NULL, expires INTEGER NOT NULL, auth_version INTEGER NOT NULL);
-CREATE TABLE recovery_codes(user_id TEXT NOT NULL REFERENCES users(id), hash BLOB NOT NULL, PRIMARY KEY(user_id,hash));
-CREATE TABLE sessions(token TEXT PRIMARY KEY,data BLOB NOT NULL,expiry INTEGER NOT NULL);
-`
-	if newFile {
-		tx, txErr := db.Begin()
-		if txErr == nil {
-			_, txErr = tx.Exec(schema)
-		}
-		if txErr == nil {
-			_, txErr = tx.Exec("PRAGMA user_version=3")
-		}
-		if txErr == nil {
-			txErr = tx.Commit()
-		} else if tx != nil {
-			_ = tx.Rollback()
-		}
-		if txErr != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("initialize instance store: %w", txErr)
-		}
-	}
-	if err := validateStore(context.Background(), db); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	return &Store{db: db}, nil
-}
-
-func validateStore(ctx context.Context, db *sql.DB) error {
-	var version int
-	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return err
-	}
-	if version != 3 {
-		return fmt.Errorf("unsupported instance database version %d (want 3)", version)
-	}
-	for _, table := range []string{"instance_settings", "users", "memberships", "projects", "personal_tokens", "security_keys", "ceremonies", "recovery_codes", "sessions"} {
-		var exists int
-		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name=?", table).Scan(&exists); err != nil {
-			return err
-		}
-		if exists != 1 {
-			return fmt.Errorf("instance database is missing required table %s", table)
-		}
+	host, port, err := net.SplitHostPort(c.Listen)
+	if err != nil || !validPort(port) || net.ParseIP(host) == nil {
+		return errors.New("listen requires an IP address and port, such as 127.0.0.1:8473")
 	}
 	return nil
 }
 
-func tx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
-	t, err := db.BeginTx(ctx, nil)
+func validPort(port string) bool {
+	n, err := strconv.ParseUint(port, 10, 16)
+	return err == nil && n > 0
+}
+
+type Store struct {
+	Config    Config
+	ID        string
+	directory string
+	db        *sql.DB
+	key       []byte
+	lock      *flock.Flock
+	lifecycle sync.Mutex // Serializes repository open, eviction, deletion and shutdown.
+	mu        sync.Mutex
+	projects  map[string]*openedProject
+	auth      *webauthn.WebAuthn
+}
+
+func digest(value string) string { h := sha256.Sum256([]byte(value)); return hex.EncodeToString(h[:]) }
+
+// Initialize creates a new instance and returns its one-use administrator setup code.
+func Initialize(ctx context.Context, directory string, config Config) (string, error) {
+	if err := config.Validate(); err != nil {
+		return "", err
+	}
+	destination, err := filepath.Abs(directory)
+	if err != nil {
+		return "", err
+	}
+	parent := filepath.Dir(destination)
+	stage, err := os.MkdirTemp(parent, ".lode-init-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(stage)
+	directory = stage
+	if err := os.Chmod(directory, 0700); err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(filepath.Join(directory, "projects"), 0700); err != nil {
+		return "", err
+	}
+	config.URL = strings.TrimRight(config.URL, "/")
+	b, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(directory, "config.json"), append(b, '\n'), 0600); err != nil {
+		return "", err
+	}
+	if err := syncPath(filepath.Join(directory, "config.json")); err != nil {
+		return "", err
+	}
+	db, err := database(directory)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `
+PRAGMA auto_vacuum=INCREMENTAL;
+CREATE TABLE instance(id TEXT PRIMARY KEY,secret BLOB NOT NULL,setup_hash TEXT NOT NULL);
+CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,password BLOB NOT NULL,admin INTEGER NOT NULL,disabled INTEGER NOT NULL DEFAULT 0,generation INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE tokens(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),name TEXT NOT NULL,hash TEXT NOT NULL UNIQUE,project TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('reader','writer','maintainer')),expires INTEGER NOT NULL);
+CREATE TABLE sessions(token TEXT PRIMARY KEY,data BLOB NOT NULL,expiry INTEGER NOT NULL);
+CREATE INDEX session_expiry ON sessions(expiry);
+CREATE TABLE security_keys(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),rp TEXT NOT NULL,name TEXT NOT NULL,data BLOB NOT NULL,created INTEGER NOT NULL);
+CREATE INDEX key_owner ON security_keys(user_id,rp);
+CREATE TABLE challenges(id TEXT PRIMARY KEY,binding TEXT NOT NULL,purpose TEXT NOT NULL,user_id TEXT REFERENCES users(id),generation INTEGER NOT NULL,data BLOB NOT NULL,name TEXT NOT NULL,expires INTEGER NOT NULL);
+CREATE TABLE recovery_codes(user_id TEXT NOT NULL REFERENCES users(id),hash TEXT NOT NULL,PRIMARY KEY(user_id,hash));
+CREATE TABLE projects(id TEXT PRIMARY KEY,owner TEXT NOT NULL REFERENCES users(id),name TEXT NOT NULL,created INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'creating' CHECK(state IN ('creating','ready','deleting')),UNIQUE(owner,name));
+CREATE TABLE members(project TEXT NOT NULL REFERENCES projects(id),user_id TEXT NOT NULL REFERENCES users(id),role TEXT NOT NULL CHECK(role IN ('reader','writer','maintainer')),PRIMARY KEY(project,user_id));
+CREATE INDEX member_user ON members(user_id,project);
+PRAGMA user_version=6;`)
+	if err != nil {
+		return "", err
+	}
+	if err := project.Initialize(ctx, db); err != nil {
+		return "", err
+	}
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return "", err
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", err
+	}
+	setup := setupCode(key)
+	if _, err := db.ExecContext(ctx, "INSERT INTO instance VALUES(?,?,?)", id.String(), key, digest(setup)); err != nil {
+		return "", err
+	}
+	if err := db.Close(); err != nil {
+		return "", err
+	}
+	for _, path := range []string{filepath.Join(directory, "projects"), directory} {
+		if err := syncPath(path); err != nil {
+			return "", err
+		}
+	}
+	if err := unix.Renameat2(unix.AT_FDCWD, directory, unix.AT_FDCWD, destination, unix.RENAME_NOREPLACE); err != nil {
+		return "", err
+	}
+	if err := syncPath(parent); err != nil {
+		return "", err
+	}
+	return setup, nil
+}
+
+func syncPath(path string) error {
+	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	if err := fn(t); err != nil {
-		_ = t.Rollback()
-		return err
+	return errors.Join(f.Sync(), f.Close())
+}
+
+func setupCode(key []byte) string {
+	h := hmac.New(sha256.New, key)
+	_, _ = h.Write([]byte("administrator setup"))
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+}
+
+func database(directory string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", filepath.Join(directory, "instance.sqlite")+"?_pragma=synchronous(EXTRA)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, err
 	}
-	return t.Commit()
+	db.SetMaxOpenConns(1)
+	return db, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
-
-func (s *Store) DB() *sql.DB { return s.db }
-
-func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	return tx(ctx, s.db, fn)
+func Open(ctx context.Context, directory string) (_ *Store, err error) {
+	root, err := filepath.Abs(directory)
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{directory: root, projects: map[string]*openedProject{}, lock: flock.New(filepath.Join(root, "instance.lock"))}
+	locked, err := s.lock.TryLock()
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		return nil, errors.New("instance is already in use")
+	}
+	defer func() {
+		if err != nil {
+			_ = s.Close(ctx)
+		}
+	}()
+	b, err := os.ReadFile(filepath.Join(root, "config.json"))
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(b)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&s.Config); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, errors.New("config must contain one JSON object")
+	}
+	if err := s.Config.Validate(); err != nil {
+		return nil, err
+	}
+	s.Config.URL = strings.TrimRight(s.Config.URL, "/")
+	s.db, err = database(root)
+	if err != nil {
+		return nil, err
+	}
+	var format int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&format); err != nil {
+		return nil, err
+	}
+	if format != 6 {
+		return nil, errors.New("unsupported instance format; create a new instance")
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT id,secret FROM instance").Scan(&s.ID, &s.key); err != nil {
+		return nil, err
+	}
+	if len(s.key) != 32 {
+		return nil, errors.New("invalid instance secret")
+	}
+	if err := s.initAuthentication(); err != nil {
+		return nil, err
+	}
+	if err := s.resumeDeletions(ctx); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
+
+func (s *Store) Close(ctx context.Context) error {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.projects {
+		if p.references != 0 {
+			return errors.New("instance has active project requests")
+		}
+	}
+	var result error
+	for id, p := range s.projects {
+		result = errors.Join(result, p.close(ctx))
+		delete(s.projects, id)
+	}
+	if s.db != nil {
+		result = errors.Join(result, s.db.Close())
+		s.db = nil
+	}
+	if s.lock != nil {
+		result = errors.Join(result, s.lock.Unlock())
+		s.lock = nil
+	}
+	return result
+}
+
+func validName(name string) bool {
+	if len(name) < 1 || len(name) > 64 || name[0] == '-' || name[0] == '_' {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+func validUsername(name string) bool {
+	if !validName(name) {
+		return false
+	}
+	switch name {
+	case "api", "assets", "setup", "login", "logout", "verify", "settings", "admin", "projects", "healthz":
+		return false
+	}
+	return true
+}
+
+func newID() (string, error) { id, err := uuid.NewRandom(); return id.String(), err }

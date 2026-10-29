@@ -1,89 +1,57 @@
 # Architecture
 
-Lode is one Go module and executable. An instance owns accounts, permissions, sessions, tokens, and its project registry. Each project service owns shared history and retention. A workspace owns selected local files, its baseline, and unfinished work. The embedded web interface serves account, project, and history pages. SQLite stores application facts; Kopia represents and collects content; librsync transforms transfer bytes.
+Lode keeps account and project metadata in one SQLite database. Each project has a Kopia repository for file contents. The server owns both; clients work with logical file identities and selected paths.
+
+Local repository reads use the operating system's cache. Kopia's persistent content, metadata and index caches are disabled.
 
 | Package | Responsibility |
 | --- | --- |
-| `model` | Pure path, selection, entry, comparison, and whole-entry merge rules |
-| `project` | Publication, SQLite history, references, and retention authority |
-| `content` | Kopia objects, protected snapshot roots, retrieval, release, and collection |
-| `instance` | Accounts, authentication, permissions, personal tokens, and hosted-project lifecycle |
-| `transfer` | Bounded streaming signature, delta, and patch calls to librsync |
-| `remote` | Authenticated HTTP operations and streamed file transfers |
-| `web` | Embedded same-origin account, project, and history interface |
-| `workspace` | Local observation, selected transitions, baseline, and recovery |
-| `cmd/lode` | CLI presentation and server lifecycle |
+| `model` | File identities, exact changes and selection rules without IO |
+| `content` | Verified file writes, native trees, snapshot protection and collection |
+| `project` | Complete version trees, branch publication and content availability |
+| `instance` | Accounts, token limits, project access and repository lifetime |
+| `transfer` | Streaming librsync signatures, deltas and reconstruction |
+| `remote` | Authenticated HTTP requests and verified streamed transfers |
+| `workspace` | Selected local baselines, observation, save and checkout recovery |
+| `web` | Account sessions, project browsing, previews and the client API |
+| `cmd/lode` | Command presentation, credential storage and server lifecycle |
 
-Server commands, HTTP handlers, SQLite, and Kopia implementations are built only on Linux. Non-Linux client builds include shared project types and HTTP client code without SQLite or Kopia. Workspace filesystem operations and terminal detection live in platform-specific files; the transition algorithm is shared. Platform implementations must preserve locking, no-follow access, exclusive rename, and synchronization ordering. The transfer codec requires native librsync and cgo.
+Directory metadata is immutable. A directory index shares unchanged name groups between versions; exact-path reads load one group per path component. Saving selected files rewrites affected directories and reuses omitted subtrees. Deleting a directory requires explicit removal of its descendants.
 
-## Hosted instances
+Publication first flushes a protected native tree. One SQLite transaction then records the version and advances the expected branch. Retry IDs bind the authenticated actor and request. Accepted retries return the original version; previously unaccepted requests expire after seven days. Cancellation shares the publication gate and records an actor-scoped, intent-bound refusal, or returns that actor's already accepted version. A reader can settle their own pending save without cancelling another account's work. Reconciliation checks accepted protection before releasing orphan snapshots.
 
-An instance has one canonical HTTP(S) origin, a private directory, an ownership lock, and one SQLite database. HTTP is allowed only for loopback development origins; remote access uses HTTPS through a reverse proxy while the server listens on loopback. The proxy preserves the configured `Host` and path. The web interface uses same-origin browser sessions. The CLI project API uses personal bearer tokens and checks current account, project, role, token scope, and expiry for each operation.
+Tags protect individual complete versions. Retention keeps recent first-parent versions per branch and tagged versions. Cleanup binds its preview to current policy, references and version availability, then atomically expires contents, prunes obsolete metadata/receipts and advances a monotonic operation cutoff. Every surviving version roots its logical metadata, including expired contents and recent retry outcomes. The cutoff prevents pruned requests becoming valid after clock rollback; cancellation persists expiry before permitting a client to discard an old pending request. Native protection is released after the metadata transaction, with startup reconciliation completing interrupted release. SQLite reclaims free pages incrementally; content pack compaction is separate.
 
-The first account is an administrator created with a one-time setup code. Public registration is closed by default and can be enabled in `instance.json`. Accounts can create private projects identified by `/{username}/{project}` and have implicit maintainer access to their own projects. Owners add readers, writers, or maintainers. Readers browse and download, writers also save and manage branches, and maintainers can change collaborator access and retention. Instance administrators can access and delete every project and manage accounts through Site administration; administrator authority does not pass through personal tokens.
+Project mutations serialize while reads of published versions continue. Cleanup and collection also wait for active readers before removing metadata or contents. Retry resolution and maintenance previews wait for publication to settle. The instance holds an exclusive filesystem lock and bounds open repository handles. Repository opening, eviction and deletion serialize without holding the registry lock during native IO, allowing already-open projects to continue serving requests. SQLite and the content filesystem adapter synchronize durable writes; the underlying filesystem must honor synchronization.
 
-WebAuthn supports username-free discoverable passkeys and username-first security keys. Both passwordless paths require user verification; password sign-in retains its optional key second factor and single-use recovery codes. Challenges are session-bound, expiring, and atomically consumed. Password and security changes invalidate existing sessions; administrators can reset accounts in the web interface, and local operators can recover accounts while the server is stopped. Personal tokens are stored as hashes, can be scoped to one or all accessible projects, and are capped by the owner's current permissions.
+Whole-instance backup holds the stopped source's ownership lock and copies its database, recovery journal/WAL and native repositories into private staging. It preserves native file timestamps and excludes derived caches/configuration. Only the stage is opened for recovery and verification: SQLite integrity and foreign references, project availability, logical/native tree agreement and complete retained-file size/hash checks. Expired contents are not required. After closing and synchronizing the stage, an atomic no-replace rename publishes the new destination. Restore uses the same operation and preserves instance identity.
 
-The instance database stores accounts, memberships, sessions, credentials, tokens, and owner/project metadata. Each project's database and content repository remain the authority for its history and payloads. A project owner or instance administrator may delete a project. Active requests cause deletion to be refused; a recorded deletion is completed on the next startup if shutdown interrupts it. Instance backups include the registry and all registered project stores, hold the ownership lock, and publish a verified cold copy atomically. Existing native project stores can be imported for an existing account while both source and destination services are stopped; import preserves project identity and history.
+Collection verifies retained protections under the exclusive project gate, then uses Kopia's snapshot GC, index compaction and pack maintenance. The repository must be on a strongly consistent local filesystem and accessed only by Lode. Native content timestamps settle before GC and deleted-index compaction; this prevents rapid writes from deferring reclamation. Live contents in packs with at least half their space and 1 MiB unused are explicitly rewritten through the native API. Pack accounting is transient; Lode keeps no parallel collector or pack ledger. Interrupted collection can leave partial reclamation and is safe to retry. Storage reports measure repository file lengths and filesystem allocation, excluding SQLite and caches.
 
-Native project stores are opened on demand and bounded to eight open projects per instance. Browser history and directory views are paginated; a directory response contains at most 100 entries and a history response at most 50 versions. Expired project contents remain visible as metadata while downloads return unavailable.
+The CLI uses scoped bearer tokens; the browser uses SCS sessions backed by the same instance database. Owners have implicit maintainer access; collaborators have reader, writer or maintainer roles. Each request checks current account and project access, capped by token role and project scope. Personal tokens do not inherit site-administrator authority. Already-authorized operations may finish after permissions change. Browser form requests have same-origin protection.
 
-File and README previews use the same project authorization and retained-content read gates. Markdown and escaped text reads are capped at 1 MiB. Markdown omits embedded HTML and remote images; relative links identify the immutable version. Inline media uses an explicit type allowlist and bounded streaming, including single byte ranges. Downloads preserve the original bytes.
+Owners and site administrators can delete projects through the browser. Deletion checks the immutable project identity and refuses active requests. A transaction marks the project unavailable and revokes scoped tokens before native storage is closed and removed. Metadata is forgotten only after storage removal is synchronized. Interrupted removal is completed by retry or startup; failed native closure requires a server restart. Membership and scoped-token writes check project availability within their mutation transaction.
 
-## Versions and presence
+Markdown previews omit embedded HTML and external images; relative file links and local raster images identify an immutable version. Text previews are escaped, with text/Markdown reads limited to 1 MiB. Allowlisted raster images, audio and video stream through the same authorized retained-file reader as downloads, including single byte ranges. Inline HTML and SVG are refused. Downloads preserve original bytes.
 
-Every version describes a complete directory tree. Workspace selection controls local presence, while retention controls downloadable contents. Saving exact path changes preserves omitted entries. Directory deletion cannot implicitly erase unseen descendants; failed observation cannot become an inferred deletion.
+Browser sessions carry the account generation read with the password hash at sign-in. Password, administrator-role and enabled-state changes increment that generation and delete the account's tokens atomically. Protected requests reject disabled accounts or stale generations, including sessions committed after a reset. Security mutations recheck the actor inside their transaction; administrator edits also check the target generation and preserve at least one enabled administrator. Re-enabling an account cannot revive old credentials. Unchanged settings leave credentials valid.
 
-Five SQLite tables hold commits, path changes/checkpoints, branches, tags, and operation outcomes. Path changes are relative to the first parent, with a full checkpoint every 64 steps. Selected reads use indexed exact-path and descendant-range queries, replay at most 63 changesets, deduplicate overlapping prefixes, and apply exclusions. Logical metadata survives payload expiry.
+WebAuthn verifies username-free passkeys and username-first keys through the same credential store. Both passwordless paths require user verification. Enrolled keys also protect password sign-in: pending sessions can only finish key verification or use a hashed single-use recovery code. Challenges are bound to a browser and purpose, expire after three minutes, and are consumed atomically. Credential updates check the captured account generation and previous credential record. Key or recovery-code changes invalidate existing credentials and renew only the initiating browser session at the generation committed by that change. Administrator and stopped-operator password resets clear factors; voluntary password changes preserve keys.
 
-Branches name versions without copying contents. Tags protect versions. Reference changes are serialized; deletion checks the expected target, and new targets require retained contents.
+Browser sessions have a 24-hour absolute lifetime. Logout leaves an empty session row for that lifetime, preventing delayed writes from restoring a deleted session; expired rows are collected on subsequent writes. Session completion retains the generation returned by authentication, so a concurrent account reset cannot be bypassed by fetching newer user data. The canonical origin uses HTTPS and a hostname, with HTTP localhost allowed for development.
 
-Merges compare complete logical trees, follow both parents for ancestry, and require an explicit choice among ambiguous best bases. Whole-file/subtree choices reuse native objects from the selected parents. Published merges record both parents; merging into an empty branch records only the source parent. Already-merged sources create no version.
+Workspaces keep only selected baseline entries. A save records its request before contacting the service; accepted recovery updates that baseline without rewriting working files. Update compares the baseline, local files and incoming version; conflicts require whole-entry choices. Selection changes refuse dirty unloading and preserve physical unselected children.
 
-## Publication
+Branches name immutable versions in the project database. Creation never resets an existing branch; deletion checks its expected tip and cannot remove `main`. Branch deletion leaves versions intact. Tags are immutable named versions until explicitly deleted. Reference lookup accepts branches, tags, complete IDs and unique displayed suffixes, refusing collisions unless qualified. History reports a boundary when an earlier record was pruned.
 
-1. The workspace durably records an operation ID, expected branch tip, changes, and file size/SHA-256 identities.
-2. The service binds the operation ID to the request fingerprint and checks the branch tip.
-3. Kopia captures changed bytes, reuses omitted contents, and flushes a protected complete snapshot labelled with the operation ID.
-4. One SQLite transaction records the version, conditionally advances the branch, and records acceptance. The operation ID is also the version ID.
-5. The workspace advances its selected baseline without rewriting local files.
+Merge uses the same publication request, with an immutable source version and explicit whole-entry choices instead of uploaded changes. The service reconciles complete logical inventories and reuses native file objects; clients receive only their selected results. Both parents enter the acceptance transaction. An identical resulting tree still records new integration ancestry. Common-base lookup follows both parents and refuses ambiguous bases or missing history that could conceal a better base. Missing ancestors strictly before a proven base do not block integration. The server currently holds complete comparison metadata in memory during merge.
 
-Merge uses this same publication path with immutable parents and explicit choices; it uploads no contents. The workspace remains unchanged until a separate update.
+Accepted merge recovery leaves the old workspace baseline intact until ordinary update reconciles current local files. Publication settlement and local materialization are separate: a stopped process between them leaves an ordinary behind workspace, recoverable with update. A refused conflict request is cancelled before allowing a new choice, preventing a delayed copy from publishing afterward.
 
-Retries resolve the original outcome. Accepted, stale, unchanged, and cancelled decisions remain stable; an ID cannot be reused for another intent. Cancellation also prevents a request that has not arrived yet. Startup checks retained protection and releases unaccepted or expired roots. It never promotes an unfinished capture into history. Uncertain SQLite acceptance leaves protection intact until the outcome is resolved.
+Clone, update, selection, switch and restore share an immutable plan and a small progress record. The plan separates its download source from its resulting baseline: restore installs historical contents as unsaved work. Progress is durable before the plan; initial clone metadata includes both before publication. Files retain hard-linked originals and verified replacements until commitment. Empty directories move through private staging with recorded identities. Installation refuses unexpected paths. Children leave before parent replacements; new parents arrive before children.
 
-## Local transitions
+Cancellation reverses unfinished actions without overwriting subsequent local edits. Reaching the end durably commits the operation; recovery then installs the target baseline and finishes cleanup. Changed recovery contents remain available rather than being discarded. Workspace locking excludes concurrent Lode commands; external writers must stop during operations. Directory identity includes birth time where available; filesystems without it have weaker protection against inode reuse.
 
-Clone, update, switch, selection changes, and restore share one planner/executor/canceller. Comparison uses baseline, observed, and target entries. Independent edits survive; conflicts require whole-entry choices. Dirty unloading and unmatched explicit restore paths fail before mutation. Nonempty selection changes cannot empty a populated workspace without matching any remote or local entries.
+Uploads use librsync for changed large files and full transfers for other files. Signatures are spooled before publication begins, and reconstruction uses the same content-identity verification as full uploads. Downloads use an eligible local file as a basis, reconstruct into existing staging, and verify the complete size and hash before installation. Files without a basis transfer whole; small files stream in bounded, individually verified batches. Transfer state is temporary; save identity and recovery belong to the workspace and project service.
 
-The immutable plan stores the target baseline, ordered before/after changes, and a historical content source when it differs from the baseline. A separate small progress record stores the cursor and cancellation direction. Local process locking excludes concurrent workspace commands.
-
-Each action verifies staged bytes, preserves the previous entry, and installs without replacing an unexpected path. Children leave before parent type changes; new parents arrive before children. Physical unselected contents remain protected, and directory removal requires emptiness.
-
-Progress is durable before the plan appears. The cursor advances only after the action is synchronized. Reaching the end durably commits the transition; the target baseline is installed before recovery contents are cleaned up. Cleanup removes the plan before progress. Orphan progress is replaced before a new plan.
-
-Before commitment, cancellation reverses actions and restores originals without replacing newer edits. Preserved/staged entries identify interrupted actions. Unexpected recovery contents remain available and are reported. After commitment, resume finishes cleanup. Initial clone starts from a valid empty-selection workspace; metadata-only changes need only an atomic baseline update.
-
-Hashing observes cancellation between reads; mutation boundaries preserve synchronization ordering. External writers must stop during these operations. Save recovery resolves its original request, leaving later file edits visible against the accepted baseline.
-
-## Retention and collection
-
-Cleanup protects branch tips, tags, and the requested recent first-parent history. Its preview token binds the count, version identities, and references. Apply recomputes the decision under the exclusive project gate. Availability is excluded from the token, making repeated expiry safe while history and references match.
-
-One SQLite transaction clears eligible commit root references. An empty root is the payload-expiry fact; parents, comparison metadata, and operation outcomes remain. Reconciliation releases native manifests only after that decision. Interruption may leave extra protection, never permission to remove promised contents.
-
-Reads check availability and hold shared protection for their entire stream. Publication, references, expiry, and collection take the exclusive gate. Merges need retained parent contents, but can compare an expired ancestor's metadata. Idle clients hold no retention lease.
-
-Kopia's ordinary full maintenance owns reachability, rewriting, deletion, and maintenance state, with standard safety delays. Lode measures repository bytes before and after collection; it maintains no parallel pack ledger or scheduler.
-
-## IO boundaries
-
-A project ownership lock excludes a second service. SQLite transactions and synchronized workspace state files record application decisions. Kopia synchronizes blob contents; the filesystem adapter also synchronizes affected directory chains. These contracts require local filesystems that honor synchronization.
-
-The project HTTP API requires a bearer token and expected project identity. The browser interface uses its separate session authentication. Counted newline-delimited metadata records let clients detect truncated lists while bounding each record. Cleanup exposes its apply token only after complete validation. Selected inventories become workspace baseline metadata; native indexes stay on the server.
-
-Upload signatures are fetched for exact retained base paths before publication and spooled to a bounded anonymous file. Under the publication gate, librsync reconstructs into the same size/hash-verified capture path as full uploads. Downloads optionally use a local basis and reconstruct into the transition's existing staging file, then verify before installation. Retries regenerate signatures; neither direction adds durable transfer state.
-
-Backup holds the stopped project's ownership lock, copies identity/SQLite/native files while preserving maintenance timestamps, and excludes derived configuration/caches. It checks the staged SQLite database and retained roots before a synchronized no-replace rename publishes the destination. Restore uses the same copy operation.
-
-See the [user guide](guide.md) for command behavior and [operations](operations.md) for deployment and resource limits.
+Server implementations are Linux-specific. The client uses shared model, HTTP, and filesystem code without SQLite or Kopia. Linux is the execution and validation platform; client installation requires native librsync and cgo.

@@ -1,110 +1,95 @@
-# Operations
+# Running Lode
 
-Lode hosts multiple accounts and projects in one instance. The server and supported CLI build run on Linux. Use a case-sensitive local filesystem that supports file and directory synchronization and atomic rename without replacement. Build and runtime requirements are in the [README](../README.md#install).
+The server runs on Linux and stores its database and project repositories in one private instance directory. Use a local filesystem that honors file and directory synchronization. Access repositories only through Lode.
 
-## Host an instance
+## Podman Compose
 
-Initialize an instance with its public HTTPS origin, then start the loopback-only server:
-
-```sh
-lode init -url https://lode.example.com ./instance
-lode serve -listen 127.0.0.1:8473 ./instance
-```
-
-`init` prints a one-time setup code. Open the displayed `/setup` URL and create the first administrator. Signed-in users create private projects under their usernames at `/<username>/<project>`; administrators manage accounts at `/-/admin/users` and all projects at `/-/admin/projects`. For local evaluation, `http://localhost:8473` is accepted without TLS. Use HTTPS for remote access; browsers allow WebAuthn on localhost for local evaluation.
-
-Put a TLS reverse proxy on the host. For example, a [Caddy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy) site can use:
-
-```caddyfile
-lode.example.com {
-    reverse_proxy 127.0.0.1:8473
-}
-```
-
-Point DNS at the host and allow ports 80 and 443 for automatic certificate management. Proxy the origin without rewriting paths and preserve the request `Host` and `Authorization` headers. The configured hostname must match the hostname users open in their browsers. Keep the proxy's certificate data persistent.
-
-The server only listens on loopback. Do not expose its listener directly to a network. Browser sessions use same-origin cookies; the interface rejects cross-origin form requests. Keep the instance directory private and outside project workspaces.
-
-## Accounts and recovery
-
-The first account is an instance administrator. Administrators create accounts at `/-/admin/users`; each new account receives a temporary password that must be changed at first sign-in. Administrators can disable accounts or change their administrator status. Disabling an account prevents sign-in but preserves its projects and data. Administrators can reset another account from the same page. Reset displays a temporary password once, invalidates sessions and tokens, removes security keys and recovery codes, and requires a password change. The reset preserves the account role, enabled state, and project data.
-
-Public registration is closed by default. To enable it, stop the server, set `"registration_open": true` in `instance.json`, and restart. New registrations create ordinary accounts. Set it to `false` and restart to close registration.
-
-Users can register up to ten FIDO2 credentials for passwordless sign-in, with or without entering a username. Password sign-in uses a registered key as a second factor; single-use recovery codes provide a fallback. Removing the final key disables the second factor. Recovery codes are shown only when generated.
-
-For local operator recovery, stop the server and run:
-
-```sh
-lode recover ./instance USERNAME
-```
-
-The command prints a generated temporary password, invalidates browser sessions and personal tokens, removes registered security keys and recovery codes, and requires a password change at next sign-in. It does not change the account's role or enabled state. Protect the terminal output as a credential.
-
-Project owners and instance administrators can delete projects from the web interface. A deletion request is refused while that project has active requests. If shutdown interrupts an accepted deletion, the next server start completes it.
-
-## Run with Podman Compose
-
-Install Podman and a Compose provider such as [podman-compose](https://docs.podman.io/en/latest/markdown/podman-compose.1.html). Build the image and initialize the named data volume. Use your public HTTPS origin when hosting remotely:
+Install Podman and a Compose provider such as `podman-compose`. From the source checkout:
 
 ```sh
 podman compose build
-podman compose run --rm lode init -url https://lode.example.com /data/instance
+podman compose run --rm lode init -url https://lode.example /data/instance
 podman compose up -d
 ```
 
-For local-only evaluation, use `-url http://localhost:8473`. Open the setup URL printed by `init` and create the first administrator. The service stores the complete instance under `/data/instance`, uses host networking, and binds `127.0.0.1:8473`; it publishes no network port. Host networking also lets the container reach host loopback services. Put the host's TLS proxy in front for remote access.
+Keep the setup code printed by `init`. Put an HTTPS reverse proxy in front of `127.0.0.1:8473`, preserving the original Host header and request path. Allow uploads as large as your project files and sufficient request time for transfers and collection. Open the configured URL, enter the setup code, and create the first administrator.
 
-`podman compose restart` restarts the service, `podman compose logs` shows its output, and `podman compose down` removes the service while retaining the named volume. For a cold backup, stop the server and copy the backup to a host directory:
+The Compose service uses host networking and the `lode-data` named volume. For local evaluation, omit `-url` and open `http://localhost:8473`. The initialization command's `-listen` flag selects another address if needed.
+
+```sh
+podman compose logs -f lode
+podman compose stop
+podman compose up -d
+```
+
+`/healthz` returns 204 at the canonical hostname when the HTTP service is running. It does not verify repository contents. `podman compose down` keeps the named volume; `down -v` deletes it.
+
+Without containers, use `lode init -url https://lode.example ./instance` and `lode serve ./instance`.
+
+## Configuration and accounts
+
+Initialization writes `config.json` inside the instance:
+
+```json
+{
+  "url": "https://lode.example",
+  "listen": "127.0.0.1:8473"
+}
+```
+
+Stop the server before editing it. `url` is the browser and CLI origin; HTTPS is required except for local development at `localhost`. `listen` is the HTTP IP address and port behind the proxy. Unknown configuration fields are refused.
+
+Changing the hostname affects saved CLI credentials and passkeys, which are tied to the original server identity and hostname. Keep the same canonical URL when restoring an instance.
+
+Public registration is closed. Administrators create accounts in **Site administration → Users**; users create and share their own projects. Account security, token scope, and recovery are described in the [user guide](guide.md#account-security).
+
+For local account recovery, stop the service and run:
 
 ```sh
 podman compose stop
-mkdir -p ./backups
-podman compose run --rm -v "$PWD/backups:/backups:Z" lode backup /data/instance /backups/instance-backup
-podman compose down
+podman compose run --rm lode recover-user /data/instance alice
+podman compose up -d
 ```
 
-Restore into a separate Compose project so the original volume remains available:
+## Backup and restore
+
+`lode backup SOURCE DEST` copies a stopped whole instance into a new directory. It preserves identity, accounts, credentials, permissions, history and native repositories. Verification checks the staged database and project trees and reads retained file contents against their recorded size and hash. Path-specific connection files are rebuilt when needed.
+
+The destination must not exist and must be outside the source. Allow space for a complete repository copy. The source must remain stopped for the entire copy and verification. Unfinished project creation or deletion must be resolved before backup.
 
 ```sh
-podman compose -p lode-restored run --rm -v "$PWD/backups:/backups:Z" lode backup /backups/instance-backup /data/instance
-podman compose -p lode-restored up -d
-```
-
-Stop the original service before starting the restored one because both use the same loopback address. The restored instance has the same identity, accounts, tokens, projects, and configured URL; do not run both copies at once.
-
-## Back up, restore, and import
-
-Stop the server before backing up. The source must be a stopped instance; the destination must be new and outside the source:
-
-```sh
-lode backup ./instance ./instance-backup
-```
-
-The backup contains the instance identity, accounts, memberships, personal tokens, security keys, recovery codes, browser sessions, and every registered project. Treat it as sensitive as the live instance. To restore, copy it into another new directory and serve that copy:
-
-```sh
-lode backup ./instance-backup ./restored-instance
+lode backup ./instance ./backup-2026-10-28
+lode backup ./backup-2026-10-28 ./restored-instance
 lode serve ./restored-instance
 ```
 
-Run only one copy at a time. Existing destinations are never replaced. Backup verifies the database and projects before publishing the copy. It does not hash every content payload. A failure before publication removes its owned staging directory; the final destination appears only after verification.
-
-To add an existing native project store to an instance, stop any server using the source project store and the destination instance, then import it for an existing owner account under a project name that is unused for that owner:
+With Compose, mount a private backup directory outside the data volume:
 
 ```sh
-lode import ./instance alice/assets ./project-store
+mkdir -m 700 backups
+podman compose stop
+podman compose run --rm -v "$PWD/backups:/backups:Z" lode \
+  backup /data/instance /backups/backup-2026-10-28
+podman compose up -d
 ```
 
-Import preserves the project ID and history. Create personal tokens and collaborator access in the web interface. Clone the imported project into a workspace; to carry unsaved edits forward, copy them into that workspace, review `lode status`, then save them. Resolve or cancel pending operations before moving the project.
+Restore into a separate Compose project's new volume. Stop the original service before starting the restored one at the same address:
 
-## Storage and transfer limits
+```sh
+podman compose stop
+podman compose -p lode-restored run --rm -v "$PWD/backups:/backups:Z" lode \
+  backup /backups/backup-2026-10-28 /data/instance
+podman compose -p lode-restored up -d
+```
 
-- Allow space for native caches and temporary rewritten packs during saves and collection. Collection blocks other project operations and reports physical repository blob bytes before and after, excluding caches. Native safety delays and packing overhead prevent an immediate-reclamation guarantee.
-- Instance backup needs room for a complete physical copy, including obsolete bytes awaiting collection. A local file transition needs room for preserved replaced files plus one incoming file; completed staged files share their installed inode.
-- Logical history and operation outcomes remain unpruned. Captures examine the complete logical tree; browser directory pages return at most 100 entries and history pages at most 50 versions. The server keeps at most eight native project stores open and closes idle stores when needed.
-- Clients keep selected baseline metadata and requested files, without a native storage index or historical payloads. JSON requests and individual metadata records are limited to 16 MiB; lists stream without an aggregate response limit.
-- Eligible changed files of at least 1 MiB can transfer as librsync deltas. Initial checkout and files without a suitable basis transfer in full. Bases above about 28 GiB use full transfer. Upload signatures use at most 64 MiB of temporary client disk space per save; a download holds at most one 1 MiB signature.
-- Delta transfer still reads complete source files; unrelated rewrites may save no bandwidth. Updates can reread local files for observation, matching, and recovery verification. Incoming contents are verified before installation.
+Keep backups private: they contain the instance secret and account credentials. A failed copy does not publish its destination. Killing the process can leave a private `.lode-backup-*` staging directory beside the destination; remove that incomplete directory after confirming no backup is running. If the command reports that publication succeeded but parent synchronization failed, inspect the published destination before retrying.
 
-An active download protects its source until the stream finishes. Idle workspaces do not pin server contents indefinitely, and a multi-file transition can encounter expiry between downloads. Use the workspace's normal [recovery commands](guide.md#recover-interrupted-work) if it stops.
+Restore a backup periodically and check sign-in and representative file downloads. Verification cannot guarantee the backup's future storage health.
+
+## Storage and maintenance
+
+Project cleanup expires contents and prunes eligible history; collection subsequently reclaims native storage. Both are explicit operations available in project settings and the CLI. Tags and branch tips retain their complete contents. See [retention](guide.md#protect-versions-and-clean-up) for the policy and its effect on older merge ancestry.
+
+Collection waits for readers and excludes other operations on that project. Pack rewriting needs temporary free space; reported repository allocation excludes SQLite and caches. Merge currently holds complete comparison metadata in memory. Changed large files use delta transfers when a basis is available; hashing and reconstruction still read local contents. Unrelated rewrites can transfer approximately the whole file plus a bounded signature.
+
+Back up before replacing the executable or container image. This experimental release does not provide development-format migrations.

@@ -1,135 +1,200 @@
-# User guide
+# Using Lode
 
-Follow the [quickstart](../README.md#start-an-instance) to create a project and connect a workspace. Examples start at its root. Workspace commands also work from subdirectories; use `lode -C DIR` to work from elsewhere. Workspace paths are relative to the root; attach/clone destinations are relative to the current directory.
+A project contains saved versions on a shared branch. A workspace is an ordinary folder containing selected project files and local changes. Saves publish online; editing and status work offline.
 
-## Accounts and project access
+## Connect
 
-Create a private project from **Projects → New project**. Its URL is `/<username>/<project>`, such as `https://lode.example.com/alice/assets`. Usernames use 3–32 lowercase letters, digits, underscores or hyphens; passwords require at least 12 characters. Administrator-created accounts must change their temporary password before using projects. Public registration is closed by default.
-
-Under **Project settings → Members**, add existing accounts as readers, writers or maintainers. Readers browse and download. Writers also save versions and manage branches. Maintainers also manage members and retention. Owners have maintainer access automatically; instance administrators can access every project. Tokens cannot exceed their owner's current project permissions or administer the instance.
-
-Owners and instance administrators can delete a project under its settings by confirming the full `username/project` name. Deletion removes all versions and contents and is refused while the project has active requests.
-
-Open **Settings → Access tokens** from the account menu. Choose one project or all projects you can access, a maximum role, and an expiry of 30, 90, or 365 days. Copy the token when it is created; it is shown only once. Revoke it from the same page when it is no longer needed.
-
-Log in to a project URL to save a project-specific credential:
+Create a project in the browser. In account settings, create an access token with write access to that project, then sign in:
 
 ```sh
-lode login https://lode.example.com/alice/example
-lode attach https://lode.example.com/alice/example ./work
+lode login https://lode.example
 ```
 
-The prompt hides the token in a terminal. Lode verifies the account and project before saving it in your OS user configuration, with file permissions restricted to your account. Credentials are not stored in workspace state. A project-specific credential takes precedence; a credential saved for the instance origin is used as a fallback for its projects. `LODE_TOKEN` overrides either saved credential for the current command.
+The token prompt is hidden in a terminal. Credentials are stored privately in your OS user configuration directory, outside the workspace. `LODE_TOKEN` can supply or override the token. HTTP connections are limited to loopback; remote access requires HTTPS.
 
-`lode logout URL` removes the saved local credential for that URL. It does not revoke the server token; revoke tokens in the web interface. An administrator can reset another account from `/-/admin/users`; the temporary password is shown once, sessions and tokens are invalidated, security keys and recovery codes are removed, and the account must change its password at next sign-in. The reset preserves the account role, enabled state, and project data. A local operator can do the same with `lode recover INSTANCE USERNAME` while the server is stopped.
+Use `attach` for an existing folder and an empty project. Use `clone` to obtain an existing version:
 
-## Browser sign-in and files
+```sh
+lode attach https://lode.example/alice/example ./work
+lode clone https://lode.example/alice/example ./another-workspace
+```
 
-Add passkeys under **Settings → Security**. The default mode lets you sign in without a username. Choose **Enter a username** for a security key that should avoid storing a discoverable credential. At sign-in, use **Sign in with a passkey**; enter your username first for a non-discoverable key. Both passwordless modes require the authenticator's PIN or biometric verification. With a key registered, password sign-in also requires a key or a single-use recovery code. Existing keys remain available.
+Clone requires an empty or nonexistent destination. Workspace metadata lives in `.lode/`.
 
-Directory pages render their README. Click a filename to preview Markdown, text, supported images, audio or video. Text previews are limited to 1 MiB; other files remain downloadable. Markdown links and local images stay pinned to the selected version. The interface defaults to dark; choose a theme under **Settings → Appearance** in the account menu. The choice is saved in your browser.
+## Share a project
 
-## Save and update
+An administrator creates accounts under **Site administration → Users**. Public registration is closed. Each account can create private projects under its username.
 
-A saved version, or **commit**, describes the complete project. Your workspace remembers a **base** version for comparing local changes. A **branch** names a line of saved work; new projects start on `main`.
+Owners add collaborators in **Project settings → Collaborators**:
+
+| Role | Access |
+| --- | --- |
+| Reader | Browse and download |
+| Writer | Also save changes and create branches/tags |
+| Maintainer | Also manage collaborators, retention, and branch/tag removal |
+
+Owners retain maintainer access. Administrators can manage all projects through the browser. Personal tokens apply to one project or all accessible projects, with a maximum reader, writer, or maintainer role. They never grant more access than the account currently has and do not inherit site-administrator authority. Create and revoke them under **Settings → Access tokens**.
+
+Role changes affect subsequent requests, including existing tokens. Requests already authorized may finish. Removing access leaves local files intact.
+
+## Browse and manage projects
+
+The browser shows files, saved versions, text and Markdown previews. Images, audio and video use the browser's supported formats; Markdown can embed images from the same saved version. Download retrieves the original file. Expired contents cannot be previewed or downloaded.
+
+Owners and site administrators can remove a project under **Project settings → Delete project** by confirming its full name. Deletion permanently removes its files, history and project-scoped tokens; local workspaces remain intact. Active requests must finish first. Interrupted deletion leaves the project unavailable: retry from its deletion page or restart the server to finish. Administrators can find pending deletions under **Site administration → Projects**. Collaborator maintainer access does not permit project deletion.
+
+## Account security
+
+Change your password under **Settings → Security**, using your current password. A password change signs you out on every device and revokes your access tokens. Create a new token after signing in, then run `lode login` again. Local workspaces and files are preserved.
+
+Administrators can reset passwords, enable or disable accounts, and change administrator access under **Site administration → Users**. These changes also end the affected account's sessions and revoke its tokens. Disabling an account preserves its projects and memberships; enabling it again requires a fresh sign-in. The last enabled administrator cannot be disabled or demoted.
+
+Add a passkey or security key under **Settings → Security**. A passkey supports sign-in without a username. Choose **Security key — enter a username** for a key you intend to select by account name. Both passwordless paths require the key's PIN, biometric verification, or equivalent user verification.
+
+Once a key is enrolled, password sign-in also requires a key or a recovery code. Save the ten recovery codes shown after first enrollment; each works once, with your password. You can replace the codes in Security. Adding or removing a key and replacing codes require your current password, sign out other sessions, and revoke access tokens. Your current session remains signed in. Removing the last key returns to password-only sign-in and removes recovery codes.
+
+Changing your own password preserves enrolled keys. An administrator password reset removes keys and recovery codes. A local operator can recover an account while the server is stopped:
+
+```sh
+lode recover-user ./instance alice
+```
+
+The command prompts for a new password, enables the account, and invalidates its sessions, tokens, keys, and recovery codes. Its role, projects, and memberships are preserved. Scripts may supply the new password as one line on stdin.
+
+## Select files
+
+Include or exclude project-relative paths. Flags may be repeated; the nearest ancestor rule wins.
+
+```sh
+lode clone -include assets -exclude assets/cache \
+  https://lode.example/alice/example ./assets-work
+```
+
+Only selected files and baseline metadata are downloaded. Saving preserves omitted project contents. Removing a partially selected directory removes its selected contents, preserving unseen descendants.
+
+Inspect or replace an existing workspace's selection:
+
+```sh
+lode select
+lode select -include assets -include references
+lode select -include assets
+```
+
+Selection changes use the workspace's current version. Clean files outside the new selection are unloaded; changed files refuse unloading. Unselected local files remain untouched. Use `lode select -none` to unload all clean selected paths. Loading over different local contents requires the same conflict choices as update.
+
+## Save and inspect
 
 ```sh
 lode status
-lode save -m 'Update the assets'
+lode save -m 'Update assets'
 lode log
+```
+
+Commands find the workspace from the current directory or a parent. Use `lode -C ./work status` to work elsewhere.
+
+Lode handles ordinary files and directories. Stop applications writing those files during saves and workspace operations; Lode does not take application-consistent snapshots of running programs. Selected symlinks and special files are refused.
+
+Each save requires the branch to match the workspace's base version. A stale save leaves local files intact. Update to reconcile the latest shared version, then save again:
+
+```sh
 lode update
+lode save -m 'Combine changes'
 ```
 
-`status` shows the branch, base, selection, and added/modified/deleted paths. `save` publishes selected changes and prints the new version ID. A save with no changes reports that there is nothing to save. `log` follows first-parent history—the destination branch's line through merges; `log -n 50` shows more versions.
-
-Saving requires a connection. Local editing and `status` work offline. If another workspace advances the branch, a stale save is rejected; `update` brings in the current version while preserving independent local edits, then you can save again.
-
-Conflicts stop an update before files change. For example, keep your local file:
+Independent edits survive. Conflicting file edits, deletions, and file/directory replacements stop before changing working files. Choose each conflicting path explicitly:
 
 ```sh
-lode update -ours assets/example.bin
+lode update -local assets/model.bin -incoming references/source.bin
 ```
 
-Use one choice for each conflicting path; options are repeatable. `-ours` keeps your local contents as changes against the updated base. To take the server version instead, use `update -theirs PATH`. A directory choice chooses the entire subtree, including independent changes within it.
+`-local` keeps local contents; `-incoming` takes the shared version. A directory conflict chooses the whole subtree. For selection conflicts, repeat the selection rules with these flags. Update settles any pending save first, recovering its accepted baseline or preventing that request from publishing later.
 
-## Choose what is local
+## Branches and restore
 
-Selection controls local presence. Unloaded paths remain part of the shared project and survive partial saves.
-
-```sh
-lode clone -include assets -exclude assets/cache https://lode.example.com/alice/example ../selected
-lode -C ../selected select
-lode -C ../selected select -include assets -include references
-```
-
-Log in first or set `LODE_TOKEN` before attaching or cloning. Both commands accept repeatable include/exclude options; the most specific path rule wins. Without rules, they select everything. Exclusions alone select everything except those paths. Use `select -include .` to select the whole project.
-
-`select` without options shows the rules. With options, it replaces them at the current base. Clean files leaving the selection are removed locally; modified, deleted, or untracked selected entries must be resolved first. Unselected local contents and directories needed to contain them remain.
-
-A rule set matching no remote or local entries cannot empty a populated workspace. Check the paths, or use `select -none` to unload all selected content explicitly. The workspace remains attached and can load paths again later.
-
-## Branch and merge
-
-Create a branch at your workspace base, work on it, then merge its saved versions into `main`:
+Projects start on `main`. Create an experiment at your workspace's saved version, then switch to it:
 
 ```sh
-lode branch experiment
+lode branch
+lode branch create experiment
 lode switch experiment
-# Edit files, then save.
-lode save -m 'Try a different layout'
+```
+
+Writers can create branches. Switching preserves the selection and leaves unselected local files alone. Unsaved changes can follow a branch at the same version; save them before switching to a different version. Use `lode branch create -from main experiment` to start at another branch or version.
+
+Clone directly from a branch with `lode clone -branch experiment <project-url>`. The browser's branch picker shows its files; **All branches** lists branch tips. Maintainers can delete a non-default branch using `lode branch delete experiment` after switching elsewhere. Deletion refuses a tip that changed during the request and leaves saved versions intact.
+
+Integrate another branch or saved version into the current branch:
+
+```sh
 lode switch main
-lode merge experiment
 lode update
+lode merge experiment
 ```
 
-`branch` lists branches; `branch NAME COMMIT` chooses a starting version. `branch -delete NAME` removes the name while retaining its history. The CLI refuses deletion of `main` or the current workspace branch. `switch` preserves independent local edits and accepts the same choices as `update`.
-
-`merge` compares complete saved trees on the server, including unloaded paths. It excludes unsaved local edits and leaves workspace files and the base unchanged; run `update` to bring in the result. The destination branch must still match the workspace base.
-
-For a conflict, use `merge -ours PATH BRANCH` to choose the destination version or `merge -theirs PATH BRANCH` to choose the source. Choices select whole files or subtrees. An already merged source creates no version. If several best common ancestors exist, choose a reported ID with `-base COMMIT`.
-
-## Restore and protect a version
-
-`COMMIT` means the full version ID printed by `save`, `log`, or `tag`, not a branch or tag name.
+Merge requires clean selected files and an up-to-date target branch. It combines complete project versions on the server, including excluded paths, then updates your selected files. It uploads no file contents. Conflicts stop publication; retry with explicit choices:
 
 ```sh
-lode restore COMMIT assets/example.bin
+lode merge -local assets/model.bin -incoming references/source.bin experiment
+```
+
+Here `-local` keeps the current branch's saved contents; `-incoming` takes the source version. Directory choices cover the whole subtree. The saved merge records both parents, including when choices leave the target files unchanged. Already integrated sources create no new version. Ambiguous or missing common ancestry prevents automatic integration; retained contents can still be restored explicitly.
+
+Restore earlier contents as local changes:
+
+```sh
+lode log
+lode restore <version> assets/model.bin
 lode status
-lode save -m 'Restore the earlier file'
+lode save -m 'Restore model'
 ```
 
-Restore puts historical contents into selected paths as local changes. It keeps the branch and base. Omit paths to restore the whole selection. Every explicit path must be known to the historical version, local files, or current baseline; a typo fails before any files change. A file absent from the historical version is removed locally.
+Use a branch or tag name, a full version ID, or the short ID shown by history. Ambiguous references are refused; qualify them with `branch:<name>`, `tag:<name>`, or `version:<full-id>`. `lode log -full` shows complete IDs. With no paths, restore covers the workspace's selection. It never loads excluded paths, refuses to overwrite changed target files, and preserves unrelated local work. The branch and saved baseline remain unchanged until you save.
 
-Restore refuses to discard local changes unless you pass `-force`. Only retained versions have downloadable contents.
+## Protect versions and clean up
 
-A **tag** protects a saved version from expiry. `tag release-1` protects the workspace base; `tag release-1 COMMIT` names another retained version. `tag` lists names and IDs, and `tag -delete release-1` removes protection. An existing tag cannot silently move to another version.
-
-## Release old contents
+Tags name and protect complete saved versions:
 
 ```sh
-lode tag release-1
-lode cleanup -keep 20
-# Inspect the preview, then copy its token:
-lode cleanup -keep 20 -apply PREVIEW_TOKEN
+lode tag create release-one
+lode tag
+lode restore release-one assets/model.bin
 ```
 
-`-keep N` protects the latest N first-parent versions of every branch, counting its tip. Tips and tagged versions are always protected, including with `-keep 0`. The preview explains which versions are kept, eligible, or already expired. Its apply token appears only after the complete preview succeeds.
+Creation uses the workspace's saved version; `-from <reference>` selects another. Tags cannot move. Writers can create them; maintainers can remove protection with `lode tag delete release-one`. The browser lists tags in the branch menu.
 
-Apply rechecks history and references; if they changed, preview again. Repeating the same applied token is safe while those facts still match.
+Maintainers manage retention in **Project settings → Storage** or through the CLI:
 
-Expiry removes downloadable contents while preserving history and comparison metadata. `log` marks expired versions. Increasing `-keep` cannot bring their bytes back; expired versions cannot become new branch/tag targets. Local files survive expiry of their server base and can update toward a retained version.
+```sh
+lode retention -keep 20 -history-days 90
+lode cleanup
+```
 
-Apply also requests physical collection. `collect` requests it again without expiring more versions. Native safety delays can require later runs over hours or days, and packing overhead can remain. See [storage limits](operations.md#storage-and-transfer-limits).
+Changing policy removes nothing. Cleanup previews its consequences and prints an apply command valid for one hour. Application refuses if relevant project state changed; preview again. Branch tips, recent first-parent versions per branch, and tagged versions keep their contents. Defaults are 20 versions per branch and 90 days of unprotected history metadata.
 
-## Recover interrupted work
+Expired contents cannot be downloaded or restored. Their history remains until eligible for removal; recent save outcomes remain for at least the seven-day retry window. Tags protect their chosen version, not every ancestor. Removing history can prevent later automatic merges, and history identifies removed boundaries. Increasing retention cannot recover expired contents or removed history. Cleanup leaves local files unchanged.
 
-Long workspace commands report elapsed activity on a terminal. Ctrl-C interrupts them with exit status 130; it does not automatically roll back changes.
+Cleanup releases content protection and prunes obsolete metadata. Reclaim unreferenced content storage afterward:
 
-- `resume` finishes an interrupted save or file transition. A save retry resolves the original outcome and preserves subsequent local edits.
-- `cancel` cancels an unaccepted save without deleting local files, or rolls back an unfinished file transition. An accepted save must be resumed.
-- If an unaccepted save's intended files changed, cancel it before saving again. After a confirmed stale rejection, update and retry.
-- If recovery finds unexpected edits, it preserves them and reports the path. Move those contents aside before retrying. After a transition commits, resume finishes cleanup.
+```sh
+lode collect
+```
 
-A cancelled initial checkout leaves an attached empty-selection workspace; populate it with `select`. A historical version can expire between downloads; the transition then stops and can be cancelled. An interrupted merge resumes its original saved versions; update is still a separate step.
+Collection is also available in **Project settings → Storage**. It reports allocated content-repository space before and after; these figures exclude the database and cache. Retained versions and shared contents stay available after collection. Small unused fragments may remain in otherwise efficient packs.
 
-For more command options, use `lode help COMMAND`. Hosting and complete-store recovery are covered in [operations](operations.md).
+Collection waits for active reads and temporarily blocks other project operations. Keep free disk space for rewriting packs. If interrupted, collection may have partly completed; run it again. No additional history is expired by collecting.
+
+## Interrupted operations
+
+Run `lode resume` to continue an interrupted operation. Downloads are verified before installation; an unexpected local path stops recovery without being replaced. Move it aside before resuming.
+
+Save recovery checks the original server outcome before reading local files. If the save was accepted, recovery updates the baseline while preserving subsequent edits.
+
+For a pending save, `lode cancel` records an already accepted version locally or prevents that request from publishing later. It requires server access and leaves local files untouched.
+
+Readers can still settle their own pending saves after losing write permission. Cancellation cannot affect another account's request.
+
+Merge recovery resolves the original source version and choices before updating local files. An accepted merge stays published if the local update fails or conflicts with later edits. Use `lode update` to reconcile those edits, or `lode resume` for an unfinished local transition. Cancelling an accepted merge leaves the workspace baseline and files unchanged; update when ready. If the process stops between resolving publication and starting the local update, the unchanged baseline remains sufficient for `lode update`.
+
+For an unfinished clone, update, selection change, switch, or restore, `lode cancel` restores preserved originals without contacting the server. Newer local edits stop cancellation instead of being overwritten. Recovery errors identify contents that need moving aside, including preserved files under `.lode/staging`. Once all actions have durably completed, resume or cancel finishes the committed baseline and cleanup instead of reversing the operation.
+
+Previously unaccepted save requests expire after seven days. If an old save outcome has been removed, `lode resume` and `lode cancel` direct you to `lode update`. Update reconciles from the existing baseline while preserving local edits; it does not assume the expired save was unpublished.

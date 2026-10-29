@@ -1,137 +1,48 @@
 {{define "top"}}<!doctype html>
 <html lang="en" data-theme="dark">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{.Title}} · Lode</title>
-    <link rel="icon" href="/assets/icon.svg" type="image/svg+xml" />
-    <script src="/assets/theme.js"></script>
-    <link rel="stylesheet" href="/assets/style.css" />
-    <script src="/assets/select.js" defer></script>
-    <script src="/assets/app.js" defer></script>
-  </head>
-  <body>
-    <a class="skip" href="#main">Skip to content</a>
-    <header class="bar">
-      <a class="brand" href="/" aria-label="Lode home"
-        ><img class="app-icon" src="/assets/icon.svg" alt="" /><span>Lode</span></a
-      >
-      {{if .User.ID}}
-      <nav aria-label="Main navigation">
-        <a href="/" {{if eq .Section "projects"}} aria-current="page" {{end}}
-          >Projects</a
-        >
-      </nav>
-      {{end}}
-      <div class="bar-right">
-        {{if .User.ID}}
-        <details class="account-menu">
-          <summary aria-label="Account: {{.User.Username}}">
-            <span class="avatar" aria-hidden="true"
-              >{{slice .User.Username 0 1}}</span
-            ><span>{{.User.Username}}</span>
-          </summary>
-          <div class="popover menu">
-            <a href="/settings/appearance">Settings</a>
-            {{if .User.Admin}}<a href="/-/admin/users">Site administration</a>{{end}}
-            <form action="/logout" method="post">
-              <button class="quiet" type="submit">Sign out</button>
-            </form>
-          </div>
-        </details>
-        {{end}}
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · Lode</title>
+  <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+  <script src="/assets/theme.js"></script>
+  <script src="/assets/authentication.js" defer></script>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="bar">
+    <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28">Lode</a>
+    {{if .User.ID}}<a href="/">Projects</a>
+    <details class="account-menu">
+      <summary>{{.User.Name}}</summary>
+      <div class="menu">
+        <a href="/settings/security">Settings</a>
+        {{if .User.Admin}}<a href="/admin/users">Site administration</a>{{end}}
+        <form method="post" action="/logout"><button class="quiet">Sign out</button></form>
       </div>
-    </header>
-    <main id="main" class="main">
-      {{if .Error}}
-      <div class="notice error" role="alert">{{.Error}}</div>
-      {{end}} {{end}} {{define "bottom"}}
-    </main>
-    <footer class="footer">
-      <span>Lode {{version}}</span>
-    </footer>
-  </body>
-</html>
-{{end}} {{define "error"}}{{template "top" .}}
-<section class="empty">
-  <h1>{{.Title}}</h1>
-  <a class="button secondary" href="/">Projects</a>
-  <a class="button secondary" href="/login">Sign in</a>
-</section>
-{{template "bottom" .}}{{end}} {{define "repo-icon"}}<svg
-  class="icon"
-  viewBox="0 0 24 24"
-  fill="none"
-  stroke="currentColor"
-  stroke-width="1.7"
-  aria-hidden="true"
->
-  <path d="M5 3h14v18H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm0 0v14h14M7 20h8" />
-  <path d="M8 6h7M8 9h5" /></svg
->{{end}} {{define "folder"}}<svg
-  class="icon folder-icon"
-  viewBox="0 0 24 24"
-  fill="none"
-  stroke="currentColor"
-  stroke-width="1.7"
-  aria-hidden="true"
->
-  <path
-    d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"
-  /></svg
->{{end}} {{define "file"}}<svg
-  class="icon"
-  viewBox="0 0 24 24"
-  fill="none"
-  stroke="currentColor"
-  stroke-width="1.7"
-  aria-hidden="true"
->
-  <path
-    d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10ZM13 3v7h7"
-  /></svg
->{{end}} {{define "branch-icon"}}<svg
-  class="icon"
-  viewBox="0 0 24 24"
-  fill="none"
-  stroke="currentColor"
-  stroke-width="1.7"
-  aria-hidden="true"
->
-  <circle cx="6" cy="5" r="2" />
-  <circle cx="6" cy="19" r="2" />
-  <circle cx="18" cy="5" r="2" />
-  <path d="M6 7v10m12-10v2a5 5 0 0 1-5 5H6" /></svg
->{{end}} {{define "settings-top"}}
-<div class="settings-layout">
-  <nav class="settings-nav" aria-label="Settings">
-    {{if or (eq .Section "admin-users") (eq .Section "admin-projects")}}
-    <span class="nav-heading">Site administration</span>
-    <a href="/-/admin/users" {{if eq .Section "admin-users"}}aria-current="page"{{end}}>Users</a>
-    <a href="/-/admin/projects" {{if eq .Section "admin-projects"}}aria-current="page"{{end}}>Projects</a>
-    {{else}}
-    <span class="nav-heading">Account settings</span>
-    <a
-      href="/settings/appearance"
-      {{if eq .Section "appearance"}} aria-current="page" {{end}}
-      >Appearance</a
-    >
-    <a
-      href="/settings/security"
-      {{if eq .Section "security"}}
-      aria-current="page"
-      {{end}}
-      >Security</a
-    >
-    <a
-      href="/settings/tokens"
-      {{if eq .Section "tokens"}}
-      aria-current="page"
-      {{end}}
-      >Access tokens</a
-    >
-    {{end}}
-  </nav>
-  <div class="settings-content">{{end}} {{define "settings-bottom"}}</div>
-</div>
+    </details>{{end}}
+  </header>
+  <main id="main">
+    {{if .Error}}<div class="notice error" role="alert">{{.Error}}</div>{{end}}
+    {{if .Notice}}<div class="notice" role="status">{{.Notice}}</div>{{end}}
 {{end}}
+{{define "bottom"}}
+  </main>
+  <footer>Lode · {{version}}</footer>
+</body>
+</html>{{end}}
+{{define "error"}}{{template "top" .}}<h1>{{.Title}}</h1><a href="/">Projects</a>{{template "bottom" .}}{{end}}
+{{define "settings-top"}}
+<div class="settings">
+  <nav aria-label="Account settings">
+    <h2>Account settings</h2>
+    <a href="/settings/security" {{if eq .Section "security"}}aria-current="page"{{end}}>Security</a>
+    <a href="/settings/appearance" {{if eq .Section "appearance"}}aria-current="page"{{end}}>Appearance</a>
+    <a href="/settings/tokens" {{if eq .Section "tokens"}}aria-current="page"{{end}}>Access tokens</a>
+  </nav>
+  <div class="settings-content">
+{{end}}
+{{define "settings-bottom"}}</div></div>{{end}}
+{{define "folder"}}<svg class="icon folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>{{end}}
+{{define "file"}}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10ZM13 3v7h7"/></svg>{{end}}

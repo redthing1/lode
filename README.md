@@ -1,61 +1,51 @@
 # Lode
 
-Lode is self-hosted version control for large binary projects. Its embedded web interface manages accounts, projects, permissions, history, and storage. The CLI works with ordinary editable workspaces and can load only selected paths. Saves preserve project paths that are not present locally.
+Lode versions shared file projects using ordinary local folders. Download selected paths, save complete project versions, and browse files and history in its embedded web interface.
 
-Lode is experimental. The server and currently supported CLI build run on Linux.
+Lode is experimental. Selected workspaces support saves, updates, branches, merges, restore, and explicit whole-file conflict choices.
 
 ## Install
 
-Use Go 1.27.2 or later, Git, a C compiler, and the development headers/library for [librsync 2.3.4](https://github.com/librsync/librsync/releases/tag/v2.3.4). Go must have cgo enabled. The installed command also needs the librsync shared library ([LGPL-2.1](https://github.com/librsync/librsync/blob/v2.3.4/COPYING)).
-
-Install or update from Git using your configured Git credentials:
+From a source checkout, use Go 1.27.2 or later, a C compiler, and the librsync development library. The installed command also needs the librsync shared library.
 
 ```sh
-GOBIN="$HOME/.local/bin" GOPRIVATE=github.com/redthing1/lode \
-  go install github.com/redthing1/lode/cmd/lode@main
-```
-
-Add `$HOME/.local/bin` to `PATH` in your shell configuration once:
-
-```sh
+GOBIN="$HOME/.local/bin" go install ./cmd/lode
 export PATH="$HOME/.local/bin:$PATH"
-lode --version
+lode version
 ```
 
-From a source checkout, `GOBIN="$HOME/.local/bin" make install` installs the local version there. For container hosting, see [Podman Compose](doc/operations.md#run-with-podman-compose).
+## Start a server
 
-## Start an instance
-
-Create a private instance directory and its first administrator setup code:
+The server runs on Linux:
 
 ```sh
-lode init -url http://localhost:8473 ./instance
+lode init ./instance
 lode serve ./instance
 ```
 
-Open the setup URL and enter the code printed by `init`. Choose an administrator username and a password of at least 12 characters. Each signed-in user can create private projects under their username; administrators also manage accounts and all projects. Users create personal access tokens in account settings. Use an HTTPS origin with `-url` when serving beyond loopback; see [operations](doc/operations.md#host-an-instance).
+Open `http://localhost:8473`, enter the printed setup code, and create the administrator account. Create a project, then create an access token under **Settings → Access tokens**.
 
-## Connect a workspace
+For remote access, initialize with `-url https://lode.example` and put an HTTPS reverse proxy in front of the listen address. The canonical URL requires a hostname; local development uses `localhost`.
 
-Create a project named `example` in the web interface, then open **Settings → Access tokens** from the account menu to create a token. Project URLs use `/<username>/<project>`; replace `alice` below with your username. From the CLI, log in to the project URL and connect a folder:
+Administrators add accounts under **Site administration → Users**. Each user can create private projects and share them through **Project settings → Collaborators**.
+
+Connect an existing folder to the empty project:
 
 ```sh
-lode login http://localhost:8473/alice/example
-mkdir -p ./work
+lode login http://localhost:8473
 lode attach http://localhost:8473/alice/example ./work
 cd ./work
-printf 'First version\n' > example.bin
 lode save -m 'Initial version'
 ```
 
-The token prompt is hidden in a terminal. Credentials are saved in your OS user configuration with private file permissions, not in the workspace. `LODE_TOKEN` overrides saved credentials. See the [user guide](doc/guide.md) for project roles, selected paths, branches, recovery, and credential handling.
-
-## Documentation
-
-- [User guide](doc/guide.md): workspaces, access, branches, history, and recovery.
-- [Operations](doc/operations.md): hosting, accounts, backup, import, and storage limits.
-- [Architecture](doc/architecture.md): service boundaries and persistence contracts.
+See the [user guide](doc/guide.md) for selected paths and recovery, [operations](doc/operations.md) for Podman Compose and backup, and [architecture](doc/architecture.md) for persistence and service boundaries.
 
 ## Development
 
-Run `make fmt`, `make check`, and `make build` from the source checkout. Checks run locally; `make build` produces a development binary in `bin/`.
+Run checks locally:
+
+```sh
+make fmt
+make check
+make build
+```

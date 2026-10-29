@@ -1,21 +1,85 @@
 package model
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
-// Intersect selects only paths included by both rule sets. The union of rule
-// boundaries is enough because inclusion is constant between those boundaries.
+type Rule struct {
+	Path    string `json:"path"`
+	Include bool   `json:"include"`
+}
+type Selection []Rule
+
+// Intersect keeps only paths included by both selections. Rule boundaries are
+// sufficient; computing an intersection never requires an inventory of files.
 func (s Selection) Intersect(other Selection) Selection {
-	names := map[string]bool{"": true}
-	for _, r := range s {
-		names[r.Path] = true
+	boundaries := map[string]bool{}
+	for _, selection := range []Selection{s, other} {
+		for _, rule := range selection {
+			boundaries[rule.Path] = true
+		}
 	}
-	for _, r := range other {
-		names[r.Path] = true
+	names := make([]string, 0, len(boundaries))
+	for name := range boundaries {
+		names = append(names, name)
 	}
-	result := make(Selection, 0, len(names))
-	for name := range names {
-		result = append(result, Rule{Path: name, Include: s.Includes(name) && other.Includes(name)})
+	sort.Strings(names) // Ancestors precede their descendants.
+	var result Selection
+	for _, name := range names {
+		include := s.Includes(name) && other.Includes(name)
+		if result.Includes(name) != include {
+			result = append(result, Rule{Path: name, Include: include})
+		}
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
 	return result
+}
+
+func (s Selection) Validate() error {
+	seen := map[string]bool{}
+	for _, r := range s {
+		if (r.Path != "" && !ValidPath(r.Path)) || seen[r.Path] {
+			return fmt.Errorf("invalid or repeated selection path %q", r.Path)
+		}
+		seen[r.Path] = true
+	}
+	return nil
+}
+
+// Includes uses the nearest ancestor rule; an empty path names the root.
+func (s Selection) Includes(name string) bool {
+	depth, included := -1, false
+	for _, r := range s {
+		if len(r.Path) > depth && (r.Path == "" || r.Path == name || strings.HasPrefix(name, r.Path+"/")) {
+			depth, included = len(r.Path), r.Include
+		}
+	}
+	return included
+}
+
+func (s Selection) Descends(name string) bool {
+	if s.Includes(name) {
+		return true
+	}
+	for _, r := range s {
+		if r.Include && (name == "" || strings.HasPrefix(r.Path, name+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
+// Covers reports whether an entire subtree is selected, including descendants
+// that have never been downloaded. Excluded descendants prevent directory removal.
+func (s Selection) Covers(name string) bool {
+	if !s.Includes(name) {
+		return false
+	}
+	for _, rule := range s {
+		if !rule.Include && (name == "" || strings.HasPrefix(rule.Path, name+"/")) {
+			return false
+		}
+	}
+	return true
 }

@@ -1,107 +1,48 @@
-{{define "setup"}}{{template "top" .}}
-<section class="auth-panel panel">
-  <h1 class="panel-title">Create administrator</h1>
-  <form action="/setup" method="post" class="stack panel-body">
-    <label
-      >Setup code<input
-        name="code"
-        required
-        autocomplete="off"
-        spellcheck="false"
-    /></label>
-    <p class="hint">Printed by <code>lode init</code>.</p>
-    <label
-      >Username<input
-        name="username"
-        minlength="3"
-        maxlength="32"
-        pattern="[a-z0-9_\-]{3,32}"
-        required
-        autocomplete="username"
-        spellcheck="false"
-    /></label>
-    <label
-      >Password<input
-        type="password"
-        name="password"
-        minlength="12"
-        maxlength="1024"
-        required
-        autocomplete="new-password"
-    /></label>
-    <p class="hint">At least 12 characters.</p>
-    <button type="submit">Create administrator</button>
+{{define "auth"}}{{template "top" .}}
+<section class="auth panel">
+  <h1>{{.Title}}</h1>
+  <form method="post">
+    {{if .Setup}}<label>Setup code<input name="code" autocomplete="off" required autofocus></label>{{end}}
+    <label>Username<input name="username" autocomplete="username" required {{if not .Setup}}autofocus{{end}}></label>
+    <label>Password<input type="password" name="password" autocomplete="{{if .Setup}}new-password{{else}}current-password{{end}}" required {{if .Setup}}minlength="12"{{end}}></label>
+    <button type="submit">{{if .Setup}}Create administrator{{else}}Sign in{{end}}</button>
   </form>
-</section>
-{{template "bottom" .}}{{end}} {{define "login"}}{{template "top" .}}
-<section class="auth-panel panel">
-  <h1 class="panel-title">Sign in</h1>
-  <div class="panel-body">
-    <form action="/login" method="post" class="stack">
-      <label
-        >Username<input
-          id="login-username"
-          name="username"
-          required
-          autocomplete="username webauthn"
-          spellcheck="false"
-          maxlength="32"
-      /></label>
-      <label
-        >Password<input
-          type="password"
-          name="password"
-          required
-          autocomplete="current-password"
-          maxlength="1024"
-      /></label>
-      <button type="submit">Sign in</button>
+  {{if not .Setup}}
+  <form method="post" action="/login/key" data-webauthn="get" class="key-signin">
+    <button class="secondary">Sign in with a passkey</button><p class="key-error error" role="alert" hidden></p>
+  </form>
+  <details class="key-signin"><summary>Use a security key with a username</summary>
+    <form method="post" action="/login/key" data-webauthn="get">
+      <label>Username<input name="username" autocomplete="username" required></label>
+      <button class="secondary">Use security key</button><p class="key-error error" role="alert" hidden></p>
     </form>
-    <div class="divider">or</div>
-    <button type="button" class="secondary full-width" data-security="passkey">
-      Sign in with a passkey
-    </button>
-    <p class="hint passkey-hint">
-      Leave username blank to choose a passkey, or enter it to use a security
-      key.
-    </p>
-    <p class="hint" data-security-status role="status" aria-live="polite"></p>
-    {{if .Data}}<p><a href="/register">Create an account</a></p>{{end}}
-  </div>
+  </details>
+  {{end}}
 </section>
 {{template "bottom" .}}{{end}}
-{{define "register"}}{{template "top" .}}
-<section class="auth-panel panel">
-  <h1 class="panel-title">Create account</h1>
-  <form action="/register" method="post" class="stack panel-body">
-    <label>Username<input name="username" required minlength="3" maxlength="32" pattern="[a-z0-9_\-]{3,32}" autocomplete="username" spellcheck="false" /></label>
-    <label>Password<input type="password" name="password" required minlength="12" maxlength="1024" autocomplete="new-password" /></label>
-    <label>Confirm password<input type="password" name="confirm" required minlength="12" maxlength="1024" autocomplete="new-password" /></label>
-    <p class="hint">At least 12 characters.</p>
-    <button type="submit">Create account</button>
-    <a href="/login">Sign in</a>
+
+{{define "verify"}}{{template "top" .}}
+<section class="auth panel"><h1>Verify sign-in</h1>
+  <p class="muted">{{.Username}}</p>
+  <form method="post" action="/verify/key" data-webauthn="get">
+    <button>Use passkey or security key</button><p class="key-error error" role="alert" hidden></p>
   </form>
+  <details class="key-signin"><summary>Use a recovery code</summary>
+    <form method="post" action="/verify/recovery">
+      <label>Recovery code<input name="code" autocomplete="one-time-code" required></label><button class="secondary">Verify code</button>
+    </form>
+  </details>
+  <p class="key-signin"><a href="/login">Back to sign in</a></p>
 </section>
-{{template "bottom" .}}{{end}} {{define "verify"}}{{template "top" .}}
-<section class="auth-panel panel">
-  <h1 class="panel-title">Two-factor authentication</h1>
-  <div class="panel-body stack">
-    <button type="button" data-security="login">Use security key</button>
-    <p class="hint" data-security-status role="status" aria-live="polite"></p>
-    <details {{if .Error}} open {{end}}>
-      <summary>Use a recovery code</summary>
-      <form action="/verify/recovery" method="post" class="stack">
-        <label
-          >Recovery code<input
-            name="code"
-            required
-            autocomplete="off"
-            spellcheck="false"
-        /></label>
-        <button type="submit" class="secondary">Verify</button>
-      </form>
-    </details>
-    <a href="/login">Back to sign in</a>
-  </div>
-</section>
+{{template "bottom" .}}{{end}}
+
+{{define "recovery-content"}}
+<h2>Save your recovery codes</h2>
+<p>Each code can be used once with your password if you lose access to your keys. These codes will not be shown again.</p>
+<pre class="recovery-codes">{{range .Codes}}{{.}}
+{{end}}</pre>
+<a class="button" href="/settings/security">Done</a>
+{{end}}
+{{define "recovery"}}{{template "top" .}}
+<section class="panel form-page">{{template "recovery-content" .}}</section>
 {{template "bottom" .}}{{end}}

@@ -1,0 +1,31 @@
+{{define "admin-nav"}}<nav aria-label="Site administration"><h2>Site administration</h2>
+<a href="/admin/users" {{if ne .Section "admin-projects"}}aria-current="page"{{end}}>Users</a>
+<a href="/admin/projects" {{if eq .Section "admin-projects"}}aria-current="page"{{end}}>Projects</a>
+</nav>{{end}}
+
+{{define "admin-projects"}}{{template "top" .}}
+<div class="settings">{{template "admin-nav" .}}<div class="settings-content">
+<h1>Projects</h1>
+<div class="panel">
+{{range .Projects}}<div class="history-row">
+{{if eq .State "deleting"}}<span>{{.Owner}} / <strong>{{.Name}}</strong></span><span class="badge">Deletion pending</span><a href="{{projectURL .}}/settings/delete">Finish deletion</a>
+{{else}}<a href="{{projectURL .}}">{{.Owner}} / <strong>{{.Name}}</strong></a><a href="{{projectURL .}}/settings/members">Settings</a>{{end}}
+</div>{{else}}<p class="empty">No projects yet.</p>{{end}}
+</div>
+{{if .Next}}<div class="pagination"><a class="button secondary" href="/admin/projects?after={{urlquery .Next}}">Next projects →</a></div>{{end}}
+</div></div>
+{{template "bottom" .}}{{end}}
+
+{{define "delete-project"}}{{template "top" .}}{{template "project-heading" .}}
+<div class="settings">{{template "project-settings-nav" .}}<div class="settings-content">
+<h1>{{if eq .Project.State "deleting"}}Finish deletion{{else}}Delete project{{end}}</h1>
+<section class="panel padded token-form">
+{{if eq .Project.State "deleting"}}<p>Deletion started. The project is unavailable until removal finishes.</p>
+{{else}}<p>Permanently remove all files, versions, and access to this project. Local workspaces remain on their machines.</p>{{end}}
+<form method="post">
+<input type="hidden" name="id" value="{{.Project.ID}}">
+<label>Type {{.Project.Owner}}/{{.Project.Name}} to confirm<input name="confirm" required autocomplete="off" spellcheck="false"></label>
+<button class="secondary danger">{{if eq .Project.State "deleting"}}Retry deletion{{else}}Delete project{{end}}</button>
+</form></section>
+</div></div>
+{{template "bottom" .}}{{end}}

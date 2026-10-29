@@ -1,4 +1,4 @@
-// Package workspace owns selected local files, their baseline, and recovery.
+// Package workspace connects selected ordinary files to a shared project.
 package workspace
 
 import (
@@ -6,40 +6,94 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"net/url"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 
+	"github.com/gofrs/flock"
 	"github.com/redthing1/lode/internal/model"
-	"github.com/redthing1/lode/internal/project"
 	"github.com/redthing1/lode/internal/remote"
 )
 
-var ErrPending = errors.New("workspace has an unfinished operation; use resume or cancel")
+var ErrPending = errors.New("unfinished operation; run lode resume")
+var ErrNoChanges = errors.New("no selected changes")
 
 type State struct {
-	Version   int             `json:"version"`
-	URL       string          `json:"url"`
-	Project   string          `json:"project"`
-	Branch    string          `json:"branch"`
-	Base      string          `json:"base"`
-	Selection model.Selection `json:"selection"`
-	Baseline  []model.Entry   `json:"baseline"`
+	Server     string          `json:"server"`
+	InstanceID string          `json:"instance"`
+	Owner      string          `json:"owner"`
+	Project    string          `json:"project"`
+	ProjectID  string          `json:"project_id"`
+	Branch     string          `json:"branch"`
+	Version    string          `json:"version"`
+	Selection  model.Selection `json:"selection"`
+	Baseline   []model.Entry   `json:"baseline"`
 }
 
 type Workspace struct {
-	root  *os.Root
-	lock  *os.File
-	state State
-	token string
+	directory  string
+	root, meta *os.Root
+	lock       *flock.Flock
+	state      State
+}
+
+func (w *Workspace) State() State      { return w.state }
+func (w *Workspace) Directory() string { return w.directory }
+
+func (s State) validate() error {
+	if s.Server == "" || s.InstanceID == "" || s.ProjectID == "" || !model.ValidPath(s.Owner) || !model.ValidPath(s.Project) || strings.Contains(s.Owner+s.Project, "/") || !model.ValidReference(s.Branch) {
+		return errors.New("invalid workspace identity")
+	}
+	if err := s.Selection.Validate(); err != nil {
+		return err
+	}
+	if err := model.ValidateInventory(s.Baseline); err != nil {
+		return err
+	}
+	for _, e := range s.Baseline {
+		if !s.Selection.Includes(e.Path) {
+			return fmt.Errorf("baseline contains unselected path %q", e.Path)
+		}
+	}
+	return nil
 }
 
 func Open(directory string) (*Workspace, error) {
-	w, err := lock(directory)
+	root, err := filepath.Abs(directory)
 	if err != nil {
 		return nil, err
 	}
-	if err := w.load("state.json", &w.state); err != nil {
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, errors.New("workspace path must be a directory")
+	}
+	for {
+		info, err := os.Lstat(filepath.Join(root, ".lode"))
+		if err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return nil, errors.New(".lode must be a directory")
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			return nil, errors.New("not in a Lode workspace")
+		}
+		root = parent
+	}
+	w, err := openDirectory(root)
+	if err != nil {
+		return nil, err
+	}
+	if err := w.readJSON("state.json", &w.state); err != nil {
 		w.Close()
 		return nil, err
 	}
@@ -50,344 +104,224 @@ func Open(directory string) (*Workspace, error) {
 	return w, nil
 }
 
-func lock(directory string) (*Workspace, error) {
-	root, err := os.OpenRoot(directory)
+func openDirectory(directory string) (_ *Workspace, err error) {
+	w := &Workspace{directory: directory}
+	defer func() {
+		if err != nil {
+			w.Close()
+		}
+	}()
+	w.root, err = os.OpenRoot(directory)
 	if err != nil {
 		return nil, err
 	}
-	w := &Workspace{root: root}
-	info, err := root.Lstat(".lode")
-	if err == nil && !info.IsDir() {
-		err = errors.New(".lode must be a directory")
-	}
+	w.meta, err = w.root.OpenRoot(".lode")
 	if err != nil {
-		root.Close()
 		return nil, err
 	}
-	w.lock, err = openWorkspaceLock(root)
+	if info, e := w.meta.Lstat("lock"); e == nil && !info.Mode().IsRegular() {
+		return nil, errors.New("invalid workspace lock")
+	} else if e != nil && !errors.Is(e, os.ErrNotExist) {
+		return nil, e
+	}
+	w.lock = flock.New(filepath.Join(directory, ".lode", "lock"))
+	locked, err := w.lock.TryLock()
 	if err != nil {
-		w.Close()
-		return nil, fmt.Errorf("lock workspace: %w", err)
+		return nil, err
+	}
+	if !locked {
+		return nil, errors.New("workspace is in use")
 	}
 	return w, nil
 }
 
 func (w *Workspace) Close() error {
-	var err error
+	var result error
+	if w.meta != nil {
+		result = errors.Join(result, w.meta.Close())
+		w.meta = nil
+	}
+	if w.root != nil {
+		result = errors.Join(result, w.root.Close())
+		w.root = nil
+	}
 	if w.lock != nil {
-		err = w.lock.Close()
+		result = errors.Join(result, w.lock.Close())
+		w.lock = nil
 	}
-	return errors.Join(err, w.root.Close())
+	return result
 }
 
-func (w *Workspace) State() State { return w.state }
-
-func (s State) validate() error {
-	if s.Version != 1 || !project.ValidID(s.Project) || s.Branch == "" || (s.Base != "" && !project.ValidID(s.Base)) {
-		return errors.New("invalid workspace state")
-	}
-	if err := s.Selection.Validate(); err != nil {
-		return err
-	}
-	seen := map[string]bool{}
-	for _, e := range s.Baseline {
-		if err := e.Validate(); err != nil {
-			return err
-		}
-		if e.Kind == model.Absent || !s.Selection.Includes(e.Path) || seen[e.Path] {
-			return errors.New("invalid selected baseline")
-		}
-		seen[e.Path] = true
-	}
-	if err := remote.ValidateURL(s.URL); err != nil {
-		return err
-	}
-	return nil
-}
-
-func connect(ctx context.Context, url, token, branch string, selection model.Selection) (*remote.Client, State, error) {
-	canonicalURL, err := remote.CanonicalURL(url)
-	if err != nil {
-		return nil, State{}, err
-	}
-	if selection == nil {
-		selection = model.Selection{{Include: true}}
-	}
-	if err := selection.Validate(); err != nil {
-		return nil, State{}, err
-	}
-	client, err := remote.New(canonicalURL, token, "")
-	if err != nil {
-		return nil, State{}, err
-	}
-	info, err := client.Info(ctx)
-	if err != nil {
-		return nil, State{}, err
-	}
-	client, err = remote.New(canonicalURL, token, info.ID)
-	if err != nil {
-		return nil, State{}, err
-	}
-	head, err := client.Head(ctx, branch)
-	if err != nil {
-		return nil, State{}, err
-	}
-	return client, State{Version: 1, URL: canonicalURL, Project: info.ID, Branch: branch, Base: head, Selection: selection}, nil
-}
-
-func initialize(directory string) (*Workspace, error) {
-	root, err := os.OpenRoot(directory)
+func (w *Workspace) Client(token string) (*remote.Client, error) {
+	c, err := remote.New(w.state.Server, token)
 	if err != nil {
 		return nil, err
 	}
-	err = root.Mkdir(".lode", 0700)
-	if err == nil {
-		err = syncDirectory(root, ".")
-	}
-	err = errors.Join(err, root.Close())
-	if err != nil {
-		return nil, err
-	}
-	return lock(directory)
+	c.InstanceID = w.state.InstanceID
+	c.ProjectID = w.state.ProjectID
+	return c, nil
 }
 
-// Attach starts tracking an existing folder in an empty project. Existing
-// projects use Clone so absent paths are never mistaken for local deletions.
-func Attach(ctx context.Context, url, token, directory string, selection model.Selection) (*Workspace, error) {
-	_, state, err := connect(ctx, url, token, "main", selection)
+type ConnectOptions struct {
+	Branch    string
+	Selection model.Selection
+}
+
+func connect(ctx context.Context, projectURL string, c *remote.Client, options ConnectOptions) (State, error) {
+	u, err := url.Parse(projectURL)
+	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return State{}, errors.New("use a project URL ending in /owner/project")
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) != 2 || !model.ValidPath(strings.Join(parts, "/")) {
+		return State{}, errors.New("use a project URL ending in /owner/project")
+	}
+	u.Path = ""
+	u.RawPath = ""
+	if u.String() != c.Origin() {
+		return State{}, errors.New("project URL does not match the authenticated server")
+	}
+	identity, err := c.Me(ctx)
+	if err != nil {
+		return State{}, err
+	}
+	c.InstanceID = identity.Instance
+	p, err := c.Project(ctx, parts[0], parts[1])
+	if err != nil {
+		return State{}, err
+	}
+	c.ProjectID = p.ID
+	if options.Selection == nil {
+		options.Selection = model.Selection{{Include: true}}
+	}
+	if options.Branch == "" {
+		options.Branch = "main"
+	}
+	state := State{Server: u.String(), InstanceID: identity.Instance, Owner: p.Owner, Project: p.Name, ProjectID: p.ID, Branch: options.Branch, Selection: options.Selection}
+	if err := state.validate(); err != nil {
+		return State{}, err
+	}
+	return state, nil
+}
+
+func initialize(directory string, state State, plan *transition) (*Workspace, error) {
+	root, err := filepath.Abs(directory)
 	if err != nil {
 		return nil, err
 	}
-	if state.Base != "" {
-		return nil, errors.New("project already has versions; use clone")
+	if err := state.validate(); err != nil {
+		return nil, err
 	}
-	w, err := initialize(directory)
+	if _, err := os.Lstat(filepath.Join(root, ".lode")); !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.Join(errors.New("workspace metadata already exists"), err)
+	}
+	// Publish populated metadata in one rename. Another initialized workspace is
+	// nonempty and cannot be replaced by this directory rename.
+	staging, err := os.MkdirTemp(filepath.Dir(root), ".lode-init-")
 	if err != nil {
 		return nil, err
 	}
-	w.state = state
-	w.token = token
-	if err := w.store("state.json", state); err != nil {
+	defer os.RemoveAll(staging)
+	meta, err := os.OpenRoot(staging)
+	if err != nil {
+		return nil, err
+	}
+	temporary := &Workspace{meta: meta}
+	err = temporary.writeJSON("state.json", state)
+	if err == nil && plan != nil {
+		err = temporary.writeTransition(*plan)
+	}
+	err = errors.Join(err, meta.Close())
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Rename(staging, filepath.Join(root, ".lode")); err != nil {
+		return nil, err
+	}
+	parent, err := os.Open(filepath.Dir(root))
+	if err != nil {
+		return nil, err
+	}
+	if err := errors.Join(parent.Sync(), parent.Close()); err != nil {
+		return nil, err
+	}
+	w, err := Open(root)
+	if err != nil {
+		return nil, err
+	}
+	if err := syncPath(w.root, "."); err != nil {
 		w.Close()
 		return nil, err
 	}
 	return w, nil
 }
 
-func (w *Workspace) client() (*remote.Client, error) {
-	if w.token == "" {
-		return nil, errors.New("no workspace credential; run lode login with this instance or project URL")
+// Attach connects an existing folder to an empty shared branch. Clone obtains an
+// existing project; attach never infers deletion of files that were not downloaded.
+func Attach(ctx context.Context, projectURL string, c *remote.Client, directory string, options ConnectOptions) (*Workspace, error) {
+	state, err := connect(ctx, projectURL, c, options)
+	if err != nil {
+		return nil, err
 	}
-	return remote.New(w.state.URL, w.token, w.state.Project)
+	head, err := c.Head(ctx, state.Owner, state.Project, state.Branch)
+	if err != nil {
+		return nil, err
+	}
+	if head != "" {
+		return nil, errors.New("project already has versions; clone it into a new folder")
+	}
+	return initialize(directory, state, nil)
 }
 
-// UseToken sets the credential used by remote workspace operations.
-func (w *Workspace) UseToken(token string) { w.token = token }
-
-// RemoteClient returns the authenticated client for this workspace.
-func (w *Workspace) RemoteClient() (*remote.Client, error) { return w.client() }
-
-func (w *Workspace) pending() error {
-	for _, name := range []string{"save.json", "transition.json"} {
-		if _, err := w.root.Lstat(".lode/" + name); err == nil {
-			return ErrPending
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+func (w *Workspace) readJSON(name string, value any) error {
+	b, err := w.meta.ReadFile(name)
+	if err != nil {
+		return err
 	}
-	return nil
+	return json.Unmarshal(b, value)
 }
-
-func (w *Workspace) Save(ctx context.Context, author, message string) (project.Commit, error) {
-	if strings.TrimSpace(message) == "" {
-		return project.Commit{}, errors.New("save requires a nonempty message")
-	}
-	if err := w.pending(); err != nil {
-		return project.Commit{}, err
-	}
-	changes, err := w.Status(ctx)
+func (w *Workspace) writeJSON(name string, value any) error {
+	b, err := json.Marshal(value)
 	if err != nil {
-		return project.Commit{}, err
+		return err
 	}
-	if len(changes) == 0 {
-		return project.Commit{}, errors.New("no selected changes")
+	temporary := name + ".next"
+	if err := w.meta.Remove(temporary); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
-	if err := ctx.Err(); err != nil {
-		return project.Commit{}, err
+	f, err := w.meta.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
 	}
-	r := project.Request{ID: project.NewID(), Branch: w.state.Branch, Base: w.state.Base, Author: author, Message: message, Changes: changes}
-	if err := w.store("save.json", r); err != nil {
-		return project.Commit{}, err
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
 	}
-	return w.finishSave(ctx, r)
+	if err := errors.Join(f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	if err := w.meta.Rename(temporary, name); err != nil {
+		return err
+	}
+	return syncPath(w.meta, path.Dir(name))
 }
-
-func (w *Workspace) finishSave(ctx context.Context, r project.Request) (project.Commit, error) {
-	client, err := w.client()
+func syncPath(root *os.Root, name string) error {
+	f, err := root.Open(name)
 	if err != nil {
-		return project.Commit{}, err
+		return err
 	}
-	commit, err := client.Save(ctx, r, func(name string) (io.ReadCloser, error) { return w.openFile(name) })
-	if err != nil {
-		var conflicts *model.Conflicts
-		var bases *project.MergeBaseConflict
-		resolvedMerge := r.SecondParent != "" && (errors.Is(err, project.ErrAlreadyMerged) || errors.Is(err, project.ErrInvalid) || errors.Is(err, project.ErrNotFound) || errors.Is(err, project.ErrExpired) || errors.As(err, &conflicts) || errors.As(err, &bases))
-		if errors.Is(err, project.ErrStale) || resolvedMerge {
-			// The server's stable rejection permits forgetting this intent once
-			// its unaccepted native candidates have also been released.
-			if cancelErr := client.Cancel(ctx, r.ID); cancelErr != nil {
-				return project.Commit{}, errors.Join(err, cancelErr)
-			}
-			err = errors.Join(err, w.remove("save.json"))
-		}
-		return project.Commit{}, err
-	}
-	if r.SecondParent != "" {
-		return commit, w.remove("save.json")
-	}
-	if w.state.Base != commit.ID {
-		if w.state.Base != r.Base {
-			return project.Commit{}, errors.New("save does not match the workspace baseline")
-		}
-		entries := map[string]model.Entry{}
-		for _, e := range w.state.Baseline {
-			entries[e.Path] = e
-		}
-		for _, e := range r.Changes {
-			if e.Kind == model.Absent {
-				delete(entries, e.Path)
-			} else {
-				entries[e.Path] = e
-			}
-		}
-		next := w.state
-		next.Base = commit.ID
-		next.Baseline = make([]model.Entry, 0, len(entries))
-		for _, e := range entries {
-			next.Baseline = append(next.Baseline, e)
-		}
-		model.Sort(next.Baseline)
-		if err := w.store("state.json", next); err != nil {
-			return project.Commit{}, err
-		}
-		w.state = next
-	}
-	return commit, w.remove("save.json")
+	return errors.Join(f.Sync(), f.Close())
 }
-
-// Merge publishes saved versions on the shared branch. Local files and their
-// baseline remain unchanged; Update materializes the accepted result separately.
-func (w *Workspace) Merge(ctx context.Context, branch, author, message, base string, choices []model.Choice) (project.Commit, error) {
-	if err := w.pending(); err != nil {
-		return project.Commit{}, err
-	}
-	if !model.ValidName(branch) || (base != "" && !project.ValidID(base)) {
-		return project.Commit{}, project.ErrInvalid
-	}
-	if err := model.ValidateChoices(choices); err != nil {
-		return project.Commit{}, err
-	}
-	client, err := w.client()
-	if err != nil {
-		return project.Commit{}, err
-	}
-	source, err := client.Head(ctx, branch)
-	if err != nil {
-		return project.Commit{}, err
-	}
-	if source == "" {
-		return project.Commit{}, errors.New("source branch has no saved version")
-	}
-	if strings.TrimSpace(message) == "" {
-		message = "Merge " + branch
-	}
-	r := project.Request{ID: project.NewID(), Branch: w.state.Branch, Base: w.state.Base, Author: author, Message: message, SecondParent: source, MergeBase: base, Choices: choices}
-	if err := w.store("save.json", r); err != nil {
-		return project.Commit{}, err
-	}
-	return w.finishSave(ctx, r)
-}
-
-func (w *Workspace) Resume(ctx context.Context) error {
-	var request project.Request
-	if err := w.load("save.json", &request); err == nil {
-		_, err = w.finishSave(ctx, request)
-		return err
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	plan, err := w.loadTransition()
-	if err != nil {
-		return err
-	}
-	return w.runTransition(ctx, &plan)
-}
-
-// Cancel resolves publication or rolls back an unfinished local transition.
-func (w *Workspace) Cancel(ctx context.Context) error {
-	var request project.Request
-	if err := w.load("save.json", &request); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return w.cancelTransition(ctx)
-	}
-	client, err := w.client()
-	if err != nil {
-		return err
-	}
-	if err := client.Cancel(ctx, request.ID); err != nil {
-		return err
-	}
-	return w.remove("save.json")
-}
-
-func (w *Workspace) load(name string, v any) error {
-	f, err := openNoFollow(w.root, ".lode/"+name, os.O_RDONLY, 0)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	decoder := json.NewDecoder(f)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(v); err != nil {
-		return err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return errors.New("unexpected data after workspace state")
-	}
-	return nil
-}
-
-// store replaces one durable fact atomically. The fixed temporary name avoids
-// accumulating files after repeated interruptions; the workspace lock owns it.
-func (w *Workspace) store(name string, v any) error {
-	f, err := openNoFollow(w.root, ".lode/write.tmp", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	err = json.NewEncoder(f).Encode(v)
-	err = errors.Join(err, f.Sync(), f.Close())
-	if err != nil {
-		return err
-	}
-	if err := w.root.Rename(".lode/write.tmp", ".lode/"+name); err != nil {
-		return err
-	}
-	return syncDirectory(w.root, ".lode")
-}
-
 func (w *Workspace) remove(name string) error {
-	if err := w.root.Remove(".lode/" + name); err != nil {
+	if err := w.meta.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return syncDirectory(w.root, ".lode")
+	return syncPath(w.meta, path.Dir(name))
 }
-
-func (w *Workspace) openFile(name string) (*os.File, error) {
-	if !model.ValidPath(name) {
-		return nil, errors.New("invalid workspace path")
+func (w *Workspace) pending(name string) (bool, error) {
+	_, err := w.meta.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
 	}
-	return openRegular(w.root, name)
+	return err == nil, err
 }

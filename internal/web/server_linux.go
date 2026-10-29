@@ -1,307 +1,208 @@
-//go:build linux
-
-// Package web serves the embedded interface and authenticated project API.
+// Package web serves the browser and authenticated client API.
 package web
 
 import (
-	"bytes"
-	"embed"
+	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"html/template"
-	"io/fs"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
-	"path"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/alexedwards/scs/v2"
+	"github.com/redthing1/lode/internal/content"
 	"github.com/redthing1/lode/internal/instance"
 	"github.com/redthing1/lode/internal/project"
 	"github.com/redthing1/lode/internal/remote"
 )
 
-//go:embed templates/*.html assets/*
-var files embed.FS
-
 type Server struct {
-	i         *instance.Instance
-	security  *instance.Security
-	sessions  *scs.SessionManager
-	templates *template.Template
-	attempts  attempts
+	instance *instance.Store
+	mux      *http.ServeMux
+	host     string
+	browser  http.Handler
+	sessions *scs.SessionManager
 }
 
-type page struct {
-	Title   string
-	Section string
-	User    instance.User
-	Error   string
-	Data    any
+func New(store *instance.Store) *Server {
+	u, _ := url.Parse(store.Config.URL)
+	s := &Server{instance: store, mux: http.NewServeMux(), host: u.Host}
+	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	s.mux.HandleFunc("GET /api/me", s.api(s.me))
+	s.mux.HandleFunc("GET /api/projects", s.api(s.projects))
+	s.mux.HandleFunc("POST /api/projects", s.api(s.createProject))
+	s.mux.HandleFunc("GET /api/projects/{owner}/{project}", s.api(s.projectInfo))
+	s.mux.HandleFunc("GET /api/projects/{owner}/{project}/head", s.api(s.head))
+	s.mux.HandleFunc("GET /api/projects/{owner}/{project}/history", s.api(s.history))
+	s.mux.HandleFunc("GET /api/projects/{owner}/{project}/branches", s.api(s.branches))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/branches", s.api(s.createBranch))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/branches/delete", s.api(s.deleteBranch))
+	s.mux.HandleFunc("GET /api/projects/{owner}/{project}/reference", s.api(s.reference))
+	s.mux.HandleFunc("GET /api/projects/{owner}/{project}/tags", s.api(s.tags))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/tags", s.api(s.createTag))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/tags/delete", s.api(s.deleteTag))
+	s.mux.HandleFunc("GET /api/projects/{owner}/{project}/retention", s.api(s.retention))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/retention", s.api(s.retention))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/cleanup", s.api(s.cleanup))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/collect", s.api(s.collect))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/versions/{version}/inventory", s.api(s.inventory))
+	s.mux.HandleFunc("GET /api/projects/{owner}/{project}/versions/{version}/file", s.api(s.file))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/versions/{version}/file", s.api(s.file))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/versions/{version}/files", s.api(s.files))
+	s.mux.HandleFunc("GET /api/projects/{owner}/{project}/versions/{version}/signature", s.api(s.signature))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/save", s.api(s.save))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/resolve", s.api(s.resolve))
+	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/cancel", s.api(s.cancel))
+	s.initBrowser(u.Scheme == "https")
+	return s
 }
 
-func New(i *instance.Instance, version string) (http.Handler, error) {
-	u, _ := url.Parse(i.Config.URL)
-	session := sessions(i.DB(), u.Scheme == "https")
-	security, err := instance.NewSecurity(i.Store, i.Config.URL)
-	if err != nil {
-		return nil, err
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !strings.EqualFold(r.Host, s.host) {
+		http.Error(w, "incorrect host", http.StatusMisdirectedRequest)
+		return
 	}
-	t, err := template.New("lode").Funcs(template.FuncMap{
-		"short": func(s string) string {
-			if len(s) > 10 {
-				return s[:10]
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
+	if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/healthz" {
+		s.mux.ServeHTTP(w, r)
+	} else {
+		s.browser.ServeHTTP(w, r)
+	}
+}
+
+type apiHandler func(http.ResponseWriter, *http.Request, instance.Principal) error
+
+func (s *Server) api(handler apiHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		response := &response{ResponseWriter: w}
+		r.Body = &requestBody{ReadCloser: r.Body, controller: http.NewResponseController(w)}
+		err := func() error {
+			token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if !ok || len(token) > 512 {
+				return instance.ErrCredentials
 			}
-			return s
-		},
-		"version": func() string { return version },
-		"date":    func(t time.Time) string { return t.UTC().Format("02 Jan 2006 · 15:04 UTC") },
-		"bytes":   formatBytes,
-		"base":    path.Base,
-	}).ParseFS(files, "templates/*.html")
-	if err != nil {
-		return nil, err
-	}
-	s := &Server{i: i, security: security, sessions: session, templates: t}
-	mux := http.NewServeMux()
-	assets, _ := fs.Sub(files, "assets")
-	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServerFS(assets)))
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	mux.HandleFunc("GET /api/me", s.me)
-	// Separate wildcard project routes from reserved system paths, and keep
-	// streamed API requests outside browser sessions and the form body limit.
-	api := http.NewServeMux()
-	api.HandleFunc("/{owner}/{slug}/v1/{rest...}", s.api)
-	web := http.NewServeMux()
-	web.HandleFunc("GET /{$}", s.projects)
-	web.HandleFunc("GET /setup", s.setup)
-	web.HandleFunc("POST /setup", s.setup)
-	web.HandleFunc("GET /login", s.login)
-	web.HandleFunc("POST /login", s.login)
-	web.HandleFunc("GET /register", s.register)
-	web.HandleFunc("POST /register", s.register)
-	web.HandleFunc("POST /passkey/{step}", s.passkey)
-	web.HandleFunc("GET /verify", s.verify)
-	web.HandleFunc("POST /verify/recovery", s.recover)
-	web.HandleFunc("POST /logout", s.logout)
-	web.HandleFunc("POST /security/{purpose}/{step}", s.ceremony)
-	web.HandleFunc("GET /settings/appearance", func(w http.ResponseWriter, r *http.Request) {
-		if u, ok := s.require(w, r); ok {
-			s.render(w, r, "appearance", page{Title: "Appearance", Section: "appearance", User: u}, http.StatusOK)
-		}
-	})
-	web.HandleFunc("GET /settings/security", s.accountSecurity)
-	web.HandleFunc("POST /settings/password", s.password)
-	web.HandleFunc("POST /settings/keys/remove", s.removeKey)
-	web.HandleFunc("POST /settings/recovery", s.recoveryCodes)
-	web.HandleFunc("GET /settings/tokens", s.tokens)
-	web.HandleFunc("POST /settings/tokens", s.tokens)
-	web.HandleFunc("POST /settings/tokens/revoke", s.revokeToken)
-	web.HandleFunc("GET /projects/new", s.createProject)
-	web.HandleFunc("POST /projects/new", s.createProject)
-	projects := http.NewServeMux()
-	projects.HandleFunc("GET /{owner}/{slug}", s.projectFiles)
-	projects.HandleFunc("GET /{owner}/{slug}/history", s.projectHistory)
-	projects.HandleFunc("GET /{owner}/{slug}/branches", s.projectBranches)
-	projects.HandleFunc("POST /{owner}/{slug}/branches", s.projectBranches)
-	projects.HandleFunc("GET /{owner}/{slug}/storage", s.projectStorage)
-	projects.HandleFunc("POST /{owner}/{slug}/storage", s.projectStorage)
-	projects.HandleFunc("GET /{owner}/{slug}/members", s.projectMembers)
-	projects.HandleFunc("POST /{owner}/{slug}/members", s.projectMembers)
-	projects.HandleFunc("GET /{owner}/{slug}/delete", s.deleteProject)
-	projects.HandleFunc("POST /{owner}/{slug}/delete", s.deleteProject)
-	projects.HandleFunc("GET /{owner}/{slug}/download", s.download)
-	projects.HandleFunc("GET /{owner}/{slug}/file", s.projectFile)
-	projects.HandleFunc("GET /{owner}/{slug}/raw", s.rawFile)
-	web.Handle("/", projects)
-	web.HandleFunc("GET /-/admin/users", s.users)
-	web.HandleFunc("POST /-/admin/users", s.users)
-	web.HandleFunc("GET /-/admin/users/{username}", s.adminUser)
-	web.HandleFunc("POST /-/admin/users/{username}", s.adminUser)
-	web.HandleFunc("GET /-/admin/projects", s.adminProjects)
-	browser := session.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
-		web.ServeHTTP(w, r)
-	}))
-	api.Handle("/", browser)
-	mux.Handle("/", api)
-	protected := http.NewCrossOriginProtection().Handler(mux)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "same-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'; base-uri 'none'")
-		w.Header().Set("Cache-Control", "no-store")
-		if !strings.EqualFold(r.Host, u.Host) {
-			http.Error(w, "use the configured instance address", http.StatusMisdirectedRequest)
+			actor, err := s.instance.Token(r.Context(), token)
+			if err != nil {
+				return err
+			}
+			if expected := r.Header.Get("Lode-Instance"); expected != "" && expected != s.instance.ID {
+				return &remote.Error{Code: "identity", Message: "server identity changed", Status: http.StatusPreconditionFailed}
+			}
+			return handler(response, r, actor)
+		}()
+		if err == nil {
 			return
 		}
-		protected.ServeHTTP(w, r)
-	}), nil
-}
-
-func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, p page, status int) {
-	if p.User.ID == "" {
-		p.User, _ = s.current(r, false)
+		if response.written {
+			panic(http.ErrAbortHandler)
+		}
+		var apiError *remote.Error
+		var conflicts *project.ConflictsError
+		if !errors.As(err, &apiError) {
+			apiError = &remote.Error{Code: "internal", Message: "request failed", Status: http.StatusInternalServerError}
+			switch {
+			case errors.As(err, &conflicts):
+				apiError = &remote.Error{Code: "conflicts", Message: err.Error(), Status: 409, Conflicts: conflicts.Conflicts}
+			case errors.Is(err, project.ErrAlreadyMerged):
+				apiError = &remote.Error{Code: "already_merged", Message: err.Error(), Status: 409}
+			case errors.Is(err, project.ErrMergeBase), errors.Is(err, project.ErrHistoryUnavailable):
+				apiError = &remote.Error{Code: "ancestry", Message: err.Error(), Status: 409}
+			case errors.Is(err, instance.ErrCredentials):
+				apiError = &remote.Error{Code: "credentials", Message: "invalid credentials", Status: 401}
+				w.Header().Set("WWW-Authenticate", "Bearer")
+			case errors.Is(err, instance.ErrAccess):
+				apiError = &remote.Error{Code: "access", Message: err.Error(), Status: 403}
+			case errors.Is(err, sql.ErrNoRows), errors.Is(err, os.ErrNotExist), errors.Is(err, instance.ErrNotFound):
+				apiError = &remote.Error{Code: "not_found", Message: "not found", Status: 404}
+			case errors.Is(err, project.ErrStale):
+				apiError = &remote.Error{Code: "stale", Message: err.Error(), Status: 409}
+			case errors.Is(err, project.ErrBranchChanged), errors.Is(err, project.ErrBranchExists), errors.Is(err, project.ErrAmbiguous), errors.Is(err, project.ErrTagExists), errors.Is(err, project.ErrTagChanged):
+				apiError = &remote.Error{Code: "reference", Message: err.Error(), Status: 409}
+			case errors.Is(err, project.ErrCleanupChanged):
+				apiError = &remote.Error{Code: "cleanup", Message: err.Error(), Status: 409}
+			case errors.Is(err, project.ErrUnaccepted):
+				apiError = &remote.Error{Code: "unaccepted", Message: err.Error(), Status: 404}
+			case errors.Is(err, project.ErrCancelled):
+				apiError = &remote.Error{Code: "cancelled", Message: err.Error(), Status: 409}
+			case errors.Is(err, project.ErrIntent):
+				apiError = &remote.Error{Code: "intent", Message: err.Error(), Status: 409}
+			case errors.Is(err, project.ErrNoChanges):
+				apiError = &remote.Error{Code: "unchanged", Message: err.Error(), Status: 409}
+			case errors.Is(err, project.ErrExpired):
+				apiError = &remote.Error{Code: "expired", Message: err.Error(), Status: 410}
+			case errors.Is(err, project.ErrOperationExpired):
+				apiError = &remote.Error{Code: "operation_expired", Message: err.Error(), Status: 410}
+			case errors.Is(err, project.ErrRequest):
+				apiError = &remote.Error{Code: "request", Message: err.Error(), Status: 400}
+			case errors.Is(err, content.ErrIdentity):
+				apiError = &remote.Error{Code: "contents", Message: err.Error(), Status: 400}
+			case errors.Is(err, instance.ErrName):
+				apiError = &remote.Error{Code: "name", Message: err.Error(), Status: 400}
+			case errors.Is(err, instance.ErrExists):
+				apiError = &remote.Error{Code: "exists", Message: err.Error(), Status: 409}
+			default:
+				log.Printf("API request failed: %v", err)
+			}
+		}
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(time.Minute))
+		w.Header().Del("Content-Length")
+		w.Header().Del("Content-Disposition")
+		w.Header().Del("ETag")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(apiError.Status)
+		_ = json.NewEncoder(w).Encode(apiError)
 	}
-	var b bytes.Buffer
-	if err := s.templates.ExecuteTemplate(&b, name, p); err != nil {
-		log.Printf("render %s: %v", name, err)
-		http.Error(w, "Unable to render this page.", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	_, _ = b.WriteTo(w)
 }
 
-func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, message string) {
-	s.render(w, r, "error", page{Title: http.StatusText(status), Error: message}, status)
+func badRequest(err error) error {
+	return &remote.Error{Code: "request", Message: err.Error(), Status: http.StatusBadRequest}
 }
-
-func (s *Server) internal(w http.ResponseWriter, r *http.Request, err error) {
-	log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
-	s.fail(w, r, 500, "Something went wrong. Try again; the server log has the details.")
-}
-
-func redirect(w http.ResponseWriter, r *http.Request, path string) {
-	http.Redirect(w, r, path, http.StatusSeeOther)
-}
-func jsonReply(w http.ResponseWriter, v any) {
+func jsonReply(w http.ResponseWriter, value any) error {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
+	return json.NewEncoder(w).Encode(value)
 }
-
-func principal(u instance.User) instance.Principal {
-	return instance.Principal{UserID: u.ID, Username: u.Username, Admin: u.Admin, AuthVersion: u.AuthVersion, ForcePasswordChange: u.ForcePasswordChange}
-}
-
-func (s *Server) current(r *http.Request, allowPending bool) (instance.User, bool) {
-	id := s.sessions.GetString(r.Context(), "user")
-	if id == "" {
-		return instance.User{}, false
-	}
-	u, err := s.i.GetUser(r.Context(), id)
-	if err != nil || u.Disabled || u.AuthVersion != s.sessions.GetInt64(r.Context(), "version") {
-		return instance.User{}, false
-	}
-	if !allowPending && s.sessions.GetBool(r.Context(), "pending") {
-		return instance.User{}, false
-	}
-	return u, true
-}
-
-func (s *Server) require(w http.ResponseWriter, r *http.Request) (instance.User, bool) {
-	u, ok := s.current(r, false)
-	if !ok {
-		redirect(w, r, "/login")
-		return u, false
-	}
-	if u.ForcePasswordChange && r.URL.Path != "/settings/security" && r.URL.Path != "/settings/password" {
-		redirect(w, r, "/settings/security")
-		return u, false
-	}
-	return u, true
-}
-
-func (s *Server) fresh(w http.ResponseWriter, r *http.Request) bool {
-	if time.Now().Unix()-s.sessions.GetInt64(r.Context(), "authenticated") > 600 {
-		s.fail(w, r, 403, "Sign in again to continue.")
-		return false
-	}
-	return true
-}
-
-func (s *Server) admin(w http.ResponseWriter, r *http.Request) (instance.User, bool) {
-	u, ok := s.require(w, r)
-	if !ok {
-		return u, false
-	}
-	if !u.Admin {
-		s.fail(w, r, 403, "Instance administrator access is required.")
-		return u, false
-	}
-	return u, true
-}
-
-func (s *Server) api(w http.ResponseWriter, r *http.Request) {
-	if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
-		http.Error(w, "bearer access token required", 401)
-		return
-	}
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	actor, err := s.i.AuthenticateToken(r.Context(), token)
+func decode(r io.Reader, limit int64, value any) error {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
-		http.Error(w, "invalid or expired access token", 401)
-		return
+		return badRequest(err)
 	}
-	info, err := s.i.Project(r.Context(), r.PathValue("owner"), r.PathValue("slug"))
-	if err != nil {
-		if errors.Is(err, instance.ErrNotFound) {
-			http.NotFound(w, r)
-		} else {
-			log.Printf("resolve project: %v", err)
-			http.Error(w, "project unavailable", 500)
-		}
-		return
+	if int64(len(b)) > limit {
+		return badRequest(errors.New("metadata exceeds limit"))
 	}
-	if err := s.i.Authorize(r.Context(), actor, info.ID, instance.RoleReader); err != nil {
-		http.Error(w, "access denied", 403)
-		return
+	if err := json.Unmarshal(b, value); err != nil {
+		return badRequest(err)
 	}
-	p, release, err := s.i.Acquire(r.Context(), info.ID)
-	if err != nil {
-		http.Error(w, "project unavailable; retry shortly", 503)
-		return
-	}
-	defer release()
-	h := remote.AuthenticatedHandler(p, func(req *http.Request, access remote.Access) (project.Actor, error) {
-		role := instance.RoleReader
-		if access == remote.Write {
-			role = instance.RoleWriter
-		}
-		if access == remote.Manage {
-			role = instance.RoleMaintainer
-		}
-		if err := s.i.Authorize(req.Context(), actor, info.ID, role); err != nil {
-			return project.Actor{}, err
-		}
-		return project.Actor{ID: actor.UserID, Name: actor.Username}, nil
-	})
-	request := r.Clone(r.Context())
-	u := *r.URL
-	u.Path = "/v1/" + r.PathValue("rest")
-	u.RawPath = ""
-	request.URL = &u
-	h.ServeHTTP(w, request)
+	return nil
 }
 
-func (s *Server) me(w http.ResponseWriter, r *http.Request) {
-	if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
-		http.Error(w, "bearer access token required", 401)
-		return
-	}
-	p, err := s.i.AuthenticateToken(r.Context(), strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-	if err != nil {
-		http.Error(w, "invalid or expired access token", 401)
-		return
-	}
-	jsonReply(w, struct{ ID, Username, Instance string }{p.UserID, p.Username, s.i.Config.ID})
+type response struct {
+	http.ResponseWriter
+	written bool
 }
 
-func formatBytes(n int64) string {
-	if n < 1024 {
-		return fmt.Sprintf("%d B", n)
+func (w *response) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+func (w *response) WriteHeader(status int)      { w.written = true; w.ResponseWriter.WriteHeader(status) }
+func (w *response) Write(b []byte) (int, error) {
+	if err := http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(time.Minute)); err != nil {
+		return 0, err
 	}
-	units := []string{"KiB", "MiB", "GiB", "TiB"}
-	v := float64(n) / 1024
-	for j, u := range units {
-		if v < 1024 || j == len(units)-1 {
-			return fmt.Sprintf("%.1f %s", v, u)
-		}
-		v /= 1024
+	w.written = true
+	return w.ResponseWriter.Write(b)
+}
+
+type requestBody struct {
+	io.ReadCloser
+	controller *http.ResponseController
+}
+
+func (r *requestBody) Read(b []byte) (int, error) {
+	if err := r.controller.SetReadDeadline(time.Now().Add(time.Minute)); err != nil {
+		return 0, err
 	}
-	return ""
+	return r.ReadCloser.Read(b)
 }

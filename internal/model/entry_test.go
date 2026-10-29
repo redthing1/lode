@@ -1,82 +1,70 @@
 package model
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"strings"
 	"testing"
 )
 
-func TestSelectionUsesNearestAncestorRule(t *testing.T) {
-	selection := Selection{
-		{Path: "", Include: true},
-		{Path: "assets", Include: false},
-		{Path: "assets/shared", Include: true},
-		{Path: "assets/shared/private", Include: false},
-	}
-	for path, want := range map[string]bool{
-		"README":                      true,
-		"assets/a.bin":                false,
-		"assets/shared/a.bin":         true,
-		"assets/shared/private/a.bin": false,
-		"assetset/a.bin":              true,
-	} {
-		if got := selection.Includes(path); got != want {
-			t.Errorf("Includes(%q) = %v, want %v", path, got, want)
+func TestPathsAndChanges(t *testing.T) {
+	for _, p := range []string{"", ".", "../file", "dir/../file", "/file", "dir\\file", ".lode/state", "a\x00b"} {
+		if ValidPath(p) {
+			t.Errorf("accepted %q", p)
 		}
 	}
-}
-
-func TestValidateTreeRejectsStructuralConflicts(t *testing.T) {
-	hash := sha256.Sum256([]byte("x"))
-	file := Entry{Path: "a", Kind: File, Size: 1, SHA256: hex.EncodeToString(hash[:])}
-	tests := []struct {
-		name    string
-		entries []Entry
-	}{
-		{"file used as parent", []Entry{file, {Path: "a/b", Kind: Directory}}},
-		{"missing parent", []Entry{{Path: "a/b", Kind: Directory}}},
-		{"absent cannot be in complete tree", []Entry{{Path: "a", Kind: Absent}}},
-		{"duplicate path", []Entry{{Path: "a", Kind: Directory}, {Path: "a", Kind: Directory}}},
+	file := func(path string) Entry { return Entry{Path: path, Kind: File, SHA256: strings.Repeat("0", 64)} }
+	for _, changes := range [][]Entry{
+		{file("a"), file("a")},
+		{file("a"), file("a/b")},
+		{{Path: "a", Kind: Absent}, file("a/b")},
+	} {
+		if err := ValidateChanges(changes); err == nil {
+			t.Fatalf("accepted ambiguous changes: %v", changes)
+		}
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateTree(tt.entries); err == nil {
-				t.Fatal("ValidateTree accepted an invalid complete tree")
-			}
-		})
-	}
-	if err := ValidateTree([]Entry{{Path: "a", Kind: Directory}, {Path: "a/b", Kind: File, Size: 1, SHA256: hex.EncodeToString(hash[:])}}); err != nil {
-		t.Fatalf("ValidateTree rejected a structurally valid tree: %v", err)
+	if err := ValidateChanges([]Entry{file("a"), {Path: "a/old", Kind: Absent}}); err != nil {
+		t.Fatalf("explicit directory-to-file replacement: %v", err)
 	}
 }
 
-func TestApplySupportsExplicitFileDirectoryReplacement(t *testing.T) {
-	old := []byte("old")
-	oldHash := sha256.Sum256(old)
-	oldFile := Entry{Path: "node", Kind: File, Size: int64(len(old)), SHA256: hex.EncodeToString(oldHash[:])}
-	child := []byte("child")
-	childHash := sha256.Sum256(child)
-	childFile := Entry{Path: "node/child", Kind: File, Size: int64(len(child)), SHA256: hex.EncodeToString(childHash[:])}
-	base := []Entry{oldFile}
-	got, err := Apply(base, []Entry{{Path: "node", Kind: Directory}, childFile})
-	if err != nil {
-		t.Fatalf("file to directory: %v", err)
+func TestSelectionBoundaries(t *testing.T) {
+	s := Selection{{Path: "assets", Include: true}, {Path: "assets/cache", Include: false}, {Path: "assets/cache/keep", Include: true}}
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].Path != "node" || got[0].Kind != Directory || got[1] != childFile {
-		t.Fatalf("file to directory result = %#v", got)
+	for name, want := range map[string]bool{"assets": true, "assets/a": true, "assets/cache/a": false, "assets/cache/keep/a": true, "references/a": false, "assets2/a": false} {
+		if s.Includes(name) != want {
+			t.Errorf("Includes(%q)", name)
+		}
 	}
-	got, err = Apply(got, []Entry{oldFile, {Path: "node/child", Kind: Absent}})
-	if err != nil {
-		t.Fatalf("directory to file: %v", err)
-	}
-	if len(got) != 1 || got[0] != oldFile {
-		t.Fatalf("directory to file result = %#v", got)
+	if !s.Descends("") || !s.Descends("assets/cache") || s.Descends("references") {
+		t.Fatal("incorrect traversal")
 	}
 }
 
-func TestApplyDoesNotImplicitlyDeleteHiddenDescendants(t *testing.T) {
-	base := []Entry{{Path: "tree", Kind: Directory}, {Path: "tree/hidden", Kind: Directory}}
-	if _, err := Apply(base, []Entry{{Path: "tree", Kind: Absent}}); err == nil {
-		t.Fatal("deleting a directory implicitly removed an omitted descendant")
+func TestSelectedInventoryAndDirectoryRemoval(t *testing.T) {
+	file := Entry{Path: "d/file", Kind: File, SHA256: strings.Repeat("0", 64)}
+	if err := ValidateInventory([]Entry{file}); err != nil {
+		t.Fatal(err)
+	}
+	for _, entries := range [][]Entry{
+		{file, file},
+		{file, {Path: "d", Kind: File, SHA256: file.SHA256}},
+		{{Path: "d", Kind: Absent}},
+	} {
+		if err := ValidateInventory(entries); err == nil {
+			t.Fatalf("invalid inventory accepted: %v", entries)
+		}
+	}
+	base := []Entry{{Path: "d", Kind: Directory}, file}
+	partial := Selection{{Path: "d", Include: true}, {Path: "d/unseen", Include: false}}
+	changes := Changes(base, nil, partial)
+	if len(changes) != 1 || changes[0] != (Entry{Path: "d/file", Kind: Absent}) {
+		t.Fatalf("partial deletion: %v", changes)
+	}
+	if got := ApplySelected(base, changes); len(got) != 1 || got[0].Kind != Directory {
+		t.Fatalf("remaining directory: %v", got)
+	}
+	if got := Changes(base, nil, Selection{{Path: "d", Include: true}}); len(got) != 2 {
+		t.Fatalf("complete deletion: %v", got)
 	}
 }

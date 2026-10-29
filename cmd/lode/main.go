@@ -8,523 +8,92 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"syscall"
-	"time"
 
-	"github.com/redthing1/lode/internal/content"
-	"github.com/redthing1/lode/internal/model"
-	"github.com/redthing1/lode/internal/project"
-	"github.com/redthing1/lode/internal/workspace"
+	"github.com/redthing1/lode/internal/version"
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		if errors.Is(err, context.Canceled) {
-			fmt.Fprintln(os.Stderr, "lode: interrupted")
-			os.Exit(130)
-		}
+	if err := run(ctx, os.Args[1:], os.Stdout); err != nil && !errors.Is(err, flag.ErrHelp) {
 		fmt.Fprintln(os.Stderr, "lode:", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, args []string, out, diagnostics io.Writer) error {
-	global := flag.NewFlagSet("lode", flag.ContinueOnError)
-	global.SetOutput(diagnostics)
-	directory := global.String("C", ".", "directory to find a workspace from")
-	version := global.Bool("version", false, "print the installed version")
-	global.Usage = func() { printHelp(diagnostics) }
+const usage = `Usage: lode [-C directory] <command>
+
+  login     Save an access token for a server
+  projects  List or create projects
+  attach    Connect an existing folder to an empty project
+  clone     Download a project, optionally selecting paths
+  status    Show selected local changes (works offline)
+  save      Publish local changes
+  update    Reconcile the latest shared version with local work
+  select    Show or change the paths present locally
+  branch    List, create or delete shared branches
+  tag       Name and protect a saved version
+  retention Show or change the project's cleanup policy
+  cleanup   Preview or apply content expiry and history pruning
+  collect   Reclaim unreferenced content storage
+  switch    Work on another branch
+  merge     Integrate a saved branch or version into the current branch
+  restore   Restore saved contents as local changes
+  resume    Continue an interrupted operation
+  cancel    Settle a pending save or reverse an unfinished local operation
+  log       Show saved versions
+  init      Create a server instance (Linux)
+  serve     Run a server instance (Linux)
+  backup    Copy and verify a stopped instance (Linux)
+  recover-user Reset an account on a stopped server (Linux)
+  version   Print the version
+
+Run lode <command> -h for command help.
+`
+
+func run(ctx context.Context, args []string, out io.Writer) error {
+	if len(args) == 1 && args[0] == "--version" {
+		args = []string{"version"}
+	}
+	global := flags("lode", usage, out)
+	directory := global.String("C", ".", "working directory")
 	if err := global.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
 		return err
 	}
 	args = global.Args()
-	if *version {
-		if len(args) != 0 {
-			return errors.New("--version does not take a command")
-		}
-		printVersion(out)
-		return nil
-	}
-	if len(args) == 0 || len(args) == 1 && args[0] == "help" {
-		printHelp(out)
-		return nil
-	}
-	if args[0] == "help" {
-		if len(args) != 2 {
-			return errors.New("usage: lode help COMMAND")
-		}
-		args = []string{args[1], "-h"}
-	}
-	command := args[0]
-	info, ok := helpFor(command)
-	if !ok {
-		return fmt.Errorf("unknown command %q; use lode help", command)
-	}
-	flags := flag.NewFlagSet(command, flag.ContinueOnError)
-	flags.SetOutput(diagnostics)
-	flags.Usage = func() {
-		fmt.Fprintf(diagnostics, "Usage: lode [-C workspace] %s\n\n%s\n\n", info.usage, info.description)
-		flags.PrintDefaults()
-		fmt.Fprintln(diagnostics, "\nOptions precede positional arguments. Use -C before the command to choose a workspace.")
-		if command == "attach" || command == "clone" {
-			fmt.Fprintln(diagnostics, "Run lode login URL or set LODE_TOKEN. Repeat -include/-exclude; no rules selects all paths.")
-		}
-		if command == "save" || command == "merge" {
-			fmt.Fprintln(diagnostics, "Versions record your authenticated account.")
-		}
-	}
-	var selection model.Selection
-	var choices []model.Choice
-	var emptySelection, force, deleteBranch, deleteTag bool
-	var message, listen, publicURL, base, applyToken string
-	keep := -1
-	limit := 20
-	switch command {
-	case "attach", "clone", "select":
-		addRule := func(include bool) func(string) error {
-			return func(p string) error {
-				if p == "." {
-					p = ""
-				}
-				selection = append(selection, model.Rule{Path: p, Include: include})
-				return selection.Validate()
-			}
-		}
-		flags.Func("include", "select a file or directory (repeatable)", addRule(true))
-		flags.Func("exclude", "exclude a file or directory (repeatable)", addRule(false))
-		if command == "select" {
-			flags.BoolVar(&emptySelection, "none", false, "unload all selected paths")
-		}
-	case "update", "switch", "merge":
-		addChoice := func(ours bool) func(string) error {
-			return func(p string) error {
-				if p == "." {
-					p = ""
-				}
-				if p != "" && !model.ValidPath(p) {
-					return errors.New("invalid choice path")
-				}
-				choices = append(choices, model.Choice{Path: p, Ours: ours})
-				return nil
-			}
-		}
-		flags.Func("ours", "choose the destination entry/subtree (repeatable)", addChoice(true))
-		flags.Func("theirs", "choose the source entry/subtree (repeatable)", addChoice(false))
-		if command == "merge" {
-			flags.StringVar(&message, "m", "", "merge message")
-			flags.StringVar(&base, "base", "", "explicit merge base")
-		}
-	case "save":
-		flags.StringVar(&message, "m", "", "version message")
-	case "serve":
-		flags.StringVar(&listen, "listen", "127.0.0.1:8473", "loopback listen address")
-	case "init":
-		flags.StringVar(&publicURL, "url", "http://localhost:8473", "canonical public instance URL")
-	case "log":
-		flags.IntVar(&limit, "n", 20, "maximum versions")
-	case "branch":
-		flags.BoolVar(&deleteBranch, "delete", false, "delete a branch")
-	case "tag":
-		flags.BoolVar(&deleteTag, "delete", false, "delete a tag")
-	case "cleanup":
-		flags.IntVar(&keep, "keep", -1, "keep N first-parent versions per branch, including its tip; 0 keeps tips and tags")
-		flags.StringVar(&applyToken, "apply", "", "apply the supplied preview token")
-	case "restore":
-		flags.BoolVar(&force, "force", false, "discard local changes in restored paths")
-	case "status", "resume", "cancel", "collect", "backup", "import", "recover", "version":
-	case "login", "logout":
-	default:
-		return fmt.Errorf("unknown command %q; use lode help", command)
-	}
-	if err := flags.Parse(args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
+	if len(args) == 0 || args[0] == "help" {
+		_, err := io.WriteString(out, usage)
 		return err
 	}
-	args = flags.Args()
-	if command == "login" || command == "logout" {
+	switch args[0] {
+	case "version":
 		if len(args) != 1 {
-			return fmt.Errorf("usage: lode %s URL", command)
-		}
-		if command == "login" {
-			return login(ctx, args[0], os.Stdin, diagnostics)
-		}
-		return logout(args[0], out)
-	}
-	if command == "version" {
-		if len(args) != 0 {
 			return errors.New("usage: lode version")
 		}
-		printVersion(out)
+		fmt.Fprintln(out, "Lode", version.Current)
 		return nil
-	}
-	finishActivity := showActivity(diagnostics, command)
-	defer finishActivity()
-	if command == "init" || command == "serve" || command == "backup" || command == "import" || command == "recover" {
-		return runServer(ctx, command, args, listen, publicURL, out, diagnostics)
-	}
-	if emptySelection && len(selection) > 0 {
-		return errors.New("-none cannot be combined with selection rules")
-	}
-	if len(selection) > 0 {
-		hasInclude, hasRoot := false, false
-		for _, r := range selection {
-			hasInclude = hasInclude || r.Include
-			hasRoot = hasRoot || r.Path == ""
-		}
-		if !hasInclude && !hasRoot {
-			selection = append(model.Selection{{Include: true}}, selection...)
-		}
-	}
-	switch command {
+	case "login":
+		return login(ctx, args[1:], out)
+	case "projects":
+		return projects(ctx, args[1:], out)
 	case "attach", "clone":
-		if len(args) < 1 || len(args) > 2 || (command == "clone" && len(args) != 2) {
-			return fmt.Errorf("usage: lode %s [-include PATH] URL DIR", command)
-		}
-		target := *directory
-		if len(args) == 2 {
-			target = args[1]
-		}
-		token := os.Getenv("LODE_TOKEN")
-		if token == "" {
-			if saved, ok, e := verifiedCredential(ctx, args[0]); e != nil {
-				return e
-			} else if ok {
-				token = saved.Token
-			}
-		}
-		if token == "" {
-			return errors.New("run lode login URL or set LODE_TOKEN")
-		}
-		var w *workspace.Workspace
-		var err error
-		if command == "attach" {
-			w, err = workspace.Attach(ctx, args[0], token, target, selection)
-		} else {
-			w, err = workspace.Clone(ctx, args[0], token, target, selection)
-		}
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Workspace: %s\n", target)
-		return w.Close()
-	}
-	switch command {
-	case "branch", "tag", "switch", "merge", "restore":
+		return connectWorkspace(ctx, args[0], args[1:], *directory, out)
+	case "status", "save", "update", "select", "merge", "resume", "cancel", "log":
+		return workspaceCommand(ctx, args[0], args[1:], *directory, out)
+	case "branch", "tag", "switch", "restore":
+		return historyCommand(ctx, args[0], args[1:], *directory, out)
+	case "retention", "cleanup", "collect":
+		return retentionCommand(ctx, args[0], args[1:], *directory, out)
+	case "init", "serve", "backup", "recover-user":
+		return serverCommand(ctx, args[0], args[1:], *directory, out)
 	default:
-		if len(args) != 0 {
-			return fmt.Errorf("unexpected arguments for %s", command)
-		}
+		return fmt.Errorf("unknown command %q; run lode -h", args[0])
 	}
-	if command == "save" && message == "" {
-		return errors.New("save requires -m MESSAGE")
-	}
-	if command == "cleanup" && keep < 0 {
-		return errors.New("cleanup requires an explicit -keep N with N >= 0")
-	}
-	if command == "tag" && deleteTag && len(args) != 1 {
-		return errors.New("usage: lode tag -delete NAME")
-	}
-	if command == "tag" && !deleteTag && len(args) > 2 {
-		return errors.New("usage: lode tag [NAME [COMMIT]]")
-	}
-	root, err := findWorkspace(*directory)
-	if err != nil {
-		return err
-	}
-	w, err := workspace.Open(root)
-	if err != nil {
-		return fmt.Errorf("open workspace %q: %w", root, err)
-	}
-	defer w.Close()
-	if command != "status" {
-		token := os.Getenv("LODE_TOKEN")
-		if token == "" {
-			if saved, ok, e := verifiedCredential(ctx, w.State().URL); e != nil {
-				return e
-			} else if ok {
-				token = saved.Token
-			}
-		}
-		if token != "" {
-			w.UseToken(token)
-		}
-	}
-	switch command {
-	case "status":
-		state := w.State()
-		base := state.Base
-		if base == "" {
-			base = "(empty project)"
-		}
-		fmt.Fprintf(out, "Branch: %s\nBase: %s\nSelection: %s\n", state.Branch, base, selectionText(state.Selection))
-		changes, err := w.Status(ctx)
-		if err != nil {
-			return err
-		}
-		previous := map[string]bool{}
-		for _, e := range w.State().Baseline {
-			previous[e.Path] = true
-		}
-		for _, e := range changes {
-			label := "A"
-			if previous[e.Path] {
-				label = "M"
-			}
-			if e.Kind == model.Absent {
-				label = "D"
-			}
-			fmt.Fprintf(out, "%s %s\n", label, e.Path)
-		}
-		if len(changes) == 0 {
-			fmt.Fprintln(out, "No selected changes.")
-		}
-	case "save":
-		commit, err := w.Save(ctx, "", message)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(out, commit.ID)
-	case "update":
-		if err := w.Update(ctx, choices); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, "Workspace updated.")
-	case "select":
-		if selection == nil && !emptySelection {
-			fmt.Fprintln(out, selectionText(w.State().Selection))
-			return nil
-		}
-		if emptySelection {
-			selection = model.Selection{}
-		}
-		if err := w.Select(ctx, selection); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, "Workspace selection updated.")
-	case "resume":
-		if err := w.Resume(ctx); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, "Operation completed.")
-	case "cancel":
-		if err := w.Cancel(ctx); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, "Operation cancelled.")
-	case "log":
-		state := w.State()
-		client, err := w.RemoteClient()
-		if err != nil {
-			return err
-		}
-		commits, err := client.History(ctx, state.Branch, limit)
-		if err != nil {
-			return err
-		}
-		for _, c := range commits {
-			state := ""
-			if !c.Retained {
-				state = "  [expired]"
-			}
-			fmt.Fprintf(out, "%s  %s  %q%s\n", c.ID, c.Created.Format(time.RFC3339), c.Message, state)
-		}
-	case "branch":
-		state := w.State()
-		client, err := w.RemoteClient()
-		if err != nil {
-			return err
-		}
-		if deleteBranch {
-			if len(args) != 1 {
-				return errors.New("usage: lode branch -delete NAME")
-			}
-			if args[0] == state.Branch {
-				return errors.New("cannot delete the current workspace branch")
-			}
-			tip, err := client.Head(ctx, args[0])
-			if err != nil {
-				return err
-			}
-			if err := client.DeleteBranch(ctx, args[0], tip); err != nil {
-				return err
-			}
-			fmt.Fprintf(out, "Deleted branch %s.\n", args[0])
-			return nil
-		}
-		if len(args) == 0 {
-			branches, err := client.Branches(ctx)
-			if err != nil {
-				return err
-			}
-			for _, b := range branches {
-				marker := " "
-				if b.Name == state.Branch {
-					marker = "*"
-				}
-				fmt.Fprintf(out, "%s %s %s\n", marker, b.Name, b.Tip)
-			}
-			return nil
-		}
-		if len(args) > 2 {
-			return errors.New("usage: lode branch NAME [COMMIT]")
-		}
-		tip := state.Base
-		if len(args) == 2 {
-			tip = args[1]
-		}
-		if err := client.CreateBranch(ctx, args[0], tip); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Created branch %s at %s.\n", args[0], tip)
-	case "tag":
-		state := w.State()
-		client, err := w.RemoteClient()
-		if err != nil {
-			return err
-		}
-		if deleteTag {
-			tags, err := client.Tags(ctx)
-			if err != nil {
-				return err
-			}
-			var expected string
-			for _, tag := range tags {
-				if tag.Name == args[0] {
-					expected = tag.Commit
-					break
-				}
-			}
-			if expected == "" {
-				fmt.Fprintf(out, "Tag %s is already absent.\n", args[0])
-				return nil
-			}
-			if err := client.DeleteTag(ctx, args[0], expected); err != nil {
-				return err
-			}
-			fmt.Fprintf(out, "Deleted tag %s.\n", args[0])
-			return nil
-		}
-		if len(args) == 0 {
-			tags, err := client.Tags(ctx)
-			if err != nil {
-				return err
-			}
-			for _, tag := range tags {
-				fmt.Fprintf(out, "%s %s\n", tag.Name, tag.Commit)
-			}
-			return nil
-		}
-		id := state.Base
-		if len(args) == 2 {
-			id = args[1]
-		}
-		if id == "" {
-			return errors.New("cannot tag an empty workspace base; provide a COMMIT")
-		}
-		if err := client.CreateTag(ctx, args[0], id); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Created tag %s at %s.\n", args[0], id)
-	case "cleanup":
-		client, err := w.RemoteClient()
-		if err != nil {
-			return err
-		}
-		if applyToken != "" {
-			expired, err := client.ApplyCleanup(ctx, keep, applyToken)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(out, "Expiry recorded for %d versions.\n", expired)
-			collected, err := client.Collect(ctx)
-			if err != nil {
-				return fmt.Errorf("Expiry recorded; collection failed: %w", err)
-			}
-			printCollection(out, collected)
-			return nil
-		}
-		fmt.Fprintf(out, "Protect branch tips and tags; keep %d first-parent versions per branch, counting its tip.\n", keep)
-		var kept, eligible, expired int
-		token, err := client.PreviewCleanup(ctx, keep, func(version project.RetentionVersion) error {
-			label := "release"
-			switch {
-			case !version.Retained:
-				label = "expired"
-				expired++
-			case version.Protected():
-				label = "keep"
-				kept++
-			default:
-				eligible++
-			}
-			_, err := fmt.Fprintf(out, "%s %s  %s  protection: %d branch tips, %d tags, %d recent-history rules\n", label, version.ID, version.Created.Format(time.RFC3339), version.Branches, version.Tags, version.Recent)
-			return err
-		})
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "%d protected, %d eligible for expiry, %d already expired.\nToken: %s\nApply with: lode cleanup -keep %d -apply %s (from this workspace)\n", kept, eligible, expired, token, keep, token)
-	case "collect":
-		client, err := w.RemoteClient()
-		if err != nil {
-			return err
-		}
-		collected, err := client.Collect(ctx)
-		if err != nil {
-			return err
-		}
-		printCollection(out, collected)
-	case "switch":
-		if len(args) != 1 {
-			return errors.New("usage: lode switch [-ours PATH | -theirs PATH] BRANCH")
-		}
-		if err := w.Switch(ctx, args[0], choices); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Switched to branch %s.\n", args[0])
-	case "merge":
-		if len(args) != 1 {
-			return errors.New("usage: lode merge [-m MESSAGE] [-base COMMIT] [-ours PATH | -theirs PATH] BRANCH")
-		}
-		commit, err := w.Merge(ctx, args[0], "", message, base, choices)
-		if errors.Is(err, project.ErrAlreadyMerged) {
-			fmt.Fprintln(out, "Already merged.")
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(out, commit.ID)
-		fmt.Fprintln(out, "Run lode update to materialize the merged version in this workspace.")
-	case "restore":
-		if len(args) < 1 {
-			return errors.New("usage: lode restore [-force] COMMIT [PATH...]")
-		}
-		var requested model.Selection
-		for _, p := range args[1:] {
-			if p == "." {
-				p = ""
-			}
-			if p != "" && !model.ValidPath(p) {
-				return errors.New("invalid restore path")
-			}
-			requested = append(requested, model.Rule{Path: p, Include: true})
-		}
-		if err := w.Restore(ctx, args[0], requested, force); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, "Workspace restored.")
-	}
-	return nil
 }
 
-func printCollection(out io.Writer, result content.Collection) {
-	fmt.Fprintf(out, "Physical repository bytes: %d before, %d after. Native safety delays may require a later collect.\n", result.BeforeBytes, result.AfterBytes)
+func flags(name, usage string, out io.Writer) *flag.FlagSet {
+	f := flag.NewFlagSet(name, flag.ContinueOnError)
+	f.SetOutput(out)
+	f.Usage = func() { fmt.Fprintln(out, usage); f.PrintDefaults() }
+	return f
 }

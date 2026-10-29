@@ -1,342 +1,78 @@
-{{define "appearance"}}{{template "top" .}}{{template "settings-top" .}}
-<div class="page-heading"><h1>Appearance</h1></div>
-<section class="panel">
-  <h2 class="panel-title">Theme</h2>
-  <div class="panel-body">
-    <fieldset class="theme-options">
-      <legend class="sr-only">Theme</legend>
-      <label><input type="radio" name="theme" value="dark" checked />Dark</label>
-      <label><input type="radio" name="theme" value="light" />Light</label>
-      <label><input type="radio" name="theme" value="auto" />System</label>
-    </fieldset>
-    <p class="hint">Saved in this browser.</p>
-    <noscript><p class="hint">Enable JavaScript to change the theme.</p></noscript>
-  </div>
-</section>
-{{template "settings-bottom" .}}{{template "bottom" .}}{{end}}
 {{define "security"}}{{template "top" .}}{{template "settings-top" .}}
-<div class="page-heading"><h1>Account security</h1></div>
-{{if .User.ForcePasswordChange}}
-<div class="notice" role="status">
-  Change your temporary password to continue.
-</div>
-{{end}} {{with .Data}}{{if .Welcome}}
-<div class="notice" role="status">
-  Administrator created. <a href="/projects/new">Create a project</a>.
-</div>
-{{end}}{{if .Recovered}}
-<div class="notice" role="status">
-  Recovery code accepted. Replace lost keys and generate new recovery codes.
-</div>
-{{end}}{{if .Changed}}
-<div class="notice" role="status">
-  Password updated. Other sessions were signed out.
-</div>
-{{end}} {{if .Codes}}
-<section class="notice">
-  <h2>Recovery codes</h2>
-  <p>Save these now. Each code works once, after your password.</p>
-  <pre><code>{{range .Codes}}{{.}}
-{{end}}</code></pre>
-</section>
-{{end}}{{end}}
-<section class="panel">
-  <h2 class="panel-title">Passkeys and security keys</h2>
-  <div class="panel-body">
-    {{with .Data}}{{range .Keys}}
-    <div class="key-row">
-      <div>
-        <strong>{{.Name}}</strong><small>Added {{date .Created}}</small>
-      </div>
-      <form action="/settings/keys/remove" method="post">
-        <input type="hidden" name="id" value="{{.ID}}" /><button
-          class="quiet danger"
-          type="submit"
-        >
-          Remove
-        </button>
-      </form>
-    </div>
-    {{else}}
-    <p class="muted">No keys registered.</p>
-    {{end}}{{end}} {{if not .User.ForcePasswordChange}}
-    <div class="form-row key-form">
-      <label
-        >Name<input
-          id="key-name"
-          maxlength="80"
-          placeholder="Laptop or security key"
-          autocomplete="off" /></label
-      ><label
-        >Sign-in mode<select id="key-mode">
-          <option value="passkey">Without a username</option>
-          <option value="key">Enter a username</option>
-        </select></label
-      ><button type="button" data-security="register" class="secondary">
-        Add key
-      </button>
-    </div>
-    <p class="hint">
-      Username-free sign-in stores a passkey on your authenticator. Both modes
-      use its PIN or biometric verification.
-    </p>
-    <p class="hint" data-security-status role="status" aria-live="polite"></p>
-    <div data-recovery-panel hidden class="notice">
-      <h3>Save your recovery codes</h3>
-      <p>Shown once. Each code works once, after your password.</p>
-      <pre data-recovery-codes></pre>
-      <a href="/settings/security" class="button secondary">Done</a>
-    </div>
-    {{with .Data}}{{if .Keys}}
-    <div class="section-rule">
-      <h3>Recovery codes</h3>
-      <form action="/settings/recovery" method="post" class="inline">
-        <button type="submit" class="secondary">Generate new codes</button
-        ><span class="hint">Replaces all existing codes.</span>
-      </form>
-    </div>
-    {{end}}{{end}}{{end}}
-  </div>
-</section>
-<section class="panel">
-  <h2 class="panel-title">Change password</h2>
-  <form
-    action="/settings/password"
-    method="post"
-    class="stack panel-body narrow-form"
-  >
-    <label
-      >Current password<input
-        type="password"
-        name="current"
-        required
-        autocomplete="current-password" /></label
-    ><label
-      >New password<input
-        type="password"
-        name="password"
-        required
-        minlength="12"
-        maxlength="1024"
-        autocomplete="new-password" /></label
-    ><label
-      >Confirm password<input
-        type="password"
-        name="confirm"
-        required
-        minlength="12"
-        maxlength="1024"
-        autocomplete="new-password"
-    /></label>
-    <p class="hint">
-      At least 12 characters. Other sessions will be signed out.
-    </p>
-    <button type="submit">Update password</button>
-  </form>
-</section>
-{{template "settings-bottom" .}}{{template "bottom" .}}{{end}} {{define
-"tokens"}}{{template "top" .}}{{template "settings-top" .}}
-<div class="page-heading"><h1>Access tokens</h1></div>
-{{with .Data}}{{if .Secret}}
-<section class="notice secret" role="status">
-  <strong>Copy this token now</strong>
-  <p>Shown once. Use it with <code>lode login</code>.</p>
-  <code data-copy-value>{{.Secret}}</code
-  ><button type="button" class="secondary small" data-copy>Copy token</button
-  ><span class="hint" data-copy-status role="status"></span>
-</section>
-{{end}}
-<section class="panel">
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Access</th>
-          <th>Expires</th>
-          <th>Last used</th>
-          <th><span class="sr-only">Action</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Tokens}}
-        <tr>
-          <td>
-            <strong>{{.Name}}</strong><small class="mono">{{.Prefix}}…</small>
-          </td>
-          <td>
-            {{.Role}}<small
-              >{{if .ProjectID}}{{with index $.Data.ProjectNames
-              .ProjectID}}{{.}}{{else}}Project {{short
-              .ProjectID}}{{end}}{{else}}All accessible projects{{end}}</small
-            >
-          </td>
-          <td>{{if .ExpiresAt}}{{date .ExpiresAt}}{{end}}</td>
-          <td>{{if .LastUsedAt}}{{date .LastUsedAt}}{{else}}Never{{end}}</td>
-          <td class="align-right">
-            {{if .Revoked}}<span class="muted">Revoked</span>{{else}}
-            <form action="/settings/tokens/revoke" method="post">
-              <input type="hidden" name="id" value="{{.ID}}" /><button
-                class="quiet danger"
-                type="submit"
-              >
-                Revoke
-              </button>
-            </form>
-            {{end}}
-          </td>
-        </tr>
-        {{else}}
-        <tr>
-          <td colspan="5" class="table-empty">No access tokens.</td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-</section>
-<section class="panel">
-  <h2 class="panel-title">New access token</h2>
-  <div class="panel-body">
-    <form action="/settings/tokens" method="post" class="stack narrow-form">
-      <label
-        >Name<input
-          name="name"
-          required
-          maxlength="80"
-          placeholder="Laptop"
-          autocomplete="off" /></label
-      ><label
-        >Project<select name="project">
-          <option value="">All accessible projects</option>
-          {{range .Projects}}
-          <option value="{{.ID}}">{{.Path}}</option>
-          {{end}}
-        </select></label
-      ><label
-        >Maximum access<select name="role">
-          <option value="reader">Reader</option>
-          <option value="writer" selected>Writer</option>
-          <option value="maintainer">Maintainer</option>
-        </select></label
-      ><label
-        >Expires in<select name="days">
-          <option value="30">30 days</option>
-          <option value="90" selected>90 days</option>
-          <option value="365">1 year</option>
-        </select></label
-      ><button type="submit">Create token</button>
+<h1>Security</h1>
+<section id="key-recovery" class="panel padded token-form" hidden>{{template "recovery-content" .}}</section>
+<div id="security-settings">
+<section class="panel padded token-form security-section"><h2>Passkeys and security keys</h2>
+  <p class="muted">Registered keys also protect password sign-in. Key changes revoke your other sessions and access tokens.</p>
+  {{range .Keys}}<div class="key-row"><strong>{{.Name}}</strong>
+    <details><summary>Remove</summary><form method="post" action="/settings/security/keys/{{.ID}}/remove">
+      <input type="text" name="username" value="{{$.User.Name}}" autocomplete="username" class="sr-only" aria-label="Username" readonly tabindex="-1">
+      <label>Current password<input type="password" name="current" autocomplete="current-password" required></label>
+      <button class="secondary danger">Remove key</button>
+    </form></details>
+  </div>{{else}}<p class="muted">No keys registered.</p>{{end}}
+  <details class="key-signin"><summary>Add a key</summary>
+    <form method="post" action="/settings/security/keys" data-webauthn="create">
+      <input type="text" name="username" value="{{.User.Name}}" autocomplete="username" class="sr-only" aria-label="Username" readonly tabindex="-1">
+      <label>Name<input name="name" required maxlength="100" placeholder="Laptop or security key" autocomplete="off"></label>
+      <fieldset><legend>Sign-in method</legend>
+        <label class="choice"><input type="radio" name="mode" value="passkey" checked>Passkey — no username needed</label>
+        <label class="choice"><input type="radio" name="mode" value="username">Security key — enter a username</label>
+      </fieldset>
+      <label>Current password<input type="password" name="current" autocomplete="current-password" required></label>
+      <button>Add key</button><p class="key-error error" role="alert" hidden></p>
     </form>
-    <p class="hint">
-      Limited by your current project permissions. Tokens cannot administer the
-      instance.
-    </p>
-  </div>
-</section>
-{{end}}{{template "settings-bottom" .}}{{template "bottom" .}}{{end}} {{define
-"users"}}{{template "top" .}}{{template "settings-top" .}}
-<div class="page-heading">
-  <h1>Users</h1>
-  <span class="badge">Registration {{if .Data.RegistrationOpen}}open{{else}}closed{{end}}</span>
-</div>
-{{with .Data}}{{template "temporary-password" .}}
-<section class="panel">
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Username</th>
-          <th>Role</th>
-          <th>Status</th>
-          <th><span class="sr-only">Edit</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Users}}
-        <tr>
-          <td><a href="/-/admin/users/{{.Username}}">{{.Username}}</a></td>
-          <td>{{if .Admin}}Administrator{{else}}User{{end}}</td>
-          <td>{{if .Disabled}}Disabled{{else if .ForcePasswordChange}}Password change required{{else}}Active{{end}}</td>
-          <td class="align-right"><a href="/-/admin/users/{{.Username}}">Edit</a></td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-</section>
-<section class="panel">
-  <h2 class="panel-title">New user</h2>
-  <div class="panel-body">
-    <form method="post" class="form-row">
-      <label
-        >Username<input
-          name="username"
-          required
-          pattern="[a-z0-9_\-]{3,32}"
-          maxlength="32"
-          autocomplete="off"
-          spellcheck="false" /></label
-      ><label class="check"
-        ><input type="checkbox" name="admin" />Administrator</label
-      ><button type="submit">Create account</button>
+  </details>
+  {{if .Keys}}<details class="key-signin"><summary>Replace recovery codes</summary>
+    <form method="post" action="/settings/security/recovery">
+      <input type="text" name="username" value="{{.User.Name}}" autocomplete="username" class="sr-only" aria-label="Username" readonly tabindex="-1">
+      <p class="muted">Your previous codes will stop working.</p>
+      <label>Current password<input type="password" name="current" autocomplete="current-password" required></label><button class="secondary">Create new codes</button>
     </form>
-    <p class="hint">
-      Administrators can access every project and manage users.
-    </p>
-  </div>
+  </details>{{end}}
 </section>
-{{end}}{{template "settings-bottom" .}}{{template "bottom" .}}{{end}}
+<section class="panel padded token-form"><h2>Change password</h2>
+<form method="post">
+  <input type="text" name="username" value="{{.User.Name}}" autocomplete="username" class="sr-only" aria-label="Username" readonly tabindex="-1">
+  <label>Current password<input type="password" name="current" required autocomplete="current-password"></label>
+  <label>New password<input type="password" name="password" required minlength="12" maxlength="72" autocomplete="new-password"></label>
+  <label>Confirm new password<input type="password" name="confirm" required minlength="12" maxlength="72" autocomplete="new-password"></label>
+  <p class="muted">Changing your password signs you out everywhere and revokes your access tokens.</p>
+  <button>Change password</button>
+</form></section>
+</div>
+{{template "settings-bottom" .}}{{template "bottom" .}}{{end}}
 
-{{define "admin-projects"}}{{template "top" .}}{{template "settings-top" .}}
-<div class="page-heading"><h1>Projects <span class="count">{{len .Data}}</span></h1></div>
-<section class="panel">
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Project</th><th><span class="sr-only">Actions</span></th></tr></thead>
-      <tbody>
-        {{range .Data}}<tr>
-          <td>{{if .Deleting}}<strong>{{.Path}}</strong><small>Deletion pending</small>{{else}}<a href="/{{.Path}}">{{.Path}}</a>{{end}}</td>
-          <td class="align-right">{{if not .Deleting}}<a href="/{{.Path}}/members">Settings</a> · {{end}}<a class="danger" href="/{{.Path}}/delete">{{if .Deleting}}Complete deletion{{else}}Delete{{end}}</a></td>
-        </tr>{{else}}<tr><td colspan="2" class="table-empty">No projects.</td></tr>{{end}}
-      </tbody>
-    </table>
-  </div>
+{{define "appearance"}}{{template "top" .}}{{template "settings-top" .}}
+<section class="panel padded"><h1>Appearance</h1>
+  <fieldset class="theme-options"><legend>Theme</legend>
+    <label class="choice"><input type="radio" name="theme" value="dark">Dark</label>
+    <label class="choice"><input type="radio" name="theme" value="light">Light</label>
+  </fieldset>
 </section>
 {{template "settings-bottom" .}}{{template "bottom" .}}{{end}}
 
-{{define "temporary-password"}}{{if .Password}}
-<section class="notice secret" role="status">
-  <strong>Temporary password for {{.Account.Username}}</strong>
-  <p>Shown once. Must be changed at next sign-in.</p>
-  <code data-copy-value>{{.Password}}</code><button type="button" class="secondary small" data-copy>Copy password</button><span class="hint" data-copy-status role="status"></span>
+{{define "tokens"}}{{template "top" .}}{{template "settings-top" .}}
+<h1>Access tokens</h1>
+{{if .Token}}<div class="notice"><strong>Copy this token now.</strong> It will not be shown again.<pre class="token">{{.Token}}</pre></div>{{end}}
+<div class="panel token-list">
+{{range .Tokens}}<div class="token-row"><div><strong>{{.Name}}</strong><div class="muted">{{if .Project}}{{if .Scope}}{{.Scope}}{{else}}Unavailable project{{end}}{{else}}All accessible projects{{end}} · {{.Role}} · Expires {{date .Expires}}</div></div><form method="post" action="/settings/tokens/{{.ID}}/revoke"><button class="secondary danger">Revoke</button></form></div>{{else}}<p class="empty">No access tokens.</p>{{end}}
+</div>
+<section class="panel padded token-form"><h2>New token</h2>
+<form method="post">
+  <label>Name<input name="name" required maxlength="100" placeholder="Workstation"></label>
+  <fieldset><legend>Project access</legend>
+    <label class="choice"><input type="radio" name="project" value="" checked>All accessible projects</label>
+    {{range .Projects}}<label class="choice"><input type="radio" name="project" value="{{.ID}}">{{.Owner}}/{{.Name}}</label>{{end}}
+  </fieldset>
+  <fieldset><legend>Maximum access</legend>
+    <label class="choice"><input type="radio" name="role" value="reader">Read</label>
+    <label class="choice"><input type="radio" name="role" value="writer" checked>Read and write</label>
+    <label class="choice"><input type="radio" name="role" value="maintainer">Maintain project</label>
+    <p class="muted hint">Limited by your current project permissions.</p>
+  </fieldset>
+  <label>Expires in days<input type="number" name="days" value="30" min="1" max="365" required></label>
+  <button>Create token</button>
+</form>
 </section>
-{{end}}{{end}}
-
-{{define "admin-user"}}{{template "top" .}}{{template "settings-top" .}}{{with .Data}}
-<div class="page-heading"><h1><a href="/-/admin/users">Users</a> / {{.Account.Username}}</h1></div>
-{{template "temporary-password" .}}
-<section class="panel">
-  <h2 class="panel-title">Account</h2>
-  <form method="post" class="stack panel-body narrow-form">
-    <input type="hidden" name="action" value="state" />
-    <label class="check"><input type="checkbox" name="admin" {{if .Account.Admin}}checked{{end}} />Administrator</label>
-    <label class="check"><input type="checkbox" name="disabled" {{if .Account.Disabled}}checked{{end}} />Disabled</label>
-    <p class="hint">Disabling sign-in preserves owned projects and their collaborators' access.</p>
-    <button type="submit">Save changes</button>
-  </form>
-</section>
-{{if ne .Account.ID $.User.ID}}
-<section class="panel">
-  <h2 class="panel-title">Reset access</h2>
-  <div class="panel-body">
-    <p>Replaces the password and revokes all sessions, keys, recovery codes and tokens.</p>
-    <details>
-      <summary>Reset credentials</summary>
-      <form method="post" class="stack narrow-form">
-        <input type="hidden" name="action" value="reset" />
-        <button class="secondary danger" type="submit">Reset {{.Account.Username}}</button>
-      </form>
-    </details>
-  </div>
-</section>
-{{end}}{{end}}{{template "settings-bottom" .}}{{template "bottom" .}}{{end}}
+{{template "settings-bottom" .}}{{template "bottom" .}}{{end}}

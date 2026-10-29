@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,268 +14,151 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gofrs/flock"
 	"github.com/redthing1/lode/internal/remote"
 	"golang.org/x/term"
 )
 
 type credential struct {
-	Token    string `json:"token"`
+	Origin   string `json:"origin"`
 	Instance string `json:"instance"`
-	User     string `json:"user"`
-}
-type credentialFile struct {
-	Credentials map[string]credential `json:"credentials"`
+	Token    string `json:"token"`
 }
 
-func credentialPaths() (string, string, error) {
-	base, err := os.UserConfigDir()
+func originOf(address string) (string, error) {
+	u, err := url.Parse(address)
+	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("use a server or project URL")
+	}
+	u.Path, u.RawPath = "", ""
+	c, err := remote.New(u.String(), "")
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	dir := filepath.Join(base, "lode")
-	if err = os.MkdirAll(dir, 0700); err != nil {
-		return "", "", err
-	}
-	info, err := os.Lstat(dir)
-	if err != nil {
-		return "", "", err
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return "", "", errors.New("credential directory is not a private directory")
-	}
-	if err = os.Chmod(dir, 0700); err != nil {
-		return "", "", err
-	}
-	return filepath.Join(dir, "credentials.json"), filepath.Join(dir, "credentials.lock"), nil
+	defer c.HTTP.CloseIdleConnections()
+	return c.Origin(), nil
 }
 
-func updateCredentials(edit func(map[string]credential) error) error {
-	path, lockPath, err := credentialPaths()
+func credentialPath(origin string) (string, error) {
+	root, err := os.UserConfigDir()
 	if err != nil {
-		return err
+		return "", err
 	}
-	lock := flock.New(lockPath)
-	if li, le := os.Lstat(lockPath); le == nil && (!li.Mode().IsRegular() || li.Mode()&os.ModeSymlink != 0) {
-		return errors.New("credential lock is not a regular file")
-	} else if le != nil && !errors.Is(le, os.ErrNotExist) {
-		return le
+	h := sha256.Sum256([]byte(origin))
+	return filepath.Join(root, "lode", "credentials", hex.EncodeToString(h[:])+".json"), nil
+}
+
+func credentials(origin string) (credential, error) {
+	file, err := credentialPath(origin)
+	if err != nil {
+		return credential{}, err
 	}
-	if err = lock.Lock(); err != nil {
-		return err
-	}
-	defer lock.Unlock()
-	items := map[string]credential{}
-	info, err := os.Lstat(path)
+	c := credential{Origin: origin}
+	b, err := os.ReadFile(file)
 	if err == nil {
-		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("credential file is not a regular file")
+		if err := json.Unmarshal(b, &c); err != nil {
+			return credential{}, err
 		}
-		if info.Mode().Perm()&0077 != 0 {
-			return errors.New("credential file permissions must be 0600")
-		}
-		data, e := os.ReadFile(path)
-		if e != nil {
-			return e
-		}
-		var saved credentialFile
-		if e = json.Unmarshal(data, &saved); e != nil {
-			return fmt.Errorf("read credentials: %w", e)
-		}
-		if saved.Credentials != nil {
-			items = saved.Credentials
+		if c.Origin != origin || c.Instance == "" || c.Token == "" {
+			return credential{}, errors.New("invalid saved credentials; run lode login")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return credential{}, err
 	}
-	if err := edit(items); err != nil {
-		return err
+	if override := os.Getenv("LODE_TOKEN"); override != "" {
+		c.Token = override
 	}
-	data, err := json.MarshalIndent(credentialFile{Credentials: items}, "", "  ")
-	if err != nil {
-		return err
+	if c.Token == "" {
+		return credential{}, fmt.Errorf("sign in first: lode login %s", origin)
 	}
-	data = append(data, '\n')
-	f, err := os.CreateTemp(filepath.Dir(path), "credentials-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-	if err = f.Chmod(0600); err == nil {
-		_, err = f.Write(data)
-	}
-	if err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	if err = os.Rename(tmp, path); err != nil {
-		return err
-	}
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	err = errors.Join(dir.Sync(), dir.Close())
-	return err
+	return c, nil
 }
 
-func credentialKey(raw string) (string, error) { return remote.CanonicalURL(raw) }
-func originKey(raw string) (string, error) {
-	key, err := remote.CanonicalURL(raw)
+func authenticated(origin string) (*remote.Client, error) {
+	cred, err := credentials(origin)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	u, err := url.Parse(key)
+	c, err := remote.New(origin, cred.Token)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	u.Path = ""
-	return strings.TrimSuffix(u.String(), "/"), nil
+	c.InstanceID = cred.Instance
+	return c, nil
 }
 
-func findCredential(raw string) (credential, bool, error) {
-	key, err := credentialKey(raw)
-	if err != nil {
-		return credential{}, false, err
+func login(ctx context.Context, args []string, out io.Writer) error {
+	f := flags("login", "Usage: lode login <server-or-project-url>\nCreate an access token in account settings. LODE_TOKEN may supply the token.", out)
+	if err := f.Parse(args); err != nil {
+		return err
 	}
-	origin, err := originKey(raw)
-	if err != nil {
-		return credential{}, false, err
+	if f.NArg() != 1 {
+		return errors.New("usage: lode login <server-or-project-url>")
 	}
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return credential{}, false, err
-	}
-	dir := filepath.Join(base, "lode")
-	di, err := os.Lstat(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return credential{}, false, nil
-	}
-	if err != nil {
-		return credential{}, false, err
-	}
-	if !di.IsDir() || di.Mode()&os.ModeSymlink != 0 {
-		return credential{}, false, errors.New("credential directory is not a private directory")
-	}
-	path := filepath.Join(dir, "credentials.json")
-	fi, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return credential{}, false, nil
-	}
-	if err != nil {
-		return credential{}, false, err
-	}
-	if !fi.Mode().IsRegular() || fi.Mode()&os.ModeSymlink != 0 {
-		return credential{}, false, errors.New("credential file is not a regular file")
-	}
-	if fi.Mode().Perm()&0077 != 0 {
-		return credential{}, false, errors.New("credential file permissions must be 0600")
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return credential{}, false, err
-	}
-	var saved credentialFile
-	if err = json.Unmarshal(b, &saved); err != nil {
-		return credential{}, false, fmt.Errorf("read credentials: %w", err)
-	}
-	c, ok := saved.Credentials[key]
-	if !ok && origin != key {
-		c, ok = saved.Credentials[origin]
-	}
-	return c, ok, nil
-}
-
-func verifiedCredential(ctx context.Context, raw string) (credential, bool, error) {
-	c, ok, err := findCredential(raw)
-	if err != nil || !ok {
-		return c, ok, err
-	}
-	if c.User == "" || c.Instance == "" {
-		return credential{}, false, errors.New("saved credential lacks identity metadata; run lode login again")
-	}
-	identity, err := remote.WhoAmI(ctx, raw, c.Token)
-	if err != nil {
-		return credential{}, false, err
-	}
-	if identity.ID != c.User || identity.Instance != c.Instance {
-		return credential{}, false, errors.New("saved credential resolved to a different account or instance; run lode login again")
-	}
-	return c, true, nil
-}
-
-func saveCredential(key string, c credential) error {
-	return updateCredentials(func(items map[string]credential) error { items[key] = c; return nil })
-}
-func removeCredential(key string) error {
-	return updateCredentials(func(items map[string]credential) error { delete(items, key); return nil })
-}
-
-func inputToken(in io.Reader, out io.Writer) (string, error) {
-	if token := os.Getenv("LODE_TOKEN"); token != "" {
-		return strings.TrimSpace(token), nil
-	}
-	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		fmt.Fprint(out, "Access token: ")
-		b, err := term.ReadPassword(int(f.Fd()))
-		fmt.Fprintln(out)
-		return strings.TrimSpace(string(b)), err
-	}
-	fmt.Fprint(out, "Access token: ")
-	b, err := bufio.NewReader(in).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-	return strings.TrimSpace(b), nil
-}
-
-func login(ctx context.Context, raw string, in io.Reader, out io.Writer) error {
-	key, err := credentialKey(raw)
+	origin, err := originOf(f.Arg(0))
 	if err != nil {
 		return err
 	}
-	token, err := inputToken(in, out)
-	if err != nil {
-		return err
-	}
+	token := os.Getenv("LODE_TOKEN")
 	if token == "" {
-		return errors.New("empty access token")
+		if term.IsTerminal(int(os.Stdin.Fd())) {
+			fmt.Fprint(out, "Access token: ")
+			b, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprintln(out)
+			if err != nil {
+				return err
+			}
+			token = string(b)
+		} else {
+			b, err := bufio.NewReader(io.LimitReader(os.Stdin, 513)).ReadString('\n')
+			if err != nil && !errors.Is(err, io.EOF) {
+				return err
+			}
+			token = b
+		}
 	}
-	identity, err := remote.WhoAmI(ctx, key, token)
+	token = strings.TrimSpace(token)
+	if token == "" || len(token) > 512 {
+		return errors.New("invalid access token")
+	}
+	c, err := remote.New(origin, token)
 	if err != nil {
 		return err
 	}
-	if remote.HasProjectPath(key) {
-		c, err := remote.New(key, token, "")
-		if err != nil {
-			return err
-		}
-		if _, err = c.Info(ctx); err != nil {
-			return fmt.Errorf("project access check: %w", err)
-		}
-	}
-	if err := saveCredential(key, credential{Token: token, Instance: identity.Instance, User: identity.ID}); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "Logged in as %s at %s.\n", identity.Username, key)
-	return nil
-}
-
-func logout(raw string, out io.Writer) error {
-	key, err := credentialKey(raw)
+	defer c.HTTP.CloseIdleConnections()
+	identity, err := c.Me(ctx)
 	if err != nil {
 		return err
 	}
-	if err := removeCredential(key); err != nil {
+	if identity.Instance == "" || identity.User == "" {
+		return errors.New("server returned an invalid identity")
+	}
+	file, err := credentialPath(origin)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Logged out from %s.\n", key)
+	if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
+		return err
+	}
+	b, err := json.Marshal(credential{Origin: origin, Instance: identity.Instance, Token: token})
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(file), ".login-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(b)
+	if err == nil {
+		err = tmp.Sync()
+	}
+	err = errors.Join(err, tmp.Close())
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), file); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Signed in to %s as %s.\n", origin, identity.Username)
 	return nil
 }

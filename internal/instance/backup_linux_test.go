@@ -1,5 +1,3 @@
-//go:build linux
-
 package instance
 
 import (
@@ -9,293 +7,485 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
-	"path"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/redthing1/lode/internal/model"
 	"github.com/redthing1/lode/internal/project"
+	"golang.org/x/sys/unix"
 )
 
-func saveInstanceProject(t *testing.T, p *project.Project, name string, data []byte) string {
+func backupSave(t *testing.T, p *project.Store, actor, base, data string) (model.Save, model.Version) {
 	t.Helper()
-	changes := []model.Entry{instanceFileEntry(name, data)}
-	for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
-		changes = append(changes, model.Entry{Path: parent, Kind: model.Directory})
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatal(err)
 	}
-	model.Sort(changes)
-	request := project.Request{
-		ID: project.NewID(), Branch: "main", Author: "backup test", Message: "save bytes",
-		Changes: changes,
-	}
-	commit, err := p.Save(context.Background(), request, project.Source{Write: func(_ model.Entry, _ project.Basis, out io.Writer) error {
-		_, err := io.Copy(out, bytes.NewReader(data))
+	h := sha256.Sum256([]byte(data))
+	r := model.Save{ID: id.String(), Branch: "main", Base: base, Message: "backup fixture", Changes: []model.Entry{{Path: "assets/data.bin", Kind: model.File, Size: int64(len(data)), SHA256: hex.EncodeToString(h[:])}}}
+	v, err := p.Save(context.Background(), actor, r, project.Source{Write: func(_ model.Entry, w io.Writer, _ *project.Basis) error {
+		_, err := io.WriteString(w, data)
 		return err
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return commit.ID
+	return r, v
 }
 
-func instanceFileEntry(name string, data []byte) model.Entry {
-	return model.Entry{Path: name, Kind: model.File, Size: int64(len(data)), SHA256: projectHash(data)}
-}
-
-func projectHash(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
-func TestBackupCreatesColdSelfContainedInstance(t *testing.T) {
-	i, setupCode, source := newTestInstance(t)
+func TestBackupRestoresHostedInstance(t *testing.T) {
 	ctx := context.Background()
-	user, err := i.Setup(ctx, setupCode, "owner", "correct horse battery staple")
+	s, alice := instanceFixture(t)
+	auth := newSyntheticAuthenticator(t, "backup-key")
+	alice, codes := registerKey(t, s, alice, auth, true)
+	bob := ordinaryUser(t, s, alice, "bob")
+	owner := Principal{User: alice}
+	p, err := s.CreateProject(ctx, owner, "assets")
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := i.CreateProject(ctx, user.ID, "assets")
+	if _, err := s.CreateProject(ctx, Principal{User: bob}, "empty"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMember(ctx, owner, alice.Name, p.Name, bob.Name, Reader); err != nil {
+		t.Fatal(err)
+	}
+	token, err := s.CreateToken(ctx, bob, TokenOptions{Name: "scoped", Project: p.ID, Role: Reader, Expires: time.Now().Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, release, err := i.Acquire(ctx, created.ID)
+	revoked, err := s.CreateToken(ctx, bob, TokenOptions{Name: "revoked", Role: Reader})
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := []byte{0, 1, 2, 0xfe, 0xff}
-	commitID := saveInstanceProject(t, p, "assets/project.bin", data)
-	release()
-	destination := filepath.Join(t.TempDir(), "backup")
-	if err := Backup(ctx, source, destination); err == nil || !strings.Contains(err.Error(), "stop its server first") {
-		t.Fatalf("backup of running instance = %v", err)
-	}
-	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("running-instance backup destination exists: %v", err)
-	}
-	if err := i.Close(); err != nil {
-		t.Fatal(err)
-	}
-	sourceID := i.Config.ID
-	i = nil
-	if err := Backup(ctx, source, destination); err != nil {
-		t.Fatalf("cold backup: %v", err)
-	}
-	if _, err := os.Lstat(filepath.Join(destination, "lock")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("backup contains a live instance lock: %v", err)
-	}
-
-	copy, err := Open(ctx, destination)
-	if err != nil {
-		t.Fatalf("open backup: %v", err)
-	}
-	if copy.Config.ID != sourceID || copy.Config.URL != "https://example.test" {
-		t.Fatalf("backup config = %+v", copy.Config)
-	}
-	principal, err := copy.AuthenticatePassword(ctx, user.Username, "correct horse battery staple")
-	if err != nil || principal.UserID != user.ID {
-		t.Fatalf("backup account = %+v, %v", principal, err)
-	}
-	projects, err := copy.Projects(ctx, user.ID)
-	if err != nil || len(projects) != 1 || projects[0].ID != created.ID || projects[0].Slug != created.Slug || projects[0].OwnerID != user.ID || projects[0].Owner != user.Username {
-		t.Fatalf("backup projects = %#v, %v", projects, err)
-	}
-	versioned, releaseCopy, err := copy.Acquire(ctx, created.ID)
+	tokens, err := s.Tokens(ctx, bob)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []byte
-	err = versioned.Read(ctx, commitID, "assets/project.bin", func(_ model.Entry, reader io.Reader) error {
-		var err error
-		got, err = io.ReadAll(reader)
+	for _, token := range tokens {
+		if token.Name == "revoked" {
+			if err := s.RevokeToken(ctx, bob, token.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := s.Sessions().Commit("kept-session", []byte("session payload"), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Sessions().Delete("logged-out"); err != nil {
+		t.Fatal(err)
+	}
+	var protected, expired, latest model.Version
+	var accepted, cancelled model.Save
+	err = s.WithProject(ctx, owner, alice.Name, p.Name, Writer, func(store *project.Store) error {
+		_, protected = backupSave(t, store, alice.ID, "", "protected\x00\xff")
+		if _, err := store.CreateTag(ctx, "keep", protected.ID); err != nil {
+			return err
+		}
+		_, expired = backupSave(t, store, alice.ID, protected.ID, "expired\x00\xff")
+		accepted, latest = backupSave(t, store, alice.ID, expired.ID, "latest\x00\xff")
+		if _, err := store.CreateBranch(ctx, "experiment", latest.ID); err != nil {
+			return err
+		}
+		cancelled = model.Save{ID: uuid.Must(uuid.NewV7()).String(), Branch: "main", Base: latest.ID, Changes: []model.Entry{{Path: "unused", Kind: model.Directory}}}
+		if _, err := store.Cancel(ctx, alice.ID, cancelled); err != nil {
+			return err
+		}
+		if err := store.SetRetention(ctx, model.Retention{Versions: 1, HistoryDays: 90}); err != nil {
+			return err
+		}
+		preview, err := store.PreviewCleanup(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err := store.Cleanup(ctx, preview.Token); err != nil {
+			return err
+		}
+		_, err = store.Collect(ctx)
 		return err
 	})
-	releaseCopy()
-	if err != nil || !bytes.Equal(got, data) {
-		t.Fatalf("restored project bytes = %v, %v", got, err)
-	}
-	if err := copy.Close(); err != nil {
+	if err != nil {
 		t.Fatal(err)
 	}
-	copy = nil
-
-	// The original remains independently usable after backup publication.
-	original, err := Open(ctx, source)
+	var cutoff string
+	if err := s.db.QueryRow("SELECT cutoff FROM retention WHERE project=?", p.ID).Scan(&cutoff); err != nil || cutoff == "" {
+		t.Fatal("missing operation cutoff", err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before := backupFileStates(t, s.directory)
+	backup := filepath.Join(t.TempDir(), "backup")
+	if err := Backup(ctx, s.directory, backup); err != nil {
+		t.Fatal(err)
+	}
+	if after := backupFileStates(t, s.directory); !reflect.DeepEqual(before, after) {
+		t.Fatal("backup changed its source")
+	}
+	for name, state := range backupFileStates(t, backup) {
+		if strings.Contains(name, "/repository/") {
+			if original, ok := before[name]; !ok || original != state {
+				t.Fatalf("native bytes/timestamp changed: %s", name)
+			}
+		}
+		if strings.Contains(name, "/cache/") || strings.HasSuffix(name, ".config") || name == "instance.lock" {
+			t.Fatal("copied derived state", name)
+		}
+	}
+	// Restore follows exactly the documented operation, using the backup as source.
+	restored := filepath.Join(t.TempDir(), "restored")
+	if err := Backup(ctx, backup, restored); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(ctx, restored)
 	if err != nil {
-		t.Fatalf("reopen original: %v", err)
+		t.Fatal(err)
 	}
-	if original.Config.ID != sourceID {
-		t.Fatalf("source instance identity changed: %s", original.Config.ID)
+	defer r.Close(ctx)
+	if r.ID != s.ID || !bytes.Equal(r.key, s.key) || r.Config != s.Config {
+		t.Fatal("instance identity/config changed")
 	}
-	if err := original.Close(); err != nil {
+	if got, err := r.Password(ctx, alice.Name, originalPassword); err != nil || got != alice {
+		t.Fatal("account changed", err)
+	}
+	c, err := r.BeginKeyLogin(ctx, "restored-browser", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.FinishKeyLogin(ctx, "restored-browser", c.ID, webauthnRequest(passkeyAssertionResponse(t, auth, alice.ID, optionChallenge(t, c.Options, false), testOrigin, 1))); err != nil || got != alice {
+		t.Fatal("restored passkey failed", err)
+	}
+	var codeCount int
+	if err := r.db.QueryRow("SELECT count(*) FROM recovery_codes WHERE user_id=?", alice.ID).Scan(&codeCount); err != nil || codeCount != len(codes) {
+		t.Fatal("recovery codes changed", err)
+	}
+	if _, err := r.UseRecovery(ctx, alice, codes[0]); err != nil {
+		t.Fatal("restored recovery code failed", err)
+	}
+	if _, err := r.UseRecovery(ctx, alice, codes[0]); !errors.Is(err, ErrRecovery) {
+		t.Fatal("restored recovery code reused", err)
+	}
+	reader, err := r.Token(ctx, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Project(ctx, reader, "bob", "empty", Reader); !errors.Is(err, ErrAccess) {
+		t.Fatal("token scope widened", err)
+	}
+	if _, err := r.Project(ctx, reader, alice.Name, p.Name, Writer); !errors.Is(err, ErrAccess) {
+		t.Fatal("reader permission widened", err)
+	}
+	if _, err := r.Token(ctx, revoked); !errors.Is(err, ErrCredentials) {
+		t.Fatal("revoked token revived", err)
+	}
+	if data, found, err := r.Sessions().Find("kept-session"); err != nil || !found || string(data) != "session payload" {
+		t.Fatal("session lost", err)
+	}
+	if err := r.Sessions().Commit("logged-out", []byte("late write"), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := r.Sessions().Find("logged-out"); err != nil || found {
+		t.Fatal("logout marker lost", err)
+	}
+	var restoredCutoff string
+	if err := r.db.QueryRow("SELECT cutoff FROM retention WHERE project=?", p.ID).Scan(&restoredCutoff); err != nil || restoredCutoff != cutoff {
+		t.Fatal("operation cutoff changed", err)
+	}
+	err = r.WithProject(ctx, reader, alice.Name, p.Name, Reader, func(store *project.Store) error {
+		for id, want := range map[string]string{protected.ID: "protected\x00\xff", latest.ID: "latest\x00\xff"} {
+			_, file, err := store.File(ctx, id, "assets/data.bin")
+			if err != nil {
+				return err
+			}
+			data, err := io.ReadAll(file)
+			if err := errors.Join(err, file.Close()); err != nil {
+				return err
+			}
+			if string(data) != want {
+				t.Fatal("restored bytes differ")
+			}
+		}
+		if _, _, err := store.File(ctx, expired.ID, "assets/data.bin"); !errors.Is(err, project.ErrExpired) {
+			t.Fatal("expired contents revived", err)
+		}
+		for ref, id := range map[string]string{"keep": protected.ID, "main": latest.ID, "experiment": latest.ID} {
+			v, err := store.Reference(ctx, ref)
+			if err != nil || v.ID != id {
+				t.Fatal("reference changed", ref, err)
+			}
+		}
+		if v, err := store.Save(ctx, alice.ID, accepted, project.Source{}); err != nil || v.ID != latest.ID {
+			t.Fatal("accepted retry lost", err)
+		}
+		if _, err := store.Save(ctx, alice.ID, cancelled, project.Source{}); !errors.Is(err, project.ErrCancelled) {
+			t.Fatal("cancelled save revived", err)
+		}
+		return nil
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestBackupPreservesCurrentSchemaAndCredentials(t *testing.T) {
+func TestBackupRecoversSQLiteOnlyInStage(t *testing.T) {
+	for _, mode := range []string{"journal", "wal"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			s, _ := instanceFixture(t)
+			if err := s.Close(ctx); err != nil {
+				t.Fatal(err)
+			}
+			child := exec.Command(os.Args[0], "-test.run=^TestBackupSQLiteCrashFixture$")
+			child.Env = append(os.Environ(), "LODE_BACKUP_CRASH_FIXTURE="+s.directory, "LODE_BACKUP_CRASH_MODE="+mode)
+			if output, err := child.CombinedOutput(); err != nil {
+				t.Fatalf("crash fixture: %v\n%s", err, output)
+			}
+			info, err := os.Stat(filepath.Join(s.directory, "instance.sqlite-"+mode))
+			if err != nil || info.Size() <= 512 {
+				t.Fatal("missing recovery sidecar", err)
+			}
+			before := backupFileStates(t, s.directory)
+			dest := filepath.Join(t.TempDir(), "copy")
+			if err := Backup(ctx, s.directory, dest); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(before, backupFileStates(t, s.directory)) {
+				t.Fatal("source was recovered or modified")
+			}
+			r, err := Open(ctx, dest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close(ctx)
+			name := "alice"
+			if mode == "wal" {
+				name = "committed"
+			}
+			if _, err := r.Password(ctx, name, originalPassword); err != nil {
+				t.Fatal("SQLite recovery lost committed data or kept uncommitted data", err)
+			}
+		})
+	}
+}
+
+func TestBackupSQLiteCrashFixture(t *testing.T) {
+	dir := os.Getenv("LODE_BACKUP_CRASH_FIXTURE")
+	if dir == "" {
+		return
+	}
+	s, err := Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("LODE_BACKUP_CRASH_MODE") == "wal" {
+		_, err = s.db.Exec("PRAGMA journal_mode=WAL; UPDATE users SET name='committed'")
+	} else {
+		_, err = s.db.Exec("PRAGMA cache_size=5; PRAGMA cache_spill=ON; BEGIN IMMEDIATE; UPDATE users SET name='uncommitted',password=zeroblob(1048576)")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exit without closing SQLite, leaving committed WAL or a hot rollback journal.
+	os.Exit(0)
+}
+
+type backupFileState struct {
+	Hash     [32]byte
+	Modified int64
+}
+
+func backupFileStates(t *testing.T, root string) map[string]backupFileState {
+	t.Helper()
+	result := map[string]backupFileState{}
+	err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, name)
+		if err != nil {
+			return err
+		}
+		result[relative] = backupFileState{sha256.Sum256(data), info.ModTime().UnixNano()}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func TestBackupRefusesUnsafeDestinationsAndLiveSource(t *testing.T) {
 	ctx := context.Background()
-	i, setupCode, source := newTestInstance(t)
-	user, err := i.Setup(ctx, setupCode, "owner", "correct horse battery staple")
-	if err != nil {
+	s, _ := instanceFixture(t)
+	root := t.TempDir()
+	dest := filepath.Join(root, "backup")
+	if err := Backup(ctx, s.directory, dest); err == nil || !strings.Contains(err.Error(), "stop the server") {
+		t.Fatal("live source accepted", err)
+	}
+	if err := s.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	security, err := NewSecurity(i.Store, testOrigin)
-	if err != nil {
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(s.directory, alias); err != nil {
 		t.Fatal(err)
 	}
-	auth := newSyntheticAuthenticator(t, "backup-legacy-preserved-key")
-	registerSynthetic(t, ctx, security, user, auth, "legacy-enrollment-session")
-	keysBefore, err := security.Keys(ctx, user.ID)
-	if err != nil || len(keysBefore) != 1 {
-		t.Fatalf("legacy key count %d: %v", len(keysBefore), err)
+	for _, target := range []string{s.directory, filepath.Join(s.directory, "nested"), filepath.Join(alias, "nested"), root} {
+		if err := Backup(ctx, s.directory, target); err == nil {
+			t.Fatal("unsafe destination accepted", target)
+		}
 	}
-	if err := i.Close(); err != nil {
-		t.Fatal(err)
-	}
-	dbPath := filepath.Join(source, "instance.sqlite")
-	sourceBefore, err := os.ReadFile(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	destination := filepath.Join(t.TempDir(), "current-backup")
-	if err := Backup(ctx, source, destination); err != nil {
-		t.Fatalf("backup current source: %v", err)
-	}
-	sourceAfter, err := os.ReadFile(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(sourceAfter, sourceBefore) {
-		t.Fatal("backup migrated or otherwise changed the source database")
-	}
-
-	copy, err := Open(ctx, destination)
-	if err != nil {
-		t.Fatalf("open backup: %v", err)
-	}
-	var version int
-	if err := copy.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 3 {
-		t.Fatalf("backup schema version = %d, err %v", version, err)
-	}
-	backupSecurity, err := NewSecurity(copy.Store, testOrigin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keysAfter, err := backupSecurity.Keys(ctx, user.ID)
-	if err != nil || len(keysAfter) != 1 || !bytes.Equal(keysAfter[0].raw, keysBefore[0].raw) {
-		t.Fatalf("backup key count %d, error %v", len(keysAfter), err)
-	}
-	if err := copy.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestBackupRejectsDestinationsAndCleansCancelledWork(t *testing.T) {
-	i, _, source := newTestInstance(t)
-	if err := i.Close(); err != nil {
-		t.Fatal(err)
-	}
-	i = nil
-	if err := Backup(context.Background(), source, filepath.Join(source, "inside")); err == nil {
-		t.Fatal("backup inside source succeeded")
-	}
-	destination := filepath.Join(t.TempDir(), "existing")
-	if err := os.Mkdir(destination, 0700); err != nil {
-		t.Fatal(err)
-	}
-	marker := filepath.Join(destination, "keep")
-	if err := os.WriteFile(marker, []byte("untouched"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := Backup(context.Background(), source, destination); err == nil {
-		t.Fatal("backup replaced an existing destination")
-	}
-	if data, err := os.ReadFile(marker); err != nil || string(data) != "untouched" {
-		t.Fatalf("existing destination marker = %q, %v", data, err)
-	}
-	cancelled, cancel := context.WithCancel(context.Background())
+	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	cancelDestination := filepath.Join(t.TempDir(), "cancelled")
-	if err := Backup(cancelled, source, cancelDestination); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled backup error = %v", err)
+	if err := Backup(cancelled, s.directory, dest); !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled copy accepted", err)
 	}
-	if _, err := os.Lstat(cancelDestination); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("cancelled destination exists: %v", err)
-	}
-}
-
-func TestBackupRefusesAnIndependentlyOpenProject(t *testing.T) {
-	i, setupCode, source := newTestInstance(t)
-	owner := setupTestOwner(t, i, setupCode, "owner")
-	created, err := i.CreateProject(context.Background(), owner.ID, "locked")
-	if err != nil {
-		t.Fatal(err)
-	}
-	projectPath := filepath.Join(source, "projects", created.ID)
-	if err := i.Close(); err != nil {
-		t.Fatal(err)
-	}
-	i = nil
-	locked, err := project.Open(context.Background(), projectPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	destination := filepath.Join(t.TempDir(), "backup")
-	if err := Backup(context.Background(), source, destination); err == nil || !strings.Contains(err.Error(), "backup registered project") {
-		t.Fatalf("backup with independently open project = %v", err)
-	}
-	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("failed backup published a destination: %v", err)
-	}
-	if err := locked.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if entries, _ := filepath.Glob(filepath.Join(filepath.Dir(destination), ".backup.partial-*")); len(entries) != 0 {
-		t.Fatalf("failed backup staging data remains: %v", entries)
+	if _, err := os.Lstat(dest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("failed copy published a destination", err)
 	}
 }
 
-func TestImportProjectPreservesIDAndContent(t *testing.T) {
-	ctx := context.Background()
-	sourceDir := filepath.Join(t.TempDir(), "legacy-project")
-	source, err := project.Create(ctx, sourceDir)
+func TestBackupCancellationDuringCopyRemovesStage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s, user := instanceFixture(t)
+	p, err := s.CreateProject(ctx, Principal{User: user}, "data")
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := []byte("opaque legacy project bytes\x00\xff")
-	commitID := saveInstanceProject(t, source, "nested/file.bin", data)
-	projectID := source.ID()
-	if err := source.Close(); err != nil {
+	if err := s.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	i, setupCode, _ := newTestInstance(t)
-	owner := setupTestOwner(t, i, setupCode, "owner")
-	imported, err := i.ImportProject(ctx, owner.ID, "legacy", sourceDir)
-	if err != nil {
-		t.Fatalf("import project: %v", err)
-	}
-	if imported.ID != projectID || imported.Slug != "legacy" || imported.OwnerID != owner.ID || imported.Owner != owner.Username {
-		t.Fatalf("imported metadata = %+v; source ID %s", imported, projectID)
-	}
-	if _, err := i.ImportProject(ctx, owner.ID, "legacy-again", sourceDir); err == nil || !strings.Contains(err.Error(), "already registered") {
-		t.Fatalf("duplicate ID import = %v", err)
-	}
-	p, release, err := i.Acquire(ctx, projectID)
+	// A sparse source makes the copy observably long without allocating a large
+	// fixture. Cancel only after a nonempty staged copy proves IO has begun.
+	name := filepath.Join("projects", p.ID, "repository", "cancel-probe")
+	f, err := os.Create(filepath.Join(s.directory, name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []byte
-	err = p.Read(ctx, commitID, "nested/file.bin", func(_ model.Entry, reader io.Reader) error {
-		var err error
-		got, err = io.ReadAll(reader)
-		return err
-	})
-	release()
-	if err != nil || !bytes.Equal(got, data) {
-		t.Fatalf("imported file bytes = %v, %v", got, err)
+	if err := errors.Join(f.Truncate(1<<30), f.Close()); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(sourceDir, "project.json")); err != nil {
-		t.Fatalf("import modified legacy source: %v", err)
+	parent := t.TempDir()
+	done := make(chan error, 1)
+	go func() { done <- Backup(ctx, s.directory, filepath.Join(parent, "backup")) }()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case err := <-done:
+			t.Fatalf("copy ended before interruption: %v", err)
+		case <-tick.C:
+			paths, err := filepath.Glob(filepath.Join(parent, ".lode-backup-*", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(paths) == 0 {
+				continue
+			}
+			info, err := os.Stat(paths[0])
+			if err != nil || info.Size() == 0 {
+				continue
+			}
+			cancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatal("interrupted copy result", err)
+			}
+			entries, err := os.ReadDir(parent)
+			if err != nil || len(entries) != 0 {
+				t.Fatal("cancelled copy left staging or destination", err)
+			}
+			return
+		}
+	}
+}
+
+func TestBackupRejectsIncompleteOrDamagedSources(t *testing.T) {
+	for _, damage := range []string{"creating", "deleting", "unregistered", "symlink", "fifo", "native pack", "missing pack", "metadata", "foreign key"} {
+		t.Run(damage, func(t *testing.T) {
+			ctx := context.Background()
+			s, user := instanceFixture(t)
+			p, err := s.CreateProject(ctx, Principal{User: user}, "data")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.WithProject(ctx, Principal{User: user}, user.Name, p.Name, Writer, func(p *project.Store) error {
+				backupSave(t, p, user.ID, "", strings.Repeat("opaque\x00\xff", 100000))
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			switch damage {
+			case "creating", "deleting":
+				_, err = s.db.Exec("UPDATE projects SET state=?", damage)
+			case "metadata":
+				_, err = s.db.Exec("DELETE FROM directories")
+			case "foreign key":
+				_, err = s.db.Exec("PRAGMA foreign_keys=OFF; UPDATE projects SET owner='missing'; PRAGMA foreign_keys=ON;")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Close(ctx); err != nil {
+				t.Fatal(err)
+			}
+			repository := filepath.Join(s.directory, "projects", p.ID, "repository")
+			switch damage {
+			case "unregistered":
+				err = os.Mkdir(filepath.Join(s.directory, "projects", "orphan"), 0700)
+			case "symlink":
+				err = os.Symlink(filepath.Join(s.directory, "config.json"), filepath.Join(repository, "link"))
+			case "fifo":
+				err = unix.Mkfifo(filepath.Join(repository, "pipe"), 0600)
+			case "native pack", "missing pack":
+				changed := false
+				err = filepath.WalkDir(repository, func(name string, entry fs.DirEntry, err error) error {
+					if err != nil {
+						return err
+					}
+					relative, err := filepath.Rel(repository, name)
+					if err != nil {
+						return err
+					}
+					if !entry.IsDir() && strings.HasPrefix(relative, "p") {
+						changed = true
+						if damage == "missing pack" {
+							return os.Remove(name)
+						}
+						return os.WriteFile(name, []byte("corrupt native pack"), 0600)
+					}
+					return nil
+				})
+				if !changed {
+					t.Fatal("fixture has no regular content pack")
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent := t.TempDir()
+			dest := filepath.Join(parent, "backup")
+			if err := Backup(ctx, s.directory, dest); err == nil {
+				t.Fatal("damaged/incomplete source accepted")
+			}
+			entries, err := os.ReadDir(parent)
+			if err != nil || len(entries) != 0 {
+				t.Fatal("failed copy left a published or staged destination", err)
+			}
+		})
 	}
 }
