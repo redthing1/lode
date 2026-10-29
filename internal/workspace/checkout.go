@@ -113,7 +113,7 @@ func (w *Workspace) update(ctx context.Context, c *remote.Client, choices map[st
 	if err != nil {
 		return err
 	}
-	local, err := w.observeSelection(ctx, w.state.Selection)
+	local, err := w.observeSelection(ctx, w.state.Selection, target.Baseline...)
 	if err != nil {
 		return err
 	}
@@ -146,10 +146,6 @@ func (w *Workspace) Select(ctx context.Context, token string, selection model.Se
 			return fmt.Errorf("cannot unload changed path %q; save or move it aside first", e.Path)
 		}
 	}
-	local, err := w.observeSelection(ctx, selection)
-	if err != nil {
-		return err
-	}
 	c, err := w.Client(token)
 	if err != nil {
 		return err
@@ -158,6 +154,10 @@ func (w *Workspace) Select(ctx context.Context, token string, selection model.Se
 	target := w.state
 	target.Selection = selection
 	target.Baseline, err = c.Inventory(ctx, target.Owner, target.Project, target.Version, selection)
+	if err != nil {
+		return err
+	}
+	local, err := w.observeSelection(ctx, selection, target.Baseline...)
 	if err != nil {
 		return err
 	}

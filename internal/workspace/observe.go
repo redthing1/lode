@@ -12,8 +12,10 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/redthing1/lode/internal/model"
+	"github.com/redthing1/lode/internal/progress"
 )
 
 type contextReader struct {
@@ -33,9 +35,14 @@ func (w *Workspace) observe(ctx context.Context) ([]model.Entry, error) {
 	return model.Selected(entries, w.state.Selection), err
 }
 
-func (w *Workspace) observeSelection(ctx context.Context, selection model.Selection) ([]model.Entry, error) {
+func (w *Workspace) observeSelection(ctx context.Context, selection model.Selection, incoming ...model.Entry) ([]model.Entry, error) {
+	ignored, err := w.ignoreNew(incoming)
+	if err != nil {
+		return nil, err
+	}
+	progress.Report(ctx, progress.Event{Phase: "Checking files"})
 	var entries []model.Entry
-	err := fs.WalkDir(w.root.FS(), ".", func(name string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(w.root.FS(), ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -56,6 +63,12 @@ func (w *Workspace) observeSelection(ctx context.Context, selection model.Select
 			return fs.SkipDir
 		}
 		if !included && !selection.Descends(name) {
+			return nil
+		}
+		if ignored(name, d.IsDir()) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if !model.ValidPath(name) || !filepath.IsLocal(filepath.FromSlash(name)) {
@@ -103,7 +116,11 @@ func (w *Workspace) observeFile(ctx context.Context, name string, observed fs.Fi
 		return model.Entry{}, fmt.Errorf("%q changed while inspecting it", name)
 	}
 	h := sha256.New()
-	n, err := io.Copy(h, contextReader{ctx, f})
+	displayName := name
+	if strings.HasPrefix(name, ".lode/") {
+		displayName = ""
+	}
+	n, err := io.Copy(h, progress.Reader(ctx, "Checking files", displayName, before.Size(), contextReader{ctx, f}))
 	if err != nil {
 		return model.Entry{}, err
 	}

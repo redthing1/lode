@@ -31,16 +31,16 @@ func (w *Workspace) Switch(ctx context.Context, token, branch string) error {
 	if target.Version == w.state.Version {
 		return w.beginTransition(ctx, c, target, target.Version, nil, nil)
 	}
-	local, err := w.observeSelection(ctx, w.state.Selection)
+	target.Baseline, err = c.Inventory(ctx, target.Owner, target.Project, target.Version, target.Selection)
+	if err != nil {
+		return err
+	}
+	local, err := w.observeSelection(ctx, w.state.Selection, target.Baseline...)
 	if err != nil {
 		return err
 	}
 	if len(model.Changes(w.state.Baseline, model.Selected(local, w.state.Selection), w.state.Selection)) != 0 {
-		return errors.New("save selected changes before switching branches")
-	}
-	target.Baseline, err = c.Inventory(ctx, target.Owner, target.Project, target.Version, target.Selection)
-	if err != nil {
-		return err
+		return errors.New("save or move local changes before switching branches")
 	}
 	entries, err := model.Materialized(target.Baseline)
 	if err != nil {
@@ -69,14 +69,7 @@ func (w *Workspace) Restore(ctx context.Context, token, ref string, paths []stri
 	if len(selection) == 0 {
 		return errors.New("restore matches no selected paths")
 	}
-	local, err := w.observeSelection(ctx, selection)
-	if err != nil {
-		return err
-	}
 	baseline := model.Selected(w.state.Baseline, selection)
-	if changes := model.Changes(baseline, model.Selected(local, selection), selection); len(changes) > 0 {
-		return fmt.Errorf("cannot restore changed path %q; save or move it aside first", changes[0].Path)
-	}
 	c, err := w.Client(token)
 	if err != nil {
 		return err
@@ -92,6 +85,13 @@ func (w *Workspace) Restore(ctx context.Context, token, ref string, paths []stri
 	entries, err := c.Inventory(ctx, w.state.Owner, w.state.Project, v.ID, selection)
 	if err != nil {
 		return err
+	}
+	local, err := w.observeSelection(ctx, selection, entries...)
+	if err != nil {
+		return err
+	}
+	if changes := model.Changes(baseline, model.Selected(local, selection), selection); len(changes) > 0 {
+		return fmt.Errorf("cannot restore changed path %q; save or move it aside first", changes[0].Path)
 	}
 	if len(entries) == 0 && len(baseline) == 0 {
 		return errors.New("restore matches no files or directories")

@@ -51,7 +51,7 @@ func TestSelectedBranchSwitchAndRestore(t *testing.T) {
 		t.Fatal("switch did not install main")
 	}
 	writeFile(t, w.Directory(), "assets/a", "dirty")
-	if err := w.Switch(ctx, f.token, "experiment"); err == nil || !strings.Contains(err.Error(), "save selected changes") {
+	if err := w.Switch(ctx, f.token, "experiment"); err == nil || !strings.Contains(err.Error(), "save or move local changes") {
 		t.Fatalf("dirty switch: %v", err)
 	}
 	writeFile(t, w.Directory(), "assets/a", "first")

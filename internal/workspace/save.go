@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redthing1/lode/internal/model"
+	"github.com/redthing1/lode/internal/progress"
 	"github.com/redthing1/lode/internal/remote"
 )
 
@@ -17,6 +18,7 @@ type pendingSave struct {
 }
 
 func (w *Workspace) Save(ctx context.Context, token, message string) (model.Version, error) {
+	progress.Report(ctx, progress.Event{Phase: "Connecting"})
 	if err := w.ready(); err != nil {
 		return model.Version{}, err
 	}
@@ -144,6 +146,7 @@ func (w *Workspace) publish(ctx context.Context, c *remote.Client, pending pendi
 	if err != nil {
 		return model.Version{}, err
 	}
+	progress.Report(ctx, progress.Event{Phase: "Finishing save"})
 	if err := w.acceptSave(pending, v); err != nil {
 		return v, err
 	}

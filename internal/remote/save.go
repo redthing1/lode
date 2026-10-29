@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/redthing1/lode/internal/model"
+	"github.com/redthing1/lode/internal/progress"
 	"github.com/redthing1/lode/internal/transfer"
 )
 
@@ -34,6 +35,7 @@ type signatureRange struct{ offset, size int64 }
 // Save resolves accepted retries before opening local files. Signatures are
 // prepared before publication takes the mutation lock and spooled to one temp file.
 func (c *Client) Save(ctx context.Context, owner, name string, request model.Save, baseline []model.Entry, open func(model.Entry) (io.ReadCloser, error)) (model.Version, error) {
+	progress.Report(ctx, progress.Event{Phase: "Checking save"})
 	previous, err := c.Resolve(ctx, owner, name, request)
 	if err == nil {
 		return previous, nil
@@ -85,6 +87,7 @@ func (c *Client) Save(ctx context.Context, owner, name string, request model.Sav
 				return model.Version{}, err
 			}
 		}
+		progress.Report(ctx, progress.Event{Phase: "Preparing transfer", Path: e.Path})
 		r, err := c.request(ctx, "GET", versionPath(owner, name, request.Base)+"/signature?path="+url.QueryEscape(e.Path), nil, "")
 		if err != nil {
 			return model.Version{}, err
@@ -140,16 +143,20 @@ func (c *Client) Save(ctx context.Context, owner, name string, request model.Sav
 					return err
 				}
 				if delta {
-					err = transfer.Delta(ctx, io.NewSectionReader(spool, signature.offset, signature.size), source, part)
+					err = transfer.Delta(ctx, io.NewSectionReader(spool, signature.offset, signature.size), progress.Reader(ctx, "Encoding delta", e.Path, e.Size, source), part)
 				} else {
-					_, err = io.Copy(part, source)
+					_, err = io.Copy(part, progress.Reader(ctx, "Uploading", e.Path, e.Size, source))
 				}
 				err = errors.Join(err, source.Close())
 				if err != nil {
 					return err
 				}
 			}
-			return body.Close()
+			if err := body.Close(); err != nil {
+				return err
+			}
+			progress.Report(ctx, progress.Event{Phase: "Waiting for server"})
+			return nil
 		}()
 		writer.CloseWithError(err)
 		done <- err

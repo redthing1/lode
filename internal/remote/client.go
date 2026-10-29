@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/redthing1/lode/internal/model"
+	"github.com/redthing1/lode/internal/progress"
 	"github.com/redthing1/lode/internal/transfer"
 )
 
@@ -171,6 +172,7 @@ func (c *Client) Inventory(ctx context.Context, owner, name, version string, sel
 	if len(b) > 64<<10 {
 		return nil, errors.New("selection exceeds metadata limit")
 	}
+	progress.Report(ctx, progress.Event{Phase: "Loading file list"})
 	r, err := c.request(ctx, "POST", versionPath(owner, name, version)+"/inventory", bytes.NewReader(b), "application/json")
 	if err != nil {
 		return nil, err
@@ -237,7 +239,7 @@ func (c *Client) Download(ctx context.Context, owner, name, version string, e mo
 		if _, err := basis.Seek(0, io.SeekStart); err != nil {
 			return err
 		}
-		if err := transfer.Signature(ctx, basis, basisSize, &signature); err != nil {
+		if err := transfer.Signature(ctx, progress.Reader(ctx, "Preparing download", e.Path, basisSize, basis), basisSize, &signature); err != nil {
 			return err
 		}
 		method, encoding = "POST", "application/octet-stream"
@@ -246,13 +248,14 @@ func (c *Client) Download(ctx context.Context, owner, name, version string, e mo
 	if useDelta {
 		body = &signature
 	}
+	progress.Report(ctx, progress.Event{Phase: "Downloading", Path: e.Path, Total: e.Size})
 	r, err := c.request(ctx, method, versionPath(owner, name, version)+"/file?path="+url.QueryEscape(e.Path), body, encoding)
 	if err != nil {
 		return err
 	}
 	defer r.Body.Close()
 	if !useDelta {
-		return copyFile(out, io.LimitReader(r.Body, e.Size+1), e)
+		return copyFile(progress.Writer(ctx, "Downloading", e.Path, e.Size, out), io.LimitReader(r.Body, e.Size+1), e)
 	}
 	if r.Header.Get("Content-Type") != DeltaType {
 		return errors.New("unexpected download encoding")
@@ -263,7 +266,7 @@ func (c *Client) Download(ctx context.Context, owner, name, version string, e mo
 	}
 	delta := &io.LimitedReader{R: r.Body, N: limit}
 	h := sha256.New()
-	if err := transfer.Patch(ctx, basis, basisSize, delta, e.Size, io.MultiWriter(out, h)); err != nil {
+	if err := transfer.Patch(ctx, basis, basisSize, delta, e.Size, io.MultiWriter(progress.Writer(ctx, "Reconstructing", e.Path, e.Size, out), h)); err != nil {
 		return err
 	}
 	if delta.N == 0 {
@@ -285,6 +288,7 @@ func (c *Client) DownloadBatch(ctx context.Context, owner, name, version string,
 	if err != nil {
 		return err
 	}
+	progress.Report(ctx, progress.Event{Phase: "Downloading"})
 	r, err := c.request(ctx, "POST", versionPath(owner, name, version)+"/files", bytes.NewReader(b), "application/json")
 	if err != nil {
 		return err
@@ -293,7 +297,7 @@ func (c *Client) DownloadBatch(ctx context.Context, owner, name, version string,
 	for i, e := range files {
 		verified := false
 		err := receive(i, func(out io.Writer) error {
-			if err := copyFile(out, io.LimitReader(r.Body, e.Size), e); err != nil {
+			if err := copyFile(progress.Writer(ctx, "Downloading", e.Path, e.Size, out), io.LimitReader(r.Body, e.Size), e); err != nil {
 				return err
 			}
 			verified = true

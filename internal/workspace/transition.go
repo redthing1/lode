@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redthing1/lode/internal/model"
+	activity "github.com/redthing1/lode/internal/progress"
 	"github.com/redthing1/lode/internal/remote"
 )
 
@@ -195,8 +196,10 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 		a := plan.Changes[progress.Cursor]
 		var err error
 		if progress.Reverse {
+			activity.Report(ctx, activity.Event{Phase: "Reverting files", Path: a.Before.Path})
 			err = w.reverseAction(ctx, a, progress.Cursor)
 		} else {
+			activity.Report(ctx, activity.Event{Phase: "Updating files", Path: a.After.Path})
 			err = w.applyAction(ctx, c, plan.Source, a, progress.Cursor)
 		}
 		if err != nil {
@@ -211,6 +214,7 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 			return err
 		}
 	}
+	activity.Report(ctx, activity.Event{Phase: "Finishing workspace"})
 	if !progress.Reverse {
 		if err := w.writeJSON("state.json", plan.Target); err != nil {
 			return err

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/redthing1/lode/internal/progress"
 	"golang.org/x/sys/unix"
 )
 
@@ -123,6 +124,7 @@ func Backup(ctx context.Context, source, destination string) (err error) {
 			return fmt.Errorf("copy project %s: %w", id, err)
 		}
 	}
+	progress.Report(ctx, progress.Event{Phase: "Verifying backup"})
 	s, err := openStore(ctx, destination, stage)
 	if err != nil {
 		return err
@@ -261,7 +263,7 @@ func copyBackupFile(ctx context.Context, in, out *os.Root, name string) error {
 	if err != nil {
 		return err
 	}
-	n, copyErr := io.Copy(g, backupReader{ctx, f})
+	n, copyErr := io.Copy(g, progress.Reader(ctx, "Copying backup", "", info.Size(), backupReader{ctx, f}))
 	if copyErr == nil && n != info.Size() {
 		copyErr = fmt.Errorf("backup source %q changed size", name)
 	}

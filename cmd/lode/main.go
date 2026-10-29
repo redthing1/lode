@@ -23,7 +23,7 @@ func main() {
 	}
 }
 
-const usage = `Usage: lode [-C directory] <command>
+const usage = `Usage: lode [-C directory] [--no-progress] <command>
 
   login         Save an access token for a server
   projects      List or create projects
@@ -59,6 +59,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	global := flags("lode", usage, out)
 	directory := global.String("C", ".", "working `directory`")
+	noProgress := global.Bool("no-progress", false, "disable interactive progress")
 	if err := global.Parse(args); err != nil {
 		return err
 	}
@@ -70,6 +71,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	if args[0] == "help" {
 		args = append(args[1:], "--help")
 	}
+	ctx, out, finish := startProgress(ctx, out, args[0], *noProgress)
+	defer finish()
 	switch args[0] {
 	case "version":
 		if len(args) != 1 {

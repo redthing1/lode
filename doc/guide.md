@@ -4,7 +4,7 @@ A **project** holds complete saved versions on the server. A **workspace** is yo
 
 Editing and `status` work offline. Saving and downloading require the server.
 
-[Connect](#connect) · [Daily work](#daily-work) · [Selected files](#selected-files) · [Branches](#branches-and-versions) · [Storage](#keep-versions-and-reclaim-space) · [Sharing](#sharing-and-access) · [Security](#account-security) · [Recovery](#interrupted-work)
+[Connect](#connect) · [Daily work](#daily-work) · [Ignore files](#ignore-files) · [Selected files](#selected-files) · [Branches](#branches-and-versions) · [Storage](#keep-versions-and-reclaim-space) · [Sharing](#sharing-and-access) · [Security](#account-security) · [Recovery](#interrupted-work)
 
 ## Connect
 
@@ -44,6 +44,8 @@ lode log
 
 Stop applications writing to the project during saves and workspace changes. Lode versions ordinary files and directories; it does not capture a consistent snapshot of a running application. Selected symlinks and special files are refused.
 
+Longer commands show one updating progress line in an interactive terminal: the current phase, file, bytes processed, and elapsed time. Byte counts cover the current file, including local processing during delta transfers. Progress goes to stderr and disappears when the command finishes. Redirect stderr or use `lode --no-progress save` to disable it.
+
 ### Get others' changes
 
 ```sh
@@ -63,6 +65,27 @@ lode update --local assets/model.bin --incoming references/source.bin
 - A directory choice covers its whole subtree.
 
 Repeat these options for additional conflicts. Lode treats binary files as whole files; it does not merge their internal formats.
+
+## Ignore files
+
+Lode ignores new `.DS_Store`, `Thumbs.db`, and `desktop.ini` files at any depth. Other dotfiles and application files are included normally.
+
+Put project rules in `.lodeignore` at the workspace root:
+
+```gitignore
+# Local generated files
+cache/
+*.tmp
+!reference.tmp
+```
+
+Rules use familiar ignore syntax: `*`, `?`, character classes, and `**` for directory levels. A trailing `/` matches directories; a leading `/` anchors a rule at the root. Patterns containing a slash are root-relative; other patterns match names anywhere. `#` starts a comment and `!` includes a match again. Later rules win, but an excluded parent directory must be included before its children can be included.
+
+For rules specific to this workspace, use `.lode/ignore`. These override `.lodeignore`, which overrides the defaults. For example, `!.DS_Store` includes that name again. Lode reads these two files only; it does not read `.gitignore` or nested ignore files.
+
+Ignores affect new local files. Already saved files remain tracked, including their edits and deletions. To remove an accidentally saved file, delete it locally and save that deletion. Ignored local files are preserved during workspace changes; a collision with an incoming saved file still requires resolution.
+
+`.lodeignore` is an ordinary versioned file. Include it in your selection to share its rules. Selection controls which saved paths you download; ignores control which new local files you save.
 
 ## Selected files
 

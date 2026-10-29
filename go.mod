@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	github.com/alexedwards/scs/v2 v2.9.0
+	github.com/bmatcuk/doublestar/v4 v4.10.4
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
