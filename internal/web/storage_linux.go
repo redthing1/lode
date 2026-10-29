@@ -22,10 +22,7 @@ func (s *Server) storagePage(w http.ResponseWriter, r *http.Request, actor insta
 		if err != nil {
 			return err
 		}
-		p.Usage, err = store.Usage(r.Context())
-		if err != nil {
-			return err
-		}
+		p.Storage = s.instance.CachedUsage(info.ID)
 		if r.Method != "POST" {
 			return nil
 		}
@@ -57,7 +54,8 @@ func (s *Server) storagePage(w http.ResponseWriter, r *http.Request, actor insta
 			var result model.Collection
 			result, err = store.Collect(r.Context())
 			if err == nil {
-				p.Collection, p.Usage = &result, result.After
+				p.Collection = &result
+				p.Storage = s.instance.RecordUsage(info.ID, result.After)
 			}
 		default:
 			err = project.ErrRequest

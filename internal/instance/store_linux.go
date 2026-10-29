@@ -95,6 +95,7 @@ type Store struct {
 	lifecycle sync.Mutex // Serializes repository open, eviction, deletion and shutdown.
 	mu        sync.Mutex
 	projects  map[string]*openedProject
+	usage     usageCache
 	auth      *webauthn.WebAuthn
 }
 

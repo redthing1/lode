@@ -56,7 +56,8 @@ type page struct {
 	Policy                                model.Retention
 	Cleanup                               *model.CleanupPreview
 	Applied                               bool
-	Usage                                 model.StorageUsage
+	Storage                               instance.StorageSample
+	AccountUsage                          instance.AccountUsage
 	Collection                            *model.Collection
 }
 
@@ -79,16 +80,17 @@ func treeURL(p instance.Project, version, name, after string) string {
 	return u
 }
 func size(n int64) string {
-	if n < 1024 {
+	units := [...]string{"B", "KiB", "MiB", "GiB", "TiB", "PiB"}
+	value := float64(n)
+	i := 0
+	for value >= 1024 && i < len(units)-1 {
+		value /= 1024
+		i++
+	}
+	if i == 0 {
 		return fmt.Sprintf("%d B", n)
 	}
-	if n < 1<<20 {
-		return fmt.Sprintf("%.1f KiB", float64(n)/1024)
-	}
-	if n < 1<<30 {
-		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
-	}
-	return fmt.Sprintf("%.1f GiB", float64(n)/(1<<30))
+	return fmt.Sprintf("%.1f %s", value, units[i])
 }
 
 var views = template.Must(template.New("pages").Funcs(template.FuncMap{

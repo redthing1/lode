@@ -19,6 +19,7 @@ func (s *Server) collect(w http.ResponseWriter, r *http.Request, actor instance.
 		if err != nil {
 			return err
 		}
+		s.instance.RecordUsage(p.ID(), result.After)
 		return jsonReply(w, result)
 	})
 }

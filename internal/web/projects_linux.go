@@ -100,6 +100,7 @@ func (s *Server) projectPage(w http.ResponseWriter, r *http.Request, actor insta
 			return err
 		}
 	}
+	p.Storage = s.instance.CachedUsage(p.Project.ID)
 	render(w, 200, "project", p)
 	return nil
 }

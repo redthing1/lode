@@ -155,7 +155,13 @@ func (s *Store) finishDeletion(ctx context.Context, id string) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.usage.mu.Lock()
+	delete(s.usage.entries, id)
+	s.usage.mu.Unlock()
+	return nil
 }
 
 func (s *Store) resumeDeletions(ctx context.Context) error {

@@ -9,6 +9,12 @@
 {{define "storage"}}{{template "top" .}}{{template "project-heading" .}}
 <div class="settings">{{template "project-settings-nav" .}}<div class="settings-content">
 <h1>Storage</h1>
+<section class="panel padded token-form" id="collection"><h2>{{if .Collection}}Collection complete{{else}}Content storage{{end}}</h2>
+{{if .Collection}}<p>Allocated space: {{size .Collection.Before.Allocated}} → <strong>{{size .Collection.After.Allocated}}</strong></p>
+{{else}}<p data-storage="{{projectURL .Project}}/usage">{{template "storage-size" .Storage}}</p>{{end}}
+<p class="muted hint">Includes history and uncollected data; excludes the database and cache. Collection pauses this project's reads and saves and needs free space for rewriting.</p>
+<form method="post" action="#collection"><button name="action" value="collect" class="secondary">Collect storage</button></form>
+</section>
 <section class="panel padded token-form"><h2>Retention</h2>
 <form method="post"><input type="hidden" name="action" value="policy">
 <label>Recent versions per branch<input type="number" name="versions" min="1" max="10000" value="{{.Policy.Versions}}" required></label>
@@ -29,12 +35,6 @@
 <form method="post" class="actions">
 {{if and .Cleanup (not .Applied)}}<input type="hidden" name="token" value="{{.Cleanup.Token}}"><button name="action" value="apply" class="secondary danger">Apply cleanup</button>{{end}}
 <button name="action" value="preview" class="secondary">Preview cleanup</button></form>
-</section>
-<section class="panel padded token-form" id="collection"><h2>{{if .Collection}}Collection complete{{else}}Content storage{{end}}</h2>
-{{if .Collection}}<p>Allocated space: {{size .Collection.Before.Allocated}} → <strong>{{size .Collection.After.Allocated}}</strong></p>
-{{else}}<p><strong>{{size .Usage.Allocated}}</strong> allocated · {{size .Usage.Bytes}} in repository files</p>{{end}}
-<p class="muted">Excludes the database and cache. Collection reclaims unreferenced contents; retained and shared contents remain. It temporarily pauses this project's reads and saves and needs free space for rewriting.</p>
-<form method="post" action="#collection"><button name="action" value="collect" class="secondary">Collect storage</button></form>
 </section>
 </div></div>{{template "bottom" .}}{{end}}
 

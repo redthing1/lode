@@ -1,0 +1,17 @@
+{{define "storage-size"}}<span class="storage-size" title="Project storage, including history. {{if .Known}}Measured {{time .Measured}}.{{if .Failed}} Last refresh failed.{{end}}{{else}}{{if .Failed}}Unavailable.{{else}}Measuring…{{end}}{{end}}">{{template "storage-icon"}}<span class="sr-only">Storage: </span><span class="storage-value">{{if .Known}}{{size .Allocated}}{{else}}{{if .Failed}}Unavailable{{else}}…{{end}}{{end}}</span></span>{{end}}
+{{define "project-size"}}{{template "storage-size" .Storage}}{{end}}
+
+{{define "usage"}}{{template "top" .}}{{template "settings-top" .}}
+<h1>Usage</h1>
+<div data-storage="/settings/usage?refresh=1">{{template "usage-content" .}}</div>
+{{template "settings-bottom" .}}{{template "bottom" .}}{{end}}
+
+{{define "usage-content"}}
+<div class="usage-summary"><span class="muted">Owned projects</span><strong>{{if .AccountUsage.Complete}}{{size .AccountUsage.Total.Allocated}}{{else}}—{{end}}</strong></div>
+<div class="panel"><table class="usage-table"><thead><tr><th>Project</th><th>Storage</th></tr></thead><tbody>
+{{range .AccountUsage.Projects}}<tr><td><a href="{{projectURL .Project}}{{if eq .State "deleting"}}/settings/delete{{end}}">{{.Owner}} / <strong>{{.Name}}</strong></a>{{if eq .State "deleting"}} <span class="badge">Deleting</span>{{end}}</td><td>{{template "storage-size" .Storage}}</td></tr>
+{{else}}<tr><td colspan="2" class="muted">No owned projects.</td></tr>{{end}}
+</tbody></table></div>
+<p class="hint muted">Includes history and uncollected data; excludes shared server metadata.</p>
+{{if not .AccountUsage.Complete}}<p class="hint muted">Some sizes are not yet available.</p>{{end}}
+{{end}}

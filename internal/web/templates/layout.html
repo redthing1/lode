@@ -41,10 +41,12 @@
     <a href="/settings/security" {{if eq .Section "security"}}aria-current="page"{{end}}>Security</a>
     <a href="/settings/appearance" {{if eq .Section "appearance"}}aria-current="page"{{end}}>Appearance</a>
     <a href="/settings/tokens" {{if eq .Section "tokens"}}aria-current="page"{{end}}>Access tokens</a>
+    <a href="/settings/usage" {{if eq .Section "usage"}}aria-current="page"{{end}}>Usage</a>
   </nav>
   <div class="settings-content">
 {{end}}
 {{define "settings-bottom"}}</div></div>{{end}}
+{{define "storage-icon"}}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/></svg>{{end}}
 {{define "folder"}}<svg class="icon folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>{{end}}
 {{define "file"}}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10ZM13 3v7h7"/></svg>{{end}}
 {{define "branch-icon"}}<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="6" cy="5" r="3"/><circle cx="6" cy="19" r="3"/><circle cx="18" cy="5" r="3"/><path d="M6 8v8m12-8a8 8 0 0 1-8 8H6"/></svg>{{end}}

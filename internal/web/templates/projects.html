@@ -36,6 +36,7 @@
   <nav class="breadcrumbs" aria-label="Files"><a href="{{tree .Project .Version.ID "" ""}}">{{.Project.Name}}</a>{{range crumbs .Path}}<span>/</span>{{if eq . $.Path}}<span aria-current="page">{{base .}}</span>{{else}}<a href="{{tree $.Project $.Version.ID . ""}}">{{base .}}</a>{{end}}{{end}}</nav>
   {{end}}
   <div class="actions">
+    {{if eq .Project.Role "maintainer"}}<a class="project-size" href="{{projectURL .Project}}/settings/storage" data-storage="{{projectURL .Project}}/usage">{{template "storage-size" .Storage}}</a>{{else}}<span class="project-size" data-storage="{{projectURL .Project}}/usage">{{template "storage-size" .Storage}}</span>{{end}}
     {{if .Version.ID}}<a class="button secondary" href="{{historyURL .Project .Branch .Version.ID}}">{{template "history-icon"}}History</a>{{end}}
     <details class="clone-picker" data-menu><summary class="button">{{template "terminal-icon"}}Clone<span class="caret" aria-hidden="true">▾</span></summary>
       <div class="menu clone-menu">

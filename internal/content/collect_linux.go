@@ -22,8 +22,14 @@ import (
 // Usage requires exclusion of writes for a consistent measurement. File sizes
 // and allocated blocks measure different things; neither includes the cache.
 func (s *Store) Usage(ctx context.Context) (model.StorageUsage, error) {
+	return MeasureUsage(ctx, s.directory)
+}
+
+// MeasureUsage reads filesystem metadata without opening a content repository.
+// Concurrent writes may change the result or make a measurement fail.
+func MeasureUsage(ctx context.Context, directory string) (model.StorageUsage, error) {
 	var usage model.StorageUsage
-	err := filepath.WalkDir(s.directory, func(path string, entry fs.DirEntry, err error) error {
+	err := filepath.WalkDir(directory, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

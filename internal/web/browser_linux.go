@@ -108,6 +108,7 @@ func (s *Server) initBrowser(secure bool) http.Handler {
 		return nil
 	})
 	bind("GET /settings/tokens", s.tokenPage)
+	bind("GET /settings/usage", s.usagePage)
 	bind("GET /settings/security", s.securityPage)
 	bind("POST /settings/security", s.securityPage)
 	bind("POST /settings/security/keys/{key}/remove", s.changeKeys)
@@ -136,6 +137,7 @@ func (s *Server) initBrowser(secure bool) http.Handler {
 	bind("GET /{owner}/{project}/tags", s.tagsPage)
 	bind("POST /{owner}/{project}/tags", s.tagsPage)
 	bind("GET /{owner}/{project}", s.projectPage)
+	bind("GET /{owner}/{project}/usage", s.projectUsage)
 	bind("GET /{owner}/{project}/history", s.historyPage)
 	bind("GET /{owner}/{project}/branches", s.branchesPage)
 	bind("GET /{owner}/{project}/raw/{version}/{path...}", s.download)

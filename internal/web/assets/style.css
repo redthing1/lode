@@ -103,6 +103,19 @@ footer { min-height: 34px; padding: 7px 24px; border-top: 1px solid var(--border
 .project-row:hover, .file-row:hover { background: var(--hover); text-decoration: none; }
 .badge { border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; font-size: 11px; color: var(--muted); font-weight: 400; }
 .project-heading h1 { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.project-size, .storage-size { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.project-size { min-height: 24px; padding-right: 12px; border-right: 1px solid var(--border); }
+.storage-size { font-variant-numeric: tabular-nums; }
+.storage-size .icon { width: 16px; height: 16px; }
+.usage-summary { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin: 0 0 16px; }
+.usage-summary strong { font-size: 21px; font-variant-numeric: tabular-nums; }
+.usage-table { width: 100%; border-collapse: collapse; }
+.usage-table th, .usage-table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+.usage-table th { background: var(--surface); font-weight: 500; font-size: 12px; color: var(--muted); }
+.usage-table th:last-child, .usage-table td:last-child { text-align: right; white-space: nowrap; }
+.usage-table td[colspan] { text-align: left; }
+.usage-table td:first-child { overflow-wrap: anywhere; }
+.usage-table tr:last-child td { border-bottom: 0; }
 .icon { width: 19px; height: 19px; flex-shrink: 0; color: var(--muted); vertical-align: middle; }
 .folder { color: var(--link); }
 .toolbar { margin: 18px 0 12px; flex-wrap: wrap; }

@@ -176,6 +176,8 @@ Without paths, restore covers your current selection. It refuses to overwrite ch
 
 ## Keep versions and reclaim space
 
+**Account settings → Usage** lists storage for projects you own. Project sizes include history and uncollected data; shared server metadata is excluded.
+
 Tags name and protect complete versions:
 
 ```sh

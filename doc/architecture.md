@@ -57,6 +57,8 @@ Collection is a separate operation. Under the project lock, it checks retained p
 
 Repository reads use the operating system's cache; Kopia's persistent caches are disabled. SQLite reclaims free pages incrementally. Storage reports measure content-repository files, separately from the database and caches.
 
+Browser storage figures use cached metadata samples; collection measures under its exclusive lock.
+
 ## Concurrency and instance lifetime
 
 Project mutations serialize while published versions remain readable. Cleanup and collection also wait for active readers before removing data. The instance holds an exclusive filesystem lock and bounds open repository handles; repository IO does not hold the shared handle-registry lock.
