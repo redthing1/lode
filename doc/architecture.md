@@ -1,6 +1,6 @@
 # Architecture
 
-Lode has one executable: a client for local folders and a Linux server for shared projects. The server stores accounts and project metadata in SQLite, with one Kopia content repository per project.
+Lode has one executable: a client for local folders and a Linux server for shared projects. The server stores accounts and project metadata in SQLite, with one Kopia content repository per project. Within an instance, `state/` holds configuration and SQLite, while `projects/` holds bulk storage and an instance identity marker. These directories may live on different filesystems.
 
 A **version** describes a complete project tree. A **workspace** holds only the files and baseline metadata selected by its user. Saving a partial workspace preserves the rest of the project on the server.
 
@@ -60,7 +60,9 @@ Project mutations serialize while published versions remain readable. Cleanup an
 
 Project deletion first marks the project unavailable and revokes its scoped tokens. It then closes and removes native storage before forgetting metadata. Interrupted removal can finish on retry or restart. Access and membership changes check that the project is still available.
 
-Backup locks a stopped instance and copies it into private staging. Only that copy is opened for recovery and verification: database integrity, project trees, and retained files' sizes and hashes. An atomic rename publishes the verified destination. Restore uses the same operation and preserves instance identity.
+Initialization and backup hold the destination's root lock and require empty storage. They stage metadata on the state filesystem and synchronize project contents before atomically publishing `state/`. The bulk mount stays in place. Startup checks its identity against SQLite.
+
+Backup also locks the stopped source. Only the copy is opened for recovery and verification: database integrity, project trees, and retained files' sizes and hashes. Interrupted copies without published state remain unusable and are never adopted by a retry. Restore uses the same operation and preserves instance identity.
 
 The repository filesystem must be local, strongly consistent, and honor file and directory synchronization. Only Lode should access its repositories.
 

@@ -10,13 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
 )
 
-// Backup publishes a verified cold copy at a new destination. Restoring uses
-// the same operation. The source is locked but never opened by SQLite or Kopia.
+// Backup verifies a cold copy before publishing its state directory. The
+// destination may already have empty mount points; restoring is the same copy.
 func Backup(ctx context.Context, source, destination string) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -45,47 +44,43 @@ func Backup(ctx context.Context, source, destination string) (err error) {
 	if relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return errors.New("backup destination must be outside the source instance")
 	}
-	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
-		if err == nil {
-			return errors.New("backup destination already exists")
-		}
+	lock, err := lockDirectory(source)
+	if err != nil {
 		return err
 	}
+	defer func() { err = errors.Join(err, lock.Unlock()) }()
 	in, err := os.OpenRoot(source)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	if info, err := in.Lstat("instance.lock"); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	} else if err == nil && !info.Mode().IsRegular() {
-		return errors.New("instance lock is not a regular file")
-	}
-	lock := flock.New(filepath.Join(source, "instance.lock"))
-	locked, err := lock.TryLock()
+	state, err := in.OpenRoot("state")
 	if err != nil {
 		return err
 	}
-	if !locked {
-		return errors.New("instance is in use; stop the server before backing up")
-	}
-	defer func() { err = errors.Join(err, lock.Unlock()) }()
-	stage, err := os.MkdirTemp(parent, ".lode-backup-")
+	defer state.Close()
+	targetLock, err := prepareDirectory(destination)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if stage != "" {
-			err = errors.Join(err, os.RemoveAll(stage))
-		}
-	}()
-	out, err := os.OpenRoot(stage)
+	defer func() { err = errors.Join(err, targetLock.Unlock()) }()
+	stage, err := os.MkdirTemp(destination, ".lode-backup-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	staged, err := os.OpenRoot(stage)
+	if err != nil {
+		return err
+	}
+	defer staged.Close()
+	out, err := os.OpenRoot(destination)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 	for _, name := range []string{"config.json", "instance.sqlite", "instance.sqlite-journal", "instance.sqlite-wal"} {
-		if err := copyBackupFile(ctx, in, out, name); err != nil {
+		if err := copyBackupFile(ctx, state, staged, name); err != nil {
 			if strings.HasPrefix(name, "instance.sqlite-") && errors.Is(err, os.ErrNotExist) {
 				continue
 			}
@@ -110,11 +105,14 @@ func Backup(ctx context.Context, source, destination string) (err error) {
 		registered[id] = true
 	}
 	for _, entry := range entries {
+		if entry.Name() == ".instance" {
+			continue
+		}
 		if !registered[entry.Name()] || !entry.IsDir() {
 			return fmt.Errorf("unregistered or non-directory project storage %q", entry.Name())
 		}
 	}
-	if err := out.Mkdir("projects", 0700); err != nil {
+	if err := copyBackupFile(ctx, in, out, filepath.Join("projects", ".instance")); err != nil {
 		return err
 	}
 	for _, id := range ids {
@@ -125,7 +123,7 @@ func Backup(ctx context.Context, source, destination string) (err error) {
 			return fmt.Errorf("copy project %s: %w", id, err)
 		}
 	}
-	s, err := Open(ctx, stage)
+	s, err := openStore(ctx, destination, stage)
 	if err != nil {
 		return err
 	}
@@ -142,37 +140,25 @@ func Backup(ctx context.Context, source, destination string) (err error) {
 	if err := s.Close(context.Background()); err != nil {
 		return err
 	}
-	// Opening the stage rebuilds path-specific connection files and caches.
-	// They are not part of the backup and must not refer to its temporary name.
+	// Verification rebuilds derived connection files. Reopen them at the final
+	// deployment path rather than retaining paths from the copy environment.
 	for _, id := range ids {
 		for _, name := range []string{"cache", "kopia.config", "kopia.connect"} {
 			if err := out.RemoveAll(filepath.Join("projects", id, name)); err != nil {
 				return err
 			}
 		}
-		if err := syncPath(filepath.Join(stage, "projects", id)); err != nil {
+		if err := syncPath(filepath.Join(destination, "projects", id)); err != nil {
 			return err
 		}
 	}
-	if err := out.Remove("instance.lock"); err != nil {
+	if err := syncPath(filepath.Join(stage, "instance.sqlite")); err != nil {
 		return err
-	}
-	for _, name := range []string{"instance.sqlite", "projects", "."} {
-		if err := syncPath(filepath.Join(stage, name)); err != nil {
-			return err
-		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := unix.Renameat2(unix.AT_FDCWD, stage, unix.AT_FDCWD, destination, unix.RENAME_NOREPLACE); err != nil {
-		return err
-	}
-	stage = ""
-	if err := syncPath(parent); err != nil {
-		return fmt.Errorf("backup published at %s, but destination parent synchronization failed: %w", destination, err)
-	}
-	return nil
+	return publishState(stage, destination)
 }
 
 // Inspect only the staged database, including recovery of a copied journal/WAL.

@@ -1,14 +1,14 @@
 # Server operations
 
-The Linux server keeps its database and project repositories in one private instance directory. Use a local filesystem that honors file and directory synchronization, and access repositories only through Lode.
+The Linux server keeps configuration and SQLite state separate from bulk project contents. Compose uses ordinary host directories, so the deployment is easy to inspect, back up, and move.
 
 ## Start with Podman Compose
 
-Install Podman and a Compose provider such as `podman-compose`. From the source checkout:
+Install Podman and a Compose provider such as `podman-compose`. From the source checkout, the defaults store state in `./data` and project contents in `./storage`:
 
 ```sh
 podman compose build
-podman compose run --rm lode init --url https://lode.example /data/instance
+podman compose run --rm lode init --url https://lode.example /data
 podman compose up -d
 ```
 
@@ -28,13 +28,34 @@ podman compose stop
 podman compose up -d
 ```
 
-Compose uses host networking and the `lode-data` named volume. `podman compose down` keeps the volume; **`down -v` deletes it**.
+Compose uses host networking. `podman compose down` removes containers and leaves the host directories intact.
 
 `GET /healthz` returns 204 at the configured hostname while the HTTP service is running. This is a liveness check, not a repository integrity check.
 
+## Data locations
+
+| Host path (defaults) | Contents |
+| --- | --- |
+| `data/state/config.json` | Server URL and listen address |
+| `data/state/instance.sqlite` | Accounts, permissions, version metadata, and instance identity |
+| `storage/` | Bulk project contents and their indexes |
+
+Keep `data/` on a fast local disk. SQLite grows with project history, but `storage/` holds the large binary data. To put it on an HDD or RAID mount, copy `.env.example` to `.env` and set:
+
+```dotenv
+LODE_DATA_DIR=./data
+LODE_STORAGE_DIR=/mnt/bulk/lode
+```
+
+Choose the paths before initialization, with the bulk filesystem mounted and writable by the account running Podman. Use a local filesystem that honors file and directory synchronization. Mount a dedicated directory; only Lode should access its contents.
+
+Inside the container, the instance is `/data`: `state/` contains metadata and the storage directory is mounted at `projects/`. Lode checks the storage identity at startup and refuses a missing or mismatched volume. Keep its hidden `.instance` marker intact.
+
+To move an existing deployment, stop the server and move both directories together, or use backup and restore below. Changing a path in `.env` does not move its contents.
+
 ## Configuration
 
-Initialization writes `config.json` inside the instance directory:
+Edit `data/state/config.json` (under your configured data directory):
 
 ```json
 {
@@ -60,7 +81,7 @@ For account recovery without browser access, stop the server and set a new passw
 
 ```sh
 podman compose stop
-podman compose run --rm lode recover-user /data/instance alice
+podman compose run --rm lode recover-user /data alice
 podman compose up -d
 ```
 
@@ -74,7 +95,7 @@ Before starting:
 
 - Stop the source server for the entire copy and verification.
 - Finish any pending project creation or deletion.
-- Choose a destination that does not exist, outside the source, with space for a complete copy.
+- Choose a new or empty destination outside the source, with space for a complete copy. An existing empty `projects/` mount is allowed.
 
 ### Without containers
 
@@ -86,32 +107,34 @@ lode serve ./restored-instance
 
 ### With Compose
 
-Mount a private backup directory outside the data volume:
+Mount a private backup directory outside both data directories:
 
 ```sh
 mkdir -m 700 backups
 podman compose stop
 podman compose run --rm -v "$PWD/backups:/backups:Z" lode \
-  backup /data/instance /backups/backup
+  backup /data /backups/backup
 podman compose up -d
 ```
 
-Restore into a separate Compose project's new volume. Keep the original service stopped before starting the restored one at the same address:
+To restore, stop the service and set `LODE_DATA_DIR` and `LODE_STORAGE_DIR` in `.env` to new, empty directories. Then restore and start using those paths:
 
 ```sh
 podman compose stop
-podman compose -p lode-restored run --rm -v "$PWD/backups:/backups:Z" lode \
-  backup /backups/backup /data/instance
-podman compose -p lode-restored up -d
+podman compose run --rm -v "$PWD/backups:/backups:Z" lode \
+  backup /backups/backup /data
+podman compose up -d
 ```
 
-### Verification and interrupted backups
+### Verification and interrupted copies
 
-Before publishing the destination, backup checks the copied database and project trees and reads retained files against their recorded sizes and hashes. Restore a backup periodically and check sign-in and representative downloads too.
+Backup checks the copied database and project trees and reads retained files against their recorded sizes and hashes. It publishes `state/` only after verification. Restore a backup periodically and check sign-in and representative downloads too.
 
-Backups contain account credentials and the instance secret; keep them private. If a process is killed, it may leave a private `.lode-backup-*` staging directory beside the destination. Remove that incomplete directory only after confirming no backup is running.
+Backups contain account credentials and the instance secret; keep them private. An interrupted copy can leave partial project contents and a `.lode-backup-*` metadata staging directory inside the destination. Lode refuses to initialize or restore over those contents. Use fresh empty directories to retry; remove partial copies only after confirming no backup is running.
 
-A failed copy does not publish its destination. If an error says publication succeeded but parent synchronization failed, inspect the published destination before retrying.
+Interrupted initialization can also leave partial files. If `state/` has not been published, use empty data and storage directories for a new attempt.
+
+If an error says the instance was published but directory synchronization failed, inspect that destination before retrying.
 
 ## Maintenance and upgrades
 

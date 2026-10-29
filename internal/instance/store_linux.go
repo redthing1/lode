@@ -26,7 +26,6 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 	"github.com/redthing1/lode/internal/project"
-	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
 
@@ -85,17 +84,18 @@ func Initialize(ctx context.Context, directory string, config Config) (string, e
 	if err != nil {
 		return "", err
 	}
-	parent := filepath.Dir(destination)
-	stage, err := os.MkdirTemp(parent, ".lode-init-")
+	lock, err := prepareDirectory(destination)
+	if err != nil {
+		return "", err
+	}
+	defer lock.Unlock()
+	stage, err := os.MkdirTemp(destination, ".lode-init-")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(stage)
 	directory = stage
 	if err := os.Chmod(directory, 0700); err != nil {
-		return "", err
-	}
-	if err := os.Mkdir(filepath.Join(directory, "projects"), 0700); err != nil {
 		return "", err
 	}
 	config.URL = strings.TrimRight(config.URL, "/")
@@ -150,15 +150,15 @@ PRAGMA user_version=7;`)
 	if err := db.Close(); err != nil {
 		return "", err
 	}
-	for _, path := range []string{filepath.Join(directory, "projects"), directory} {
-		if err := syncPath(path); err != nil {
-			return "", err
-		}
-	}
-	if err := unix.Renameat2(unix.AT_FDCWD, directory, unix.AT_FDCWD, destination, unix.RENAME_NOREPLACE); err != nil {
+	marker, err := os.OpenFile(filepath.Join(destination, "projects", ".instance"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
 		return "", err
 	}
-	if err := syncPath(parent); err != nil {
+	_, writeErr := io.WriteString(marker, id.String()+"\n")
+	if err := errors.Join(writeErr, marker.Sync(), marker.Close()); err != nil {
+		return "", err
+	}
+	if err := publishState(stage, destination); err != nil {
 		return "", err
 	}
 	return setup, nil
@@ -192,20 +192,28 @@ func Open(ctx context.Context, directory string) (_ *Store, err error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{directory: root, projects: map[string]*openedProject{}, lock: flock.New(filepath.Join(root, "instance.lock"))}
-	locked, err := s.lock.TryLock()
+	lock, err := lockDirectory(root)
 	if err != nil {
 		return nil, err
 	}
-	if !locked {
-		return nil, errors.New("instance is already in use")
+	s, err := openStore(ctx, root, filepath.Join(root, "state"))
+	if err != nil {
+		_ = lock.Unlock()
+		return nil, err
 	}
+	s.lock = lock
+	return s, nil
+}
+
+// The caller owns the root lock, including while verifying unpublished state.
+func openStore(ctx context.Context, root, state string) (_ *Store, err error) {
+	s := &Store{directory: root, projects: map[string]*openedProject{}}
 	defer func() {
 		if err != nil {
 			_ = s.Close(ctx)
 		}
 	}()
-	b, err := os.ReadFile(filepath.Join(root, "config.json"))
+	b, err := os.ReadFile(filepath.Join(state, "config.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +229,7 @@ func Open(ctx context.Context, directory string) (_ *Store, err error) {
 		return nil, err
 	}
 	s.Config.URL = strings.TrimRight(s.Config.URL, "/")
-	s.db, err = database(root)
+	s.db, err = database(state)
 	if err != nil {
 		return nil, err
 	}
@@ -237,6 +245,13 @@ func Open(ctx context.Context, directory string) (_ *Store, err error) {
 	}
 	if len(s.key) != 32 {
 		return nil, errors.New("invalid instance secret")
+	}
+	marker, err := os.ReadFile(filepath.Join(root, "projects", ".instance"))
+	if err != nil {
+		return nil, fmt.Errorf("read project storage identity: %w", err)
+	}
+	if strings.TrimSpace(string(marker)) != s.ID {
+		return nil, errors.New("project storage belongs to a different instance")
 	}
 	if err := s.initAuthentication(); err != nil {
 		return nil, err

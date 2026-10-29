@@ -135,14 +135,24 @@ func TestBackupRestoresHostedInstance(t *testing.T) {
 				t.Fatalf("native bytes/timestamp changed: %s", name)
 			}
 		}
-		if strings.Contains(name, "/cache/") || strings.HasSuffix(name, ".config") || name == "instance.lock" {
+		if strings.Contains(name, "/cache/") || strings.HasSuffix(name, ".config") {
 			t.Fatal("copied derived state", name)
 		}
 	}
 	// Restore follows exactly the documented operation, using the backup as source.
 	restored := filepath.Join(t.TempDir(), "restored")
+	if err := os.MkdirAll(filepath.Join(restored, "projects"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	mounted, err := os.Stat(filepath.Join(restored, "projects"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := Backup(ctx, backup, restored); err != nil {
 		t.Fatal(err)
+	}
+	if after, err := os.Stat(filepath.Join(restored, "projects")); err != nil || !os.SameFile(mounted, after) {
+		t.Fatal("replaced destination mount point", err)
 	}
 	r, err := Open(ctx, restored)
 	if err != nil {
@@ -247,7 +257,7 @@ func TestBackupRecoversSQLiteOnlyInStage(t *testing.T) {
 			if output, err := child.CombinedOutput(); err != nil {
 				t.Fatalf("crash fixture: %v\n%s", err, output)
 			}
-			info, err := os.Stat(filepath.Join(s.directory, "instance.sqlite-"+mode))
+			info, err := os.Stat(filepath.Join(s.directory, "state", "instance.sqlite-"+mode))
 			if err != nil || info.Size() <= 512 {
 				t.Fatal("missing recovery sidecar", err)
 			}
@@ -357,6 +367,17 @@ func TestBackupRefusesUnsafeDestinationsAndLiveSource(t *testing.T) {
 	if _, err := os.Lstat(dest); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("failed copy published a destination", err)
 	}
+	lock, err := prepareDirectory(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+	if err := Backup(ctx, s.directory, dest); err == nil {
+		t.Fatal("backup ignored destination ownership")
+	}
+	if _, err := Initialize(ctx, dest, s.Config); err == nil {
+		t.Fatal("initialization ignored destination ownership")
+	}
 }
 
 func TestBackupCancellationDuringCopyRemovesStage(t *testing.T) {
@@ -390,7 +411,7 @@ func TestBackupCancellationDuringCopyRemovesStage(t *testing.T) {
 		case err := <-done:
 			t.Fatalf("copy ended before interruption: %v", err)
 		case <-tick.C:
-			paths, err := filepath.Glob(filepath.Join(parent, ".lode-backup-*", name))
+			paths, err := filepath.Glob(filepath.Join(parent, "backup", name))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -405,9 +426,18 @@ func TestBackupCancellationDuringCopyRemovesStage(t *testing.T) {
 			if err := <-done; !errors.Is(err, context.Canceled) {
 				t.Fatal("interrupted copy result", err)
 			}
-			entries, err := os.ReadDir(parent)
-			if err != nil || len(entries) != 0 {
-				t.Fatal("cancelled copy left staging or destination", err)
+			destination := filepath.Join(parent, "backup")
+			if _, err := os.Stat(filepath.Join(destination, "state")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("cancelled copy published state", err)
+			}
+			if stages, err := filepath.Glob(filepath.Join(destination, ".lode-backup-*")); err != nil || len(stages) != 0 {
+				t.Fatal("cancelled copy left metadata staging", err)
+			}
+			if _, err := Initialize(context.Background(), destination, s.Config); err == nil {
+				t.Fatal("adopted partial backup contents")
+			}
+			if err := Backup(context.Background(), s.directory, destination); err == nil {
+				t.Fatal("overwrote partial backup contents")
 			}
 			return
 		}
@@ -415,7 +445,7 @@ func TestBackupCancellationDuringCopyRemovesStage(t *testing.T) {
 }
 
 func TestBackupRejectsIncompleteOrDamagedSources(t *testing.T) {
-	for _, damage := range []string{"creating", "deleting", "unregistered", "symlink", "fifo", "native pack", "missing pack", "metadata", "foreign key"} {
+	for _, damage := range []string{"creating", "deleting", "unregistered", "symlink", "fifo", "native pack", "missing pack", "metadata", "foreign key", "storage identity"} {
 		t.Run(damage, func(t *testing.T) {
 			ctx := context.Background()
 			s, user := instanceFixture(t)
@@ -445,10 +475,12 @@ func TestBackupRejectsIncompleteOrDamagedSources(t *testing.T) {
 			}
 			repository := filepath.Join(s.directory, "projects", p.ID, "repository")
 			switch damage {
+			case "storage identity":
+				err = os.WriteFile(filepath.Join(s.directory, "projects", ".instance"), []byte(uuid.NewString()+"\n"), 0600)
 			case "unregistered":
 				err = os.Mkdir(filepath.Join(s.directory, "projects", "orphan"), 0700)
 			case "symlink":
-				err = os.Symlink(filepath.Join(s.directory, "config.json"), filepath.Join(repository, "link"))
+				err = os.Symlink(filepath.Join(s.directory, "state", "config.json"), filepath.Join(repository, "link"))
 			case "fifo":
 				err = unix.Mkfifo(filepath.Join(repository, "pipe"), 0600)
 			case "native pack", "missing pack":
@@ -482,9 +514,11 @@ func TestBackupRejectsIncompleteOrDamagedSources(t *testing.T) {
 			if err := Backup(ctx, s.directory, dest); err == nil {
 				t.Fatal("damaged/incomplete source accepted")
 			}
-			entries, err := os.ReadDir(parent)
-			if err != nil || len(entries) != 0 {
-				t.Fatal("failed copy left a published or staged destination", err)
+			if _, err := os.Stat(filepath.Join(dest, "state")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("failed copy published state", err)
+			}
+			if stages, err := filepath.Glob(filepath.Join(dest, ".lode-backup-*")); err != nil || len(stages) != 0 {
+				t.Fatal("failed copy left metadata staging", err)
 			}
 		})
 	}

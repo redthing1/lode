@@ -20,4 +20,4 @@ RUN apt-get update \
 COPY --from=build /out/lode /usr/local/bin/lode
 
 ENTRYPOINT ["/usr/local/bin/lode"]
-CMD ["serve", "/data/instance"]
+CMD ["serve", "/data"]

@@ -8,7 +8,5 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     volumes:
-      - lode-data:/data
-
-volumes:
-  lode-data:
+      - ${LODE_DATA_DIR:-./data}:/data:Z
+      - ${LODE_STORAGE_DIR:-./storage}:/data/projects:Z

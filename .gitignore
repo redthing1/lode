@@ -1,2 +1,6 @@
 /notes
 /bin/
+/.env
+/data/
+/storage/
+/backups/

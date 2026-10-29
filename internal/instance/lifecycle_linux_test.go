@@ -217,7 +217,7 @@ func TestInterruptedDeletionFinishesOnOpen(t *testing.T) {
 				t.Fatal("startup ignored incomplete deletion")
 			}
 			if failure == "metadata" {
-				db, err := database(s.directory)
+				db, err := database(filepath.Join(s.directory, "state"))
 				if err != nil {
 					t.Fatal(err)
 				}

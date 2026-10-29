@@ -20,6 +20,9 @@ func instanceFixture(t *testing.T) (*Store, User) {
 	t.Helper()
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "instance")
+	if err := os.MkdirAll(filepath.Join(dir, "projects"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	code, err := Initialize(ctx, dir, Config{URL: "http://localhost:8474", Listen: "127.0.0.1:8474"})
 	if err != nil {
 		t.Fatal(err)
@@ -256,12 +259,53 @@ func TestConfigurationRejectsUnknownFieldsAndInvalidListen(t *testing.T) {
 		`{"url":"http://localhost:8474","listen":"127.0.0.1:8474","registration":true}`,
 		`{"url":"http://localhost:8474","listen":"127.0.0.1:8474"} {}`,
 	} {
-		if err := os.WriteFile(filepath.Join(s.directory, "config.json"), []byte(config), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(s.directory, "state", "config.json"), []byte(config), 0600); err != nil {
 			t.Fatal(err)
 		}
 		if unexpected, err := Open(context.Background(), s.directory); err == nil {
 			unexpected.Close(context.Background())
 			t.Fatal("invalid config opened")
 		}
+	}
+}
+
+func TestInstanceRejectsMissingOrWrongStorage(t *testing.T) {
+	ctx := context.Background()
+	s, _ := instanceFixture(t)
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	projects := filepath.Join(s.directory, "projects")
+	saved := filepath.Join(filepath.Dir(s.directory), "saved-projects")
+	if err := os.Rename(projects, saved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(projects, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, identity := range []string{"", uuid.NewString() + "\n"} {
+		if identity != "" {
+			if err := os.WriteFile(filepath.Join(projects, ".instance"), []byte(identity), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if unexpected, err := Open(ctx, s.directory); err == nil {
+			unexpected.Close(ctx)
+			t.Fatal("opened missing or mismatched storage")
+		}
+	}
+	if err := os.RemoveAll(projects); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(saved, projects); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := Open(ctx, s.directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close(ctx)
+	if restored.ID != s.ID {
+		t.Fatal("storage remount changed instance identity")
 	}
 }
