@@ -49,6 +49,14 @@ lode save -m 'Initial version'
 - [User guide](doc/guide.md) — daily work, selected files, sharing, and recovery.
 - [Server operations](doc/operations.md) — Podman Compose, HTTPS, accounts, and backups.
 - [Architecture](doc/architecture.md) — responsibilities, storage, and recovery design.
+- [Agent skill](skills/lode/SKILL.md) — working with Lode through the CLI.
+
+To install the skill for Codex from a checkout:
+
+```sh
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+cp -R skills/lode "${CODEX_HOME:-$HOME/.codex}/skills/"
+```
 
 ## Development
 
