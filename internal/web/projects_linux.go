@@ -13,12 +13,9 @@ import (
 func (s *Server) projectPage(w http.ResponseWriter, r *http.Request, actor instance.Principal) error {
 	p := page{User: actor.User, Path: r.URL.Query().Get("path"), Origin: s.instance.Config.URL, Branch: branch(r), Ref: branch(r)}
 	var err error
-	p.Project, err = s.instance.Project(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Reader)
-	if err != nil {
-		return err
-	}
-	p.Title = p.Project.Owner + "/" + p.Project.Name
-	err = s.instance.WithProject(r.Context(), actor, p.Project.Owner, p.Project.Name, instance.Reader, func(store *project.Store) error {
+	err = s.instance.WithProject(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Reader, func(info instance.Project, store *project.Store) error {
+		p.Project = info
+		p.Title = info.Owner + "/" + info.Name
 		p.Branches, _, err = store.Branches(r.Context(), "")
 		if err != nil {
 			return err
@@ -92,11 +89,8 @@ func (s *Server) historyPage(w http.ResponseWriter, r *http.Request, actor insta
 		p.Branch, p.Ref = "", model.ShortVersion(from)
 	}
 	var err error
-	p.Project, err = s.instance.Project(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Reader)
-	if err != nil {
-		return err
-	}
-	err = s.instance.WithProject(r.Context(), actor, p.Project.Owner, p.Project.Name, instance.Reader, func(store *project.Store) error {
+	err = s.instance.WithProject(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Reader, func(info instance.Project, store *project.Store) error {
+		p.Project = info
 		id := r.URL.Query().Get("from")
 		if id == "" {
 			var err error
@@ -129,11 +123,8 @@ func (s *Server) historyPage(w http.ResponseWriter, r *http.Request, actor insta
 func (s *Server) branchesPage(w http.ResponseWriter, r *http.Request, actor instance.Principal) error {
 	p := page{Title: "Branches", User: actor.User}
 	var err error
-	p.Project, err = s.instance.Project(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Reader)
-	if err != nil {
-		return err
-	}
-	err = s.instance.WithProject(r.Context(), actor, p.Project.Owner, p.Project.Name, instance.Reader, func(store *project.Store) error {
+	err = s.instance.WithProject(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Reader, func(info instance.Project, store *project.Store) error {
+		p.Project = info
 		p.Branches, p.Next, err = store.Branches(r.Context(), r.URL.Query().Get("after"))
 		return err
 	})

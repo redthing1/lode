@@ -180,7 +180,7 @@ func TestMembershipAndTokenPermissionsStayBounded(t *testing.T) {
 	if _, err := s.Project(ctx, tokenPrincipal(t, s, charlie, first.ID, Maintainer), "alice", "first", Writer); !errors.Is(err, ErrAccess) {
 		t.Fatalf("reader's maintainer token escalated: %v", err)
 	}
-	members, err := s.Members(ctx, all, "alice", "first")
+	_, members, err := s.Members(ctx, all, "alice", "first")
 	if err != nil || len(members) != 3 || !members[0].Owner || members[0].User.ID != alice.ID {
 		t.Fatalf("members: %v %v", members, err)
 	}

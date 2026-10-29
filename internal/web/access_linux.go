@@ -47,7 +47,7 @@ func (s *Server) newUserPage(w http.ResponseWriter, r *http.Request, actor insta
 func (s *Server) membersPage(w http.ResponseWriter, r *http.Request, actor instance.Principal) error {
 	p := page{Title: "Collaborators", Section: "members", User: actor.User}
 	var err error
-	p.Project, err = s.instance.Project(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Maintainer)
+	p.Project, p.Members, err = s.instance.Members(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"))
 	if err != nil {
 		return err
 	}
@@ -72,10 +72,6 @@ func (s *Server) membersPage(w http.ResponseWriter, r *http.Request, actor insta
 			http.Redirect(w, r, projectURL(p.Project)+"/settings/members", 303)
 			return nil
 		}
-	}
-	p.Members, err = s.instance.Members(r.Context(), actor, p.Project.Owner, p.Project.Name)
-	if err != nil {
-		return err
 	}
 	render(w, status, "members", p)
 	return nil

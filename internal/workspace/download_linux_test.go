@@ -70,7 +70,7 @@ func largeDownloadFixture(t *testing.T) (*fixture, *Workspace, []byte, []byte) {
 func TestLargeUpdateUsesLocalBasisAfterExpiryAndConflictChoice(t *testing.T) {
 	ctx := context.Background()
 	f, w, old, target := largeDownloadFixture(t)
-	err := f.store.WithProject(ctx, instance.Principal{User: f.user}, "alice", "project", instance.Maintainer, func(p *project.Store) error {
+	err := f.store.WithProject(ctx, instance.Principal{User: f.user}, "alice", "project", instance.Maintainer, func(_ instance.Project, p *project.Store) error {
 		if err := p.SetRetention(ctx, model.Retention{Versions: 1, HistoryDays: 90}); err != nil {
 			return err
 		}

@@ -121,8 +121,9 @@ func (s *Store) Projects(ctx context.Context, actor Principal) ([]Project, error
 	return projects, rows.Err()
 }
 
-// WithProject keeps the repository open for the entire authorized operation.
-func (s *Store) WithProject(ctx context.Context, actor Principal, owner, name string, required Role, fn func(*project.Store) error) error {
+// WithProject supplies the authorized metadata and keeps that same project's
+// repository open for the entire operation.
+func (s *Store) WithProject(ctx context.Context, actor Principal, owner, name string, required Role, fn func(Project, *project.Store) error) error {
 	p, err := s.Project(ctx, actor, owner, name, required)
 	if err != nil {
 		return err
@@ -132,7 +133,7 @@ func (s *Store) WithProject(ctx context.Context, actor Principal, owner, name st
 		return err
 	}
 	defer release()
-	return fn(store)
+	return fn(p, store)
 }
 
 type openedProject struct {

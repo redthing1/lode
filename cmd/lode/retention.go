@@ -33,12 +33,9 @@ func retentionCommand(ctx context.Context, command string, args []string, direct
 	}
 	defer w.Close()
 	s := w.State()
-	cred, err := credentials(s.Server)
+	cred, err := workspaceCredentials(s)
 	if err != nil {
 		return err
-	}
-	if cred.Instance != "" && cred.Instance != s.InstanceID {
-		return errors.New("saved credentials belong to another instance")
 	}
 	c, err := w.Client(cred.Token)
 	if err != nil {

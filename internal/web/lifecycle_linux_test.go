@@ -49,7 +49,7 @@ func TestBrowserProjectAdministrationAndDeletion(t *testing.T) {
 	holdContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
-		done <- f.store.WithProject(ctx, instance.Principal{User: f.user}, "bob", "own", instance.Reader, func(*project.Store) error {
+		done <- f.store.WithProject(ctx, instance.Principal{User: f.user}, "bob", "own", instance.Reader, func(_ instance.Project, _ *project.Store) error {
 			close(held)
 			select {
 			case <-release:

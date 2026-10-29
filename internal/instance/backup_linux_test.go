@@ -84,7 +84,7 @@ func TestBackupRestoresHostedInstance(t *testing.T) {
 	}
 	var protected, expired, latest model.Version
 	var accepted, cancelled model.Save
-	err = s.WithProject(ctx, owner, alice.Name, p.Name, Writer, func(store *project.Store) error {
+	err = s.WithProject(ctx, owner, alice.Name, p.Name, Writer, func(_ Project, store *project.Store) error {
 		_, protected = backupSave(t, store, alice.ID, "", "protected\x00\xff")
 		if _, err := store.CreateTag(ctx, "keep", protected.ID); err != nil {
 			return err
@@ -198,7 +198,7 @@ func TestBackupRestoresHostedInstance(t *testing.T) {
 	if err := r.db.QueryRow("SELECT cutoff FROM retention WHERE project=?", p.ID).Scan(&restoredCutoff); err != nil || restoredCutoff != cutoff {
 		t.Fatal("operation cutoff changed", err)
 	}
-	err = r.WithProject(ctx, reader, alice.Name, p.Name, Reader, func(store *project.Store) error {
+	err = r.WithProject(ctx, reader, alice.Name, p.Name, Reader, func(_ Project, store *project.Store) error {
 		for id, want := range map[string]string{protected.ID: "protected\x00\xff", latest.ID: "latest\x00\xff"} {
 			_, file, err := store.File(ctx, id, "assets/data.bin")
 			if err != nil {
@@ -423,7 +423,7 @@ func TestBackupRejectsIncompleteOrDamagedSources(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := s.WithProject(ctx, Principal{User: user}, user.Name, p.Name, Writer, func(p *project.Store) error {
+			if err := s.WithProject(ctx, Principal{User: user}, user.Name, p.Name, Writer, func(_ Project, p *project.Store) error {
 				backupSave(t, p, user.ID, "", strings.Repeat("opaque\x00\xff", 100000))
 				return nil
 			}); err != nil {

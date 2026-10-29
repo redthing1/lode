@@ -202,12 +202,9 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 			return err
 		}
 	}
-	cred, err := credentials(s.Server)
+	cred, err := workspaceCredentials(s)
 	if err != nil {
 		return err
-	}
-	if cred.Instance != "" && cred.Instance != s.InstanceID {
-		return errors.New("saved credentials belong to another instance; check this workspace's server")
 	}
 	switch command {
 	case "merge":

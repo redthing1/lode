@@ -30,7 +30,7 @@ func projectWithFile(t *testing.T, s *Store, owner User, name, data string) Proj
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256([]byte(data))
-	err = s.WithProject(ctx, actor, owner.Name, name, Writer, func(store *project.Store) error {
+	err = s.WithProject(ctx, actor, owner.Name, name, Writer, func(_ Project, store *project.Store) error {
 		_, err := store.Save(ctx, owner.ID, model.Save{ID: id.String(), Branch: "main", Changes: []model.Entry{{Path: "capture.bin", Kind: model.File, Size: int64(len(data)), SHA256: hex.EncodeToString(hash[:])}}}, project.Source{Write: func(_ model.Entry, w io.Writer, _ *project.Basis) error {
 			_, err := io.WriteString(w, data)
 			return err
@@ -106,7 +106,7 @@ func TestProjectDeletionAuthorityReferencesAndIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close(ctx)
-	err = reopened.WithProject(ctx, Principal{User: admin}, keep.Owner, keep.Name, Reader, func(store *project.Store) error {
+	err = reopened.WithProject(ctx, Principal{User: admin}, keep.Owner, keep.Name, Reader, func(_ Project, store *project.Store) error {
 		id, err := store.Head(ctx, "main")
 		if err != nil {
 			return err

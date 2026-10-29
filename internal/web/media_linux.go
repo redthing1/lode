@@ -54,7 +54,7 @@ func (s *Server) media(w http.ResponseWriter, r *http.Request, actor instance.Pr
 }
 
 func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, actor instance.Principal, inline bool) error {
-	return s.instance.WithProject(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Reader, func(p *project.Store) error {
+	return s.instance.WithProject(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Reader, func(_ instance.Project, p *project.Store) error {
 		e, reader, err := p.File(r.Context(), r.PathValue("version"), r.PathValue("path"))
 		if err != nil {
 			return err

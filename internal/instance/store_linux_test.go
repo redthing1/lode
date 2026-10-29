@@ -123,7 +123,10 @@ func TestTokenScopeAndPublishedContents(t *testing.T) {
 	}
 	data := "binary\x00\xff"
 	hash := sha256.Sum256([]byte(data))
-	err = s.WithProject(ctx, actor, "alice", "first", Writer, func(p *project.Store) error {
+	err = s.WithProject(ctx, actor, "alice", "first", Writer, func(info Project, p *project.Store) error {
+		if info.ID != first.ID || info.ID != p.ID() || info.Role != Writer {
+			t.Fatalf("authorized project differs: %+v", info)
+		}
 		_, err := p.Save(ctx, actor.User.ID, model.Save{ID: id.String(), Branch: "main", Message: "initial", Changes: []model.Entry{{Path: "capture.bin", Kind: model.File, Size: int64(len(data)), SHA256: hex.EncodeToString(hash[:])}}}, project.Source{Write: func(_ model.Entry, w io.Writer, _ *project.Basis) error {
 			_, err := io.WriteString(w, data)
 			return err
@@ -141,10 +144,13 @@ func TestTokenScopeAndPublishedContents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WithProject(ctx, reader, "alice", "first", Writer, func(*project.Store) error { t.Fatal("read token wrote"); return nil }); !errors.Is(err, ErrAccess) {
+	if err := s.WithProject(ctx, reader, "alice", "first", Writer, func(_ Project, _ *project.Store) error { t.Fatal("read token wrote"); return nil }); !errors.Is(err, ErrAccess) {
 		t.Fatalf("write limit: %v", err)
 	}
-	err = s.WithProject(ctx, reader, "alice", "first", Reader, func(p *project.Store) error {
+	err = s.WithProject(ctx, reader, "alice", "first", Reader, func(info Project, p *project.Store) error {
+		if info.ID != first.ID || info.ID != p.ID() || info.Role != Reader {
+			t.Fatalf("reader metadata exceeds access: %+v", info)
+		}
 		_, r, err := p.File(ctx, id.String(), "capture.bin")
 		if err != nil {
 			return err
@@ -193,7 +199,7 @@ func TestInterruptedProjectCreationResumes(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	err = s.WithProject(ctx, Principal{User: user}, "alice", "pending", Reader, func(p *project.Store) error {
+	err = s.WithProject(ctx, Principal{User: user}, "alice", "pending", Reader, func(_ Project, p *project.Store) error {
 		head, err := p.Head(ctx, "main")
 		if head != "" {
 			t.Fatal("pending project acquired history")

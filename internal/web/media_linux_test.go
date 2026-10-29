@@ -17,7 +17,7 @@ import (
 	"github.com/redthing1/lode/internal/project"
 )
 
-func TestMediaStreamingAndImmutableMarkdownImages(t *testing.T) {
+func TestFilePreviewsAndDownloads(t *testing.T) {
 	ctx := context.Background()
 	f := apiTest(t)
 	b := newBrowserSession(t, f.origin)
@@ -29,6 +29,8 @@ func TestMediaStreamingAndImmutableMarkdownImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := map[string][]byte{
+		"notes.txt":         []byte("exact text <script>not markup</script>"),
+		"odd ?#&.bin":       []byte("opaque\x00\xff"),
 		"images/pixel.png":  encoded.Bytes(),
 		"images/odd ?#.PNG": encoded.Bytes(),
 		"tone.wav":          []byte("RIFF\x00\x01binary WAVE contents"),
@@ -38,6 +40,7 @@ func TestMediaStreamingAndImmutableMarkdownImages(t *testing.T) {
 		"page.html":         []byte(`<script>alert(1)</script>`),
 		"docs/README.md":    []byte("# Images\n\n![pixel](../images/pixel.png)\n\n![odd](/images/odd%20%3F%23.PNG)\n\n[File](../images/pixel.png)\n\n![escape](../../escape.png)\n\n![remote](https://other.example/a.png)\n\n![protocol](//other.example/a.png)\n\n![active](../vector.svg)\n\n![query](../images/pixel.png?tracking=1)\n\n![fragment](../images/pixel.png#x)\n\n![data](data:image/png;base64,eA==)\n\n<img src=\"/unsafe.png\">\n"),
 	}
+	data["docs/README.md"] = append(data["docs/README.md"], []byte("\n<script>alert('x')</script>\n\n[Text](../notes.txt)\n")...)
 	changes := []model.Entry{{Path: "images", Kind: model.Directory}, {Path: "docs", Kind: model.Directory}}
 	for name, bytes := range data {
 		changes = append(changes, entry(name, bytes))
@@ -109,6 +112,9 @@ func TestMediaStreamingAndImmutableMarkdownImages(t *testing.T) {
 		t.Fatal("download changed original bytes or disposition")
 	}
 	page := b.request("GET", treeURL(p, v.ID, "docs", ""), nil, 200)
+	if !strings.Contains(page, "<h1>Images</h1>") || strings.Contains(page, "<script>alert") || !strings.Contains(page, "path=notes.txt") {
+		t.Fatal("missing or unsafe Markdown preview")
+	}
 	if strings.Count(page, `<img src="/alice/project/media/`) != 2 || !strings.Contains(page, mediaURL(p, v.ID, "images/pixel.png")) || !strings.Contains(page, mediaURL(p, v.ID, "images/odd ?#.PNG")) {
 		t.Fatal("local Markdown images missing or not version-bound")
 	}
@@ -120,6 +126,15 @@ func TestMediaStreamingAndImmutableMarkdownImages(t *testing.T) {
 	if !strings.Contains(page, "path=images%2Fpixel.png") || !strings.Contains(page, "version="+v.ID) {
 		t.Fatal("relative file link lost immutable target")
 	}
+	page = b.request("GET", treeURL(p, v.ID, "notes.txt", ""), nil, 200)
+	if !strings.Contains(page, "&lt;script&gt;not markup&lt;/script&gt;") {
+		t.Fatal("text preview was not escaped")
+	}
+	u := url.URL{Path: "/alice/project/raw/" + v.ID + "/odd ?#&.bin"}
+	_, body = request("GET", u.String(), "", 200)
+	if !bytes.Equal(body, data["odd ?#&.bin"]) {
+		t.Fatal("download bytes differ")
+	}
 	updated, err := f.client.Save(ctx, "alice", "project", model.Save{ID: operation(t), Base: v.ID, Branch: "main", Changes: []model.Entry{entry("images/pixel.png", []byte("replacement"))}}, nil, func(model.Entry) (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader("replacement")), nil
 	})
@@ -130,7 +145,7 @@ func TestMediaStreamingAndImmutableMarkdownImages(t *testing.T) {
 	if !bytes.Equal(body, data["images/pixel.png"]) {
 		t.Fatal("old media followed branch change")
 	}
-	err = f.store.WithProject(ctx, instance.Principal{User: f.user}, "alice", "project", instance.Maintainer, func(store *project.Store) error {
+	err = f.store.WithProject(ctx, instance.Principal{User: f.user}, "alice", "project", instance.Maintainer, func(_ instance.Project, store *project.Store) error {
 		if err := store.SetRetention(ctx, model.Retention{Versions: 1, HistoryDays: 90}); err != nil {
 			return err
 		}

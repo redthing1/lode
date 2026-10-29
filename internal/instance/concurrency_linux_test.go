@@ -36,7 +36,7 @@ func TestColdProjectOpenDoesNotBlockPublishedProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := func(p Project, want string) error {
-		return s.WithProject(ctx, Principal{User: user}, p.Owner, p.Name, Reader, func(store *project.Store) error {
+		return s.WithProject(ctx, Principal{User: user}, p.Owner, p.Name, Reader, func(_ Project, store *project.Store) error {
 			id, err := store.Head(ctx, "main")
 			if err != nil {
 				return err

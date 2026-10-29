@@ -15,12 +15,9 @@ import (
 func (s *Server) storagePage(w http.ResponseWriter, r *http.Request, actor instance.Principal) error {
 	p := page{Title: "Storage", Section: "storage", User: actor.User}
 	var err error
-	p.Project, err = s.instance.Project(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Maintainer)
-	if err != nil {
-		return err
-	}
 	status := 200
-	err = s.instance.WithProject(r.Context(), actor, p.Project.Owner, p.Project.Name, instance.Maintainer, func(store *project.Store) error {
+	err = s.instance.WithProject(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Maintainer, func(info instance.Project, store *project.Store) error {
+		p.Project = info
 		p.Policy, err = store.Retention(r.Context())
 		if err != nil {
 			return err
@@ -95,12 +92,9 @@ func (s *Server) tagsPage(w http.ResponseWriter, r *http.Request, actor instance
 			required = instance.Maintainer
 		}
 	}
-	p.Project, err = s.instance.Project(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), required)
-	if err != nil {
-		return err
-	}
 	status := 200
-	err = s.instance.WithProject(r.Context(), actor, p.Project.Owner, p.Project.Name, required, func(store *project.Store) error {
+	err = s.instance.WithProject(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), required, func(info instance.Project, store *project.Store) error {
+		p.Project = info
 		if r.Method == "POST" {
 			p.Tag = model.Reference{Name: r.FormValue("name"), Version: r.FormValue("version")}
 			p.Ref = r.FormValue("from")

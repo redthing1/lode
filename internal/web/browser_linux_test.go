@@ -14,11 +14,10 @@ import (
 	"testing"
 
 	"github.com/redthing1/lode/internal/instance"
-	"github.com/redthing1/lode/internal/model"
 	"github.com/redthing1/lode/internal/remote"
 )
 
-func TestBrowserOnboardingAndProject(t *testing.T) {
+func TestBrowserOnboardingAndSessions(t *testing.T) {
 	ctx := context.Background()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -98,43 +97,6 @@ func TestBrowserOnboardingAndProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.HTTP.CloseIdleConnections()
-	client.InstanceID = store.ID
-	p, err := client.Project(ctx, "alice", "project")
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.ProjectID = p.ID
-	data := map[string]string{
-		"README.md":   "# Useful project\n\n[Text](notes.txt)\n\n<script>alert('x')</script>\n\n![remote](https://other.example/image.png)\n",
-		"notes.txt":   "exact text <script>not markup</script>",
-		"odd ?#&.bin": "opaque\x00\xff",
-	}
-	changes := []model.Entry{}
-	for name, bytes := range data {
-		changes = append(changes, entry(name, []byte(bytes)))
-	}
-	v, err := client.Save(ctx, "alice", "project", model.Save{ID: operation(t), Branch: "main", Message: "First files", Changes: changes}, nil, func(e model.Entry) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(data[e.Path])), nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	body = request("GET", "/alice/project", nil, "", 200)
-	if !strings.Contains(body, "<h1>Useful project</h1>") || strings.Contains(body, "<script>alert") || strings.Contains(body, "other.example/image") {
-		t.Fatal("unsafe or missing Markdown preview")
-	}
-	if !strings.Contains(body, "path=notes.txt") || !strings.Contains(body, "version="+v.ID) {
-		t.Fatal("relative link is not version-bound")
-	}
-	body = request("GET", "/alice/project?path=notes.txt", nil, "", 200)
-	if !strings.Contains(body, "&lt;script&gt;not markup&lt;/script&gt;") {
-		t.Fatal("text preview was not escaped")
-	}
-	u := url.URL{Path: "/alice/project/raw/" + v.ID + "/odd ?#&.bin"}
-	if body := request("GET", u.String(), nil, "", 200); body != data["odd ?#&.bin"] {
-		t.Fatal("download bytes differ")
-	}
-	if body := request("GET", "/alice/project/history", nil, "", 200); !strings.Contains(body, "First files") {
-		t.Fatal("missing history")
-	}
 	request("GET", "/settings/appearance", nil, "", 200)
 	request("POST", "/logout", nil, "https://other.example", 403)
 	request("GET", "/", nil, "", 200)

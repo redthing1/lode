@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/redthing1/lode/internal/remote"
+	"github.com/redthing1/lode/internal/workspace"
 	"golang.org/x/term"
 )
 
@@ -71,6 +72,14 @@ func credentials(origin string) (credential, error) {
 		return credential{}, fmt.Errorf("sign in first: lode login %s", origin)
 	}
 	return c, nil
+}
+
+func workspaceCredentials(s workspace.State) (credential, error) {
+	c, err := credentials(s.Server)
+	if err == nil && c.Instance != "" && c.Instance != s.InstanceID {
+		err = errors.New("saved credentials belong to another instance; check this workspace's server")
+	}
+	return c, err
 }
 
 func authenticated(origin string) (*remote.Client, error) {

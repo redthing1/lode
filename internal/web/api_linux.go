@@ -57,7 +57,7 @@ func (s *Server) withProject(r *http.Request, actor instance.Principal, required
 	if required != instance.Reader && (r.Header.Get("Lode-Instance") == "" || r.Header.Get("Lode-Project") == "") {
 		return badRequest(errors.New("save requires instance and project identities"))
 	}
-	return s.instance.WithProject(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), required, func(p *project.Store) error {
+	return s.instance.WithProject(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), required, func(_ instance.Project, p *project.Store) error {
 		if expected := r.Header.Get("Lode-Project"); expected != "" && expected != p.ID() {
 			return &remote.Error{Code: "identity", Message: "project identity changed", Status: http.StatusPreconditionFailed}
 		}

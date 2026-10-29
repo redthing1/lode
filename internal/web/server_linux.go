@@ -24,13 +24,14 @@ type Server struct {
 	instance *instance.Store
 	mux      *http.ServeMux
 	host     string
-	browser  http.Handler
 	sessions *scs.SessionManager
 }
 
 func New(store *instance.Store) *Server {
 	u, _ := url.Parse(store.Config.URL)
 	s := &Server{instance: store, mux: http.NewServeMux(), host: u.Host}
+	s.mux.Handle("/api/", http.NotFoundHandler())
+	s.mux.Handle("GET /assets/", http.FileServer(http.FS(browserFiles)))
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	s.mux.HandleFunc("GET /api/me", s.api(s.me))
 	s.mux.HandleFunc("GET /api/projects", s.api(s.projects))
@@ -57,7 +58,7 @@ func New(store *instance.Store) *Server {
 	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/save", s.api(s.save))
 	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/resolve", s.api(s.resolve))
 	s.mux.HandleFunc("POST /api/projects/{owner}/{project}/cancel", s.api(s.cancel))
-	s.initBrowser(u.Scheme == "https")
+	s.mux.Handle("/", s.initBrowser(u.Scheme == "https"))
 	return s
 }
 
@@ -68,11 +69,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
-	if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/healthz" {
-		s.mux.ServeHTTP(w, r)
-	} else {
-		s.browser.ServeHTTP(w, r)
-	}
+	s.mux.ServeHTTP(w, r)
 }
 
 type apiHandler func(http.ResponseWriter, *http.Request, instance.Principal) error

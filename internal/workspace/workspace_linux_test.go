@@ -344,7 +344,7 @@ func TestSourceExpiryBetweenBatchesCanCancelOffline(t *testing.T) {
 			_, err := seed.Save(ctx, f.token, "new tip")
 			return err
 		}
-		return f.store.WithProject(ctx, instance.Principal{User: f.user}, "alice", "project", instance.Maintainer, func(p *project.Store) error {
+		return f.store.WithProject(ctx, instance.Principal{User: f.user}, "alice", "project", instance.Maintainer, func(_ instance.Project, p *project.Store) error {
 			if err := p.SetRetention(ctx, model.Retention{Versions: 1, HistoryDays: 90}); err != nil {
 				return err
 			}

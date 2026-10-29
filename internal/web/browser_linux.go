@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func (s *Server) initBrowser(secure bool) {
+func (s *Server) initBrowser(secure bool) http.Handler {
 	// Cookies ignore ports; separate instances on one host need distinct names.
 	cookieName := "lode-" + s.instance.ID
 	if secure {
@@ -32,7 +32,6 @@ func (s *Server) initBrowser(secure bool) {
 	}
 	s.sessions = sessions
 	mux := http.NewServeMux()
-	s.mux.Handle("GET /assets/", http.FileServer(http.FS(browserFiles)))
 	type handler func(http.ResponseWriter, *http.Request, instance.Principal) error
 	bind := func(pattern string, h handler) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +143,7 @@ func (s *Server) initBrowser(secure bool) {
 	bind("GET /{owner}/{project}/raw/{version}/{path...}", s.download)
 	bind("GET /{owner}/{project}/media/{version}/{path...}", s.media)
 	protected := http.NewCrossOriginProtection().Handler(sessions.LoadAndSave(mux))
-	s.browser = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)

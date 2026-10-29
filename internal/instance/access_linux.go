@@ -49,27 +49,27 @@ var ErrMember = errors.New("user not found or disabled")
 var ErrOwner = errors.New("the project owner always has maintainer access")
 var ErrRole = errors.New("choose reader, writer or maintainer access")
 
-func (s *Store) Members(ctx context.Context, actor Principal, owner, name string) ([]Member, error) {
+func (s *Store) Members(ctx context.Context, actor Principal, owner, name string) (Project, []Member, error) {
 	p, err := s.Project(ctx, actor, owner, name, Maintainer)
 	if err != nil {
-		return nil, err
+		return Project{}, nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT u.id,u.name,u.admin,u.disabled,'maintainer' AS role,1 AS owner FROM users u WHERE u.name=?
  UNION ALL SELECT u.id,u.name,u.admin,u.disabled,m.role,0 FROM members m JOIN users u ON u.id=m.user_id WHERE m.project=?
  ORDER BY owner DESC,name`, p.Owner, p.ID)
 	if err != nil {
-		return nil, err
+		return Project{}, nil, err
 	}
 	defer rows.Close()
 	var members []Member
 	for rows.Next() {
 		var m Member
 		if err := rows.Scan(&m.User.ID, &m.User.Name, &m.User.Admin, &m.User.Disabled, &m.Role, &m.Owner); err != nil {
-			return nil, err
+			return Project{}, nil, err
 		}
 		members = append(members, m)
 	}
-	return members, rows.Err()
+	return p, members, rows.Err()
 }
 
 // An empty role removes membership. Ownership is implicit and cannot be changed
