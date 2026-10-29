@@ -1,5 +1,5 @@
 {{define "projects"}}{{template "top" .}}
-<div class="heading"><h1>Projects</h1><a class="button" href="/projects/new">New project</a></div>
+<div class="heading"><h1>{{.Title}}</h1>{{if or (not .Owner) (eq .Owner .User.Name)}}<a class="button" href="/projects/new">New project</a>{{end}}</div>
 <div class="panel project-list">
 {{range .Projects}}<a class="project-row" href="{{projectURL .}}">{{template "folder"}}<span>{{.Owner}} / <strong>{{.Name}}</strong></span><span class="badge">Private</span></a>
 {{else}}<p class="empty">No projects yet.</p>{{end}}
@@ -18,7 +18,7 @@
 {{template "bottom" .}}{{end}}
 
 {{define "project-heading"}}
-<div class="heading project-heading"><h1>{{template "folder"}}<span>{{.Project.Owner}}</span><span class="muted">/</span>{{if eq .Project.State "deleting"}}<strong>{{.Project.Name}}</strong>{{else}}<a href="{{projectURL .Project}}">{{.Project.Name}}</a>{{end}}<span class="badge">Private</span></h1></div>
+<div class="heading project-heading"><h1>{{template "folder"}}<a href="/{{.Project.Owner}}">{{.Project.Owner}}</a><span class="muted">/</span>{{if eq .Project.State "deleting"}}<strong>{{.Project.Name}}</strong>{{else}}<a href="{{projectURL .Project}}">{{.Project.Name}}</a>{{end}}<span class="badge">Private</span></h1></div>
 <nav class="project-nav" aria-label="Project">
   {{if ne .Project.State "deleting"}}<a href="{{projectURL .Project}}" {{if and (ne .Section "members") (ne .Section "storage") (ne .Section "delete")}}aria-current="page"{{end}}>Files</a>{{end}}
   {{if eq .Project.Role "maintainer"}}<a href="{{projectURL .Project}}/settings/{{if eq .Project.State "deleting"}}delete{{else}}members{{end}}" {{if or (eq .Section "members") (eq .Section "storage") (eq .Section "delete")}}aria-current="page"{{end}}>Settings</a>{{end}}
@@ -27,21 +27,31 @@
 
 {{define "project"}}{{template "top" .}}{{template "project-heading" .}}
 <div class="toolbar">
-  <details class="branch-picker"><summary class="ref">{{.Ref}}</summary><div class="menu">
+  <details class="branch-picker" data-menu><summary class="ref">{{template "branch-icon"}} {{.Ref}}</summary><div class="menu">
     {{range .Branches}}<a href="{{branchURL $.Project .Name}}" {{if eq $.Branch .Name}}aria-current="page"{{end}}>{{.Name}}</a>{{end}}
     <a href="{{projectURL .Project}}/branches">All branches</a>
     <a href="{{projectURL .Project}}/tags">Tags</a>
   </div></details>
   {{if .Version.ID}}
-  <nav class="breadcrumbs" aria-label="Files"><a href="{{tree .Project .Version.ID "" ""}}">{{.Project.Name}}</a>{{if .Path}}<span>/</span><span>{{.Path}}</span>{{end}}</nav>
-  <a class="button secondary" href="{{historyURL .Project .Branch .Version.ID}}">History</a>
+  <nav class="breadcrumbs" aria-label="Files"><a href="{{tree .Project .Version.ID "" ""}}">{{.Project.Name}}</a>{{range crumbs .Path}}<span>/</span>{{if eq . $.Path}}<span aria-current="page">{{base .}}</span>{{else}}<a href="{{tree $.Project $.Version.ID . ""}}">{{base .}}</a>{{end}}{{end}}</nav>
   {{end}}
+  <div class="actions">
+    {{if .Version.ID}}<a class="button secondary" href="{{historyURL .Project .Branch .Version.ID}}">{{template "history-icon"}}History</a>{{end}}
+    <details class="clone-picker" data-menu><summary class="button">{{template "terminal-icon"}}Clone<span class="caret" aria-hidden="true">▾</span></summary>
+      <div class="menu clone-menu">
+        <label for="clone-command">Clone {{if .Branch}}{{.Branch}}{{else}}main{{end}}</label>
+        <div class="copy-row"><input id="clone-command" readonly spellcheck="false" value="lode clone{{if and .Branch (ne .Branch "main")}} --branch {{.Branch}}{{end}} {{.Origin}}{{projectURL .Project}}"><button class="secondary" type="button" data-copy="clone-command">{{template "copy-icon"}}<span aria-live="polite">Copy</span></button></div>
+        {{if not .Branch}}<p class="hint muted">Clones the latest main, not this historical version.</p>{{end}}
+        <p class="hint muted">Sign in first: <code>lode login {{.Origin}}</code></p>
+      </div>
+    </details>
+  </div>
 </div>
 {{if .Version.ID}}
 <div class="version-row"><span>{{if .Version.Message}}{{.Version.Message}}{{else}}Saved version{{end}}</span>{{with index .Authors .Version.Actor}}<strong>{{.}}</strong>{{end}}<a href="{{tree .Project .Version.ID "" ""}}"><code>{{short .Version.ID}}</code></a><time>{{time .Version.Created}}</time></div>
 {{if not .Version.Retained}}<p class="notice">This version's contents have expired.</p>{{end}}
 {{if .File}}
-<div class="file-header"><strong>{{base .Path}}</strong>{{if .Version.Retained}}<a class="button secondary" href="{{raw .Project .Version.ID .Path}}">Download</a>{{end}}</div>
+<div class="file-header"><strong>{{base .Path}}</strong>{{if .Version.Retained}}<a class="button secondary" href="{{raw .Project .Version.ID .Path}}">{{template "download-icon"}}Download</a>{{end}}</div>
 {{if .Markdown}}<article class="markdown panel">{{.Markdown}}</article>{{else if .Media}}<div class="media-preview panel">
 {{if eq .Media "image"}}<img src="{{media .Project .Version.ID .Path}}" alt="{{base .Path}}">
 {{else if eq .Media "audio"}}<audio controls preload="metadata" src="{{media .Project .Version.ID .Path}}"></audio>
@@ -60,7 +70,7 @@
 {{if .Project.Role.Allows "writer"}}
 <p>Create an <a href="/settings/tokens">access token</a>, then connect your project folder:</p>
 <pre>lode login {{.Origin}}
-lode attach{{if ne .Branch "main"}} -branch {{.Branch}}{{end}} {{.Origin}}{{projectURL .Project}} .
+lode attach{{if ne .Branch "main"}} --branch {{.Branch}}{{end}} {{.Origin}}{{projectURL .Project}} .
 lode save -m 'Initial version'</pre>
 {{end}}
 </section>
@@ -77,7 +87,7 @@ lode save -m 'Initial version'</pre>
 {{template "bottom" .}}{{end}}
 
 {{define "branches"}}{{template "top" .}}{{template "project-heading" .}}
-<h2>Branches</h2>
+<div class="toolbar"><a class="button secondary" href="{{projectURL .Project}}">← Files</a><h2>Branches</h2><a class="button secondary" href="{{projectURL .Project}}/tags">Tags</a></div>
 <div class="panel">
 {{range .Branches}}<div class="history-row"><a href="{{branchURL $.Project .Name}}">{{.Name}}</a>{{if .Version}}<a class="ref" href="{{tree $.Project .Version "" ""}}">{{short .Version}}</a>{{else}}<span class="muted">No saved versions</span>{{end}}</div>{{end}}
 </div>

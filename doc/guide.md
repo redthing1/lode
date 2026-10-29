@@ -19,7 +19,7 @@ lode attach https://lode.example/alice/example ./work
 lode clone https://lode.example/alice/example ./another-workspace
 ```
 
-Clone requires an empty or nonexistent destination. Workspace metadata lives in `.lode/`.
+The project's **Clone** button copies a command for the selected branch. Clone requires an empty or nonexistent destination. Workspace metadata lives in `.lode/`.
 
 ## Share a project
 
@@ -66,7 +66,7 @@ The command prompts for a new password, enables the account, and invalidates its
 Include or exclude project-relative paths. Flags may be repeated; the nearest ancestor rule wins.
 
 ```sh
-lode clone -include assets -exclude assets/cache \
+lode clone --include assets --exclude assets/cache \
   https://lode.example/alice/example ./assets-work
 ```
 
@@ -76,11 +76,11 @@ Inspect or replace an existing workspace's selection:
 
 ```sh
 lode select
-lode select -include assets -include references
-lode select -include assets
+lode select --include assets --include references
+lode select --include assets
 ```
 
-Selection changes use the workspace's current version. Clean files outside the new selection are unloaded; changed files refuse unloading. Unselected local files remain untouched. Use `lode select -none` to unload all clean selected paths. Loading over different local contents requires the same conflict choices as update.
+Selection changes use the workspace's current version. Clean files outside the new selection are unloaded; changed files refuse unloading. Unselected local files remain untouched. Use `lode select --none` to unload all clean selected paths. Loading over different local contents requires the same conflict choices as update.
 
 ## Save and inspect
 
@@ -104,10 +104,10 @@ lode save -m 'Combine changes'
 Independent edits survive. Conflicting file edits, deletions, and file/directory replacements stop before changing working files. Choose each conflicting path explicitly:
 
 ```sh
-lode update -local assets/model.bin -incoming references/source.bin
+lode update --local assets/model.bin --incoming references/source.bin
 ```
 
-`-local` keeps local contents; `-incoming` takes the shared version. A directory conflict chooses the whole subtree. For selection conflicts, repeat the selection rules with these flags. Update settles any pending save first, recovering its accepted baseline or preventing that request from publishing later.
+`--local` keeps local contents; `--incoming` takes the shared version. A directory conflict chooses the whole subtree. For selection conflicts, repeat the selection rules with these flags. Update settles any pending save first, recovering its accepted baseline or preventing that request from publishing later.
 
 ## Branches and restore
 
@@ -119,9 +119,9 @@ lode branch create experiment
 lode switch experiment
 ```
 
-Writers can create branches. Switching preserves the selection and leaves unselected local files alone. Unsaved changes can follow a branch at the same version; save them before switching to a different version. Use `lode branch create -from main experiment` to start at another branch or version.
+Writers can create branches. Switching preserves the selection and leaves unselected local files alone. Unsaved changes can follow a branch at the same version; save them before switching to a different version. Use `lode branch create --from main experiment` to start at another branch or version.
 
-Clone directly from a branch with `lode clone -branch experiment <project-url>`. The browser's branch picker shows its files; **All branches** lists branch tips. Maintainers can delete a non-default branch using `lode branch delete experiment` after switching elsewhere. Deletion refuses a tip that changed during the request and leaves saved versions intact.
+Clone directly from a branch with `lode clone --branch experiment <project-url>`. The browser's branch picker shows its files; **All branches** lists branch tips. Maintainers can delete a non-default branch using `lode branch delete experiment` after switching elsewhere. Deletion refuses a tip that changed during the request and leaves saved versions intact.
 
 Integrate another branch or saved version into the current branch:
 
@@ -134,10 +134,10 @@ lode merge experiment
 Merge requires clean selected files and an up-to-date target branch. It combines complete project versions on the server, including excluded paths, then updates your selected files. It uploads no file contents. Conflicts stop publication; retry with explicit choices:
 
 ```sh
-lode merge -local assets/model.bin -incoming references/source.bin experiment
+lode merge --local assets/model.bin --incoming references/source.bin experiment
 ```
 
-Here `-local` keeps the current branch's saved contents; `-incoming` takes the source version. Directory choices cover the whole subtree. The saved merge records both parents, including when choices leave the target files unchanged. Already integrated sources create no new version. Ambiguous or missing common ancestry prevents automatic integration; retained contents can still be restored explicitly.
+Here `--local` keeps the current branch's saved contents; `--incoming` takes the source version. Directory choices cover the whole subtree. The saved merge records both parents, including when choices leave the target files unchanged. Already integrated sources create no new version. Ambiguous or missing common ancestry prevents automatic integration; retained contents can still be restored explicitly.
 
 Restore earlier contents as local changes:
 
@@ -148,7 +148,7 @@ lode status
 lode save -m 'Restore model'
 ```
 
-Use a branch or tag name, a full version ID, or the short ID shown by history. Ambiguous references are refused; qualify them with `branch:<name>`, `tag:<name>`, or `version:<full-id>`. `lode log -full` shows complete IDs. With no paths, restore covers the workspace's selection. It never loads excluded paths, refuses to overwrite changed target files, and preserves unrelated local work. The branch and saved baseline remain unchanged until you save.
+Use a branch or tag name, a full version ID, or the short ID shown by history. Ambiguous references are refused; qualify them with `branch:<name>`, `tag:<name>`, or `version:<full-id>`. `lode log --full` shows complete IDs. With no paths, restore covers the workspace's selection. It never loads excluded paths, refuses to overwrite changed target files, and preserves unrelated local work. The branch and saved baseline remain unchanged until you save.
 
 ## Protect versions and clean up
 
@@ -160,12 +160,12 @@ lode tag
 lode restore release-one assets/model.bin
 ```
 
-Creation uses the workspace's saved version; `-from <reference>` selects another. Tags cannot move. Writers can create them; maintainers can remove protection with `lode tag delete release-one`. The browser lists tags in the branch menu.
+Creation uses the workspace's saved version; `--from <reference>` selects another. Tags cannot move. Writers can create them; maintainers can remove protection with `lode tag delete release-one`. The browser lists tags in the branch menu.
 
 Maintainers manage retention in **Project settings → Storage** or through the CLI:
 
 ```sh
-lode retention -keep 20 -history-days 90
+lode retention --keep 20 --history-days 90
 lode cleanup
 ```
 

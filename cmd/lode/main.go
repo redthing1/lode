@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
+	"text/tabwriter"
 
 	"github.com/redthing1/lode/internal/version"
 )
@@ -23,32 +25,32 @@ func main() {
 
 const usage = `Usage: lode [-C directory] <command>
 
-  login     Save an access token for a server
-  projects  List or create projects
-  attach    Connect an existing folder to an empty project
-  clone     Download a project, optionally selecting paths
-  status    Show selected local changes (works offline)
-  save      Publish local changes
-  update    Reconcile the latest shared version with local work
-  select    Show or change the paths present locally
-  branch    List, create or delete shared branches
-  tag       Name and protect a saved version
-  retention Show or change the project's cleanup policy
-  cleanup   Preview or apply content expiry and history pruning
-  collect   Reclaim unreferenced content storage
-  switch    Work on another branch
-  merge     Integrate a saved branch or version into the current branch
-  restore   Restore saved contents as local changes
-  resume    Continue an interrupted operation
-  cancel    Settle a pending save or reverse an unfinished local operation
-  log       Show saved versions
-  init      Create a server instance (Linux)
-  serve     Run a server instance (Linux)
-  backup    Copy and verify a stopped instance (Linux)
-  recover-user Reset an account on a stopped server (Linux)
-  version   Print the version
+  login         Save an access token for a server
+  projects      List or create projects
+  attach        Connect an existing folder to an empty project
+  clone         Download a project, optionally selecting paths
+  status        Show selected local changes (works offline)
+  save          Publish local changes
+  update        Reconcile the latest shared version with local work
+  select        Show or change the paths present locally
+  branch        List, create or delete shared branches
+  tag           Name and protect a saved version
+  retention     Show or change the project's cleanup policy
+  cleanup       Preview or apply content expiry and history pruning
+  collect       Reclaim unreferenced content storage
+  switch        Work on another branch
+  merge         Integrate a saved branch or version into the current branch
+  restore       Restore saved contents as local changes
+  resume        Continue an interrupted operation
+  cancel        Settle a pending save or reverse an unfinished local operation
+  log           Show saved versions
+  init          Create a server instance (Linux)
+  serve         Run a server instance (Linux)
+  backup        Copy and verify a stopped instance (Linux)
+  recover-user  Reset an account on a stopped server (Linux)
+  version       Print the version
 
-Run lode <command> -h for command help.
+Run lode <command> --help for command help.
 `
 
 func run(ctx context.Context, args []string, out io.Writer) error {
@@ -56,14 +58,17 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		args = []string{"version"}
 	}
 	global := flags("lode", usage, out)
-	directory := global.String("C", ".", "working directory")
+	directory := global.String("C", ".", "working `directory`")
 	if err := global.Parse(args); err != nil {
 		return err
 	}
 	args = global.Args()
-	if len(args) == 0 || args[0] == "help" {
+	if len(args) == 0 || len(args) == 1 && args[0] == "help" {
 		_, err := io.WriteString(out, usage)
 		return err
+	}
+	if args[0] == "help" {
+		args = append(args[1:], "--help")
 	}
 	switch args[0] {
 	case "version":
@@ -87,13 +92,34 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	case "init", "serve", "backup", "recover-user":
 		return serverCommand(ctx, args[0], args[1:], *directory, out)
 	default:
-		return fmt.Errorf("unknown command %q; run lode -h", args[0])
+		return fmt.Errorf("unknown command %q; run lode --help", args[0])
 	}
 }
 
 func flags(name, usage string, out io.Writer) *flag.FlagSet {
 	f := flag.NewFlagSet(name, flag.ContinueOnError)
-	f.SetOutput(out)
-	f.Usage = func() { fmt.Fprintln(out, usage); f.PrintDefaults() }
+	f.SetOutput(io.Discard)
+	f.Usage = func() {
+		fmt.Fprintln(out, strings.TrimSpace(usage))
+		fmt.Fprintln(out)
+		w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+		f.VisitAll(func(option *flag.Flag) {
+			prefix := "--"
+			if len(option.Name) == 1 {
+				prefix = "-"
+			}
+			value, description := flag.UnquoteUsage(option)
+			label := prefix + option.Name
+			if value != "" {
+				label += " " + value
+			}
+			if option.DefValue != "" && option.DefValue != "0" && option.DefValue != "false" {
+				description += " (default: " + option.DefValue + ")"
+			}
+			fmt.Fprintf(w, "  %s\t%s\n", label, description)
+		})
+		fmt.Fprintln(w, "  -h, --help\tShow help")
+		w.Flush()
+	}
 	return f
 }

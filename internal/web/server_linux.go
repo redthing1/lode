@@ -113,7 +113,7 @@ func (s *Server) api(handler apiHandler) http.HandlerFunc {
 				apiError = &remote.Error{Code: "credentials", Message: "invalid credentials", Status: 401}
 				w.Header().Set("WWW-Authenticate", "Bearer")
 			case errors.Is(err, instance.ErrAccess):
-				apiError = &remote.Error{Code: "access", Message: err.Error(), Status: 403}
+				apiError = &remote.Error{Code: "access", Message: "access denied: check project membership and token scope/role", Status: 403}
 			case errors.Is(err, sql.ErrNoRows), errors.Is(err, os.ErrNotExist), errors.Is(err, instance.ErrNotFound):
 				apiError = &remote.Error{Code: "not_found", Message: "not found", Status: 404}
 			case errors.Is(err, project.ErrStale):

@@ -32,11 +32,11 @@ func (p *paths) Set(value string) error {
 }
 
 func connectWorkspace(ctx context.Context, command string, args []string, directory string, out io.Writer) error {
-	f := flags(command, "Usage: lode "+command+" [-include path] [-exclude path] <project-url> [directory]", out)
+	f := flags(command, "Usage: lode "+command+" [options] <project-url> [directory]", out)
 	var include, exclude paths
-	f.Var(&include, "include", "include a path and its descendants (repeatable; default: all)")
-	f.Var(&exclude, "exclude", "exclude a path and its descendants (repeatable)")
-	branch := f.String("branch", "main", "branch to connect")
+	f.Var(&include, "include", "include `path` and descendants (repeatable; default: all)")
+	f.Var(&exclude, "exclude", "exclude `path` and descendants (repeatable)")
+	branch := f.String("branch", "main", "branch `name` to connect")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
@@ -107,19 +107,19 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 	var local, incoming, include, exclude paths
 	var none, full bool
 	if command == "update" || command == "select" || command == "merge" {
-		f.Var(&local, "local", "keep local contents for a conflicting path (repeatable)")
-		f.Var(&incoming, "incoming", "use incoming contents for a conflicting path (repeatable)")
+		f.Var(&local, "local", "keep local contents at conflicting `path` (repeatable)")
+		f.Var(&incoming, "incoming", "use incoming contents at conflicting `path` (repeatable)")
 	}
 	if command == "select" {
-		f.Var(&include, "include", "include a path and its descendants (repeatable)")
-		f.Var(&exclude, "exclude", "exclude a path and its descendants (repeatable)")
+		f.Var(&include, "include", "include `path` and descendants (repeatable)")
+		f.Var(&exclude, "exclude", "exclude `path` and descendants (repeatable)")
 		f.BoolVar(&none, "none", false, "unload all clean selected paths")
 	}
 	if command == "save" || command == "merge" {
-		f.StringVar(&message, "m", "", "version message")
+		f.StringVar(&message, "m", "", "version `message`")
 	}
 	if command == "log" {
-		f.IntVar(&limit, "n", 20, "maximum versions (1–100)")
+		f.IntVar(&limit, "n", 20, "maximum `count` of versions (1–100)")
 		f.BoolVar(&full, "full", false, "show complete version IDs")
 	}
 	if err := f.Parse(args); err != nil {
@@ -127,6 +127,9 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 	}
 	if command == "merge" && f.NArg() != 1 || command != "merge" && f.NArg() != 0 {
 		return errors.New(usage)
+	}
+	if none && len(include)+len(exclude) > 0 {
+		return errors.New("use --none without include/exclude rules")
 	}
 	w, err := workspace.Open(directory)
 	if err != nil {
@@ -214,14 +217,14 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 			for _, c := range conflict.Conflicts {
 				fmt.Fprintf(out, "C  %s (target: %s, incoming: %s)\n", c.Path, c.Local, c.Incoming)
 			}
-			return fmt.Errorf("%w; retry lode merge -local <path> or -incoming <path> <source>", err)
+			return fmt.Errorf("%w; retry lode merge --local <path> or --incoming <path> <source>", err)
 		}
 		var localConflict *workspace.ConflictsError
 		if errors.As(err, &localConflict) {
 			for _, c := range localConflict.Conflicts {
 				fmt.Fprintf(out, "C  %s (local: %s, incoming: %s)\n", c.Path, c.Local, c.Incoming)
 			}
-			return fmt.Errorf("%w; resolve with lode update -local <path> or -incoming <path>", err)
+			return fmt.Errorf("%w; resolve with lode update --local <path> or --incoming <path>", err)
 		}
 		if err != nil {
 			return err
@@ -236,9 +239,6 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 				return selectionErr
 			}
 			if none {
-				if len(include)+len(exclude) > 0 {
-					return errors.New("use -none without include/exclude rules")
-				}
 				selection = model.Selection{}
 			}
 			err = w.Select(ctx, cred.Token, selection, choices)
@@ -248,7 +248,7 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 			for _, c := range conflicts.Conflicts {
 				fmt.Fprintf(out, "C  %s (local: %s, incoming: %s)\n", c.Path, c.Local, c.Incoming)
 			}
-			return fmt.Errorf("resolve with lode %s -local <path> or -incoming <path>; repeat flags for multiple conflicts", command)
+			return fmt.Errorf("resolve with lode %s --local <path> or --incoming <path>; repeat flags for multiple conflicts", command)
 		}
 		if err != nil {
 			return err
@@ -315,13 +315,13 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 }
 
 func projects(ctx context.Context, args []string, out io.Writer) error {
-	f := flags("projects", "Usage: lode projects [-create name] <server-url>", out)
-	name := f.String("create", "", "create a project")
+	f := flags("projects", "Usage: lode projects [--create name] <server-url>", out)
+	name := f.String("create", "", "create project `name`")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
 	if f.NArg() != 1 {
-		return errors.New("usage: lode projects [-create name] <server-url>")
+		return errors.New("usage: lode projects [--create name] <server-url>")
 	}
 	origin, err := originOf(f.Arg(0))
 	if err != nil {

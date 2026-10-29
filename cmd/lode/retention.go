@@ -16,10 +16,10 @@ func retentionCommand(ctx context.Context, command string, args []string, direct
 	var keep, days int
 	var token string
 	if command == "retention" {
-		f.IntVar(&keep, "keep", 0, "versions to keep per branch")
-		f.IntVar(&days, "history-days", 0, "days of history metadata to keep")
+		f.IntVar(&keep, "keep", 0, "`count` of versions to keep per branch")
+		f.IntVar(&days, "history-days", 0, "`days` of history metadata to keep")
 	} else if command == "cleanup" {
-		f.StringVar(&token, "apply", "", "apply the exact reviewed cleanup token")
+		f.StringVar(&token, "apply", "", "apply reviewed cleanup `token`")
 	}
 	if err := f.Parse(args); err != nil {
 		return err
@@ -98,6 +98,6 @@ func retentionCommand(ctx context.Context, command string, args []string, direct
 		}
 	}
 	fmt.Fprintln(out, "Removed history can prevent later automatic merges. Local files are unchanged.")
-	fmt.Fprintf(out, "Apply within one hour: lode cleanup -apply %s\n", p.Token)
+	fmt.Fprintf(out, "Apply within one hour: lode cleanup --apply %s\n", p.Token)
 	return nil
 }

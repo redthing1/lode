@@ -39,7 +39,7 @@
 </div></div>{{template "bottom" .}}{{end}}
 
 {{define "tags"}}{{template "top" .}}{{template "project-heading" .}}
-<div class="toolbar"><a class="button secondary" href="{{projectURL .Project}}">← Files</a><h2>Tags</h2></div>
+<div class="toolbar"><a class="button secondary" href="{{projectURL .Project}}">← Files</a><h2>Tags</h2><a class="button secondary" href="{{projectURL .Project}}/branches">Branches</a></div>
 <p class="muted">Tags protect complete saved versions from cleanup.</p>
 <div class="panel">{{range .Tags}}<div class="member-row"><a href="{{tree $.Project .Version "" ""}}">{{.Name}}</a><span class="ref">{{short .Version}}</span>
 {{if eq $.Project.Role "maintainer"}}<form method="post"><input type="hidden" name="action" value="delete"><input type="hidden" name="name" value="{{.Name}}"><input type="hidden" name="version" value="{{.Version}}"><button class="secondary danger">Remove</button></form>{{end}}

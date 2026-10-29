@@ -31,6 +31,7 @@ type page struct {
 	Subject                               instance.User
 	Setup                                 bool
 	Projects                              []instance.Project
+	Owner                                 string
 	Project                               instance.Project
 	Version                               model.Version
 	History                               []model.Version
@@ -94,6 +95,16 @@ var views = template.Must(template.New("pages").Funcs(template.FuncMap{
 	"version":    func() string { return version.Current },
 	"projectURL": projectURL, "tree": treeURL, "base": path.Base,
 	"media": mediaURL,
+	"crumbs": func(name string) []string {
+		if name == "" {
+			return nil
+		}
+		parts := strings.Split(name, "/")
+		for i := 1; i < len(parts); i++ {
+			parts[i] = parts[i-1] + "/" + parts[i]
+		}
+		return parts
+	},
 	"branchURL": func(p instance.Project, branch string) string {
 		return projectURL(p) + "?branch=" + url.QueryEscape(branch)
 	},

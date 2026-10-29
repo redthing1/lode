@@ -81,6 +81,9 @@ func TestBrowserBranchFilesAndHistory(t *testing.T) {
 	if !strings.Contains(page, "Branch contents") || !strings.Contains(page, "Experimental model") || !strings.Contains(page, `class="branch-picker"`) {
 		t.Fatal("branch files or picker missing")
 	}
+	if !strings.Contains(page, "lode clone --branch experiment/model "+f.origin+"/alice/project") {
+		t.Fatal("clone command does not follow the selected branch")
+	}
 	page = browser.request("GET", "/alice/project/history?branch=experiment%2Fmodel", nil, 200)
 	if !strings.Contains(page, "Experimental model") || !strings.Contains(page, `>experiment/model</span>`) {
 		t.Fatal("history followed the wrong branch")

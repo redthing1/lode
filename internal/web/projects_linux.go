@@ -10,6 +10,27 @@ import (
 	"path"
 )
 
+func (s *Server) projectsPage(w http.ResponseWriter, r *http.Request, actor instance.Principal) error {
+	p := page{Title: "Projects", User: actor.User, Owner: r.PathValue("owner")}
+	projects, err := s.instance.Projects(r.Context(), actor)
+	if err != nil {
+		return err
+	}
+	for _, project := range projects {
+		if p.Owner == "" || project.Owner == p.Owner {
+			p.Projects = append(p.Projects, project)
+		}
+	}
+	if p.Owner != "" {
+		if len(p.Projects) == 0 && p.Owner != actor.User.Name {
+			return instance.ErrNotFound
+		}
+		p.Title = p.Owner
+	}
+	render(w, 200, "projects", p)
+	return nil
+}
+
 func (s *Server) projectPage(w http.ResponseWriter, r *http.Request, actor instance.Principal) error {
 	p := page{User: actor.User, Path: r.URL.Query().Get("path"), Origin: s.instance.Config.URL, Branch: branch(r), Ref: branch(r)}
 	var err error

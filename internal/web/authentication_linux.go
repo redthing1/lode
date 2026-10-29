@@ -81,7 +81,7 @@ func (s *Server) browserJSON(h func(*http.Request) (any, error)) http.HandlerFun
 
 func (s *Server) initAuthentication(mux *http.ServeMux) {
 	limit := rate.NewLimiter(2, 5)
-	for _, route := range []string{"/setup", "/login"} {
+	for _, route := range []string{"GET /setup", "POST /setup", "GET /login", "POST /login"} {
 		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) { s.passwordSignIn(w, r, limit) })
 	}
 	mux.HandleFunc("POST /login/key", s.browserJSON(func(r *http.Request) (any, error) {
@@ -151,10 +151,6 @@ func (s *Server) initAuthentication(mux *http.ServeMux) {
 }
 
 func (s *Server) passwordSignIn(w http.ResponseWriter, r *http.Request, limit *rate.Limiter) {
-	if r.Method != "GET" && r.Method != "POST" {
-		w.WriteHeader(405)
-		return
-	}
 	setup, err := s.instance.NeedsSetup(r.Context())
 	if err != nil {
 		http.Error(w, "Unable to read instance", 500)
@@ -172,7 +168,7 @@ func (s *Server) passwordSignIn(w http.ResponseWriter, r *http.Request, limit *r
 	if setup {
 		p.Title = "Create administrator"
 	}
-	if r.Method == "GET" {
+	if r.Method != "POST" {
 		render(w, 200, "auth", p)
 		return
 	}

@@ -8,13 +8,13 @@ Install Podman and a Compose provider such as `podman-compose`. From the source 
 
 ```sh
 podman compose build
-podman compose run --rm lode init -url https://lode.example /data/instance
+podman compose run --rm lode init --url https://lode.example /data/instance
 podman compose up -d
 ```
 
 Keep the setup code printed by `init`. Put an HTTPS reverse proxy in front of `127.0.0.1:8473`, preserving the original Host header and request path. Allow uploads as large as your project files and sufficient request time for transfers and collection. Open the configured URL, enter the setup code, and create the first administrator.
 
-The Compose service uses host networking and the `lode-data` named volume. For local evaluation, omit `-url` and open `http://localhost:8473`. The initialization command's `-listen` flag selects another address if needed.
+The Compose service uses host networking and the `lode-data` named volume. For local evaluation, omit `--url` and open `http://localhost:8473`. The initialization command's `--listen` flag selects another address if needed.
 
 ```sh
 podman compose logs -f lode
@@ -24,7 +24,7 @@ podman compose up -d
 
 `/healthz` returns 204 at the canonical hostname when the HTTP service is running. It does not verify repository contents. `podman compose down` keeps the named volume; `down -v` deletes it.
 
-Without containers, use `lode init -url https://lode.example ./instance` and `lode serve ./instance`.
+Without containers, use `lode init --url https://lode.example ./instance` and `lode serve ./instance`.
 
 ## Configuration and accounts
 

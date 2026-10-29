@@ -33,8 +33,8 @@ func serverCommand(ctx context.Context, command string, args []string, directory
 	f := flags(command, usage, out)
 	var origin, listen string
 	if command == "init" {
-		f.StringVar(&origin, "url", "http://localhost:8473", "canonical server origin")
-		f.StringVar(&listen, "listen", "127.0.0.1:8473", "HTTP listen address")
+		f.StringVar(&origin, "url", "http://localhost:8473", "canonical server `url`")
+		f.StringVar(&listen, "listen", "127.0.0.1:8473", "HTTP listen `address`")
 	}
 	if err := f.Parse(args); err != nil {
 		return err

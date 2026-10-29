@@ -16,7 +16,7 @@ func historyCommand(ctx context.Context, command string, args []string, director
 	action := ""
 	usage := "Usage: lode " + command + " <branch>"
 	if command == "branch" || command == "tag" {
-		usage = "Usage: lode " + command + " [create [-from reference] <name> | delete <name>]"
+		usage = "Usage: lode " + command + " [create [--from reference] <name> | delete <name>]"
 		if len(args) > 0 && (args[0] == "create" || args[0] == "delete") {
 			action, args = args[0], args[1:]
 		}
@@ -26,7 +26,7 @@ func historyCommand(ctx context.Context, command string, args []string, director
 	f := flags(command, usage, out)
 	from := ""
 	if action == "create" {
-		f.StringVar(&from, "from", "", "start from a branch, tag or version (default: workspace version)")
+		f.StringVar(&from, "from", "", "start from `reference` (default: workspace version)")
 	}
 	if err := f.Parse(args); err != nil {
 		return err

@@ -1,4 +1,4 @@
 // Package version identifies the application release.
 package version
 
-const Current = "0.0.5"
+const Current = "0.0.6"

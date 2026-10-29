@@ -87,6 +87,10 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 		}
 		return string(output)
 	}
+	help := command("clone", "--help")
+	if help != command("help", "clone") || !strings.Contains(help, "--include path") || strings.Contains(help, "  -include") {
+		t.Fatal("command help is inconsistent or uses single-dash long options")
+	}
 	t.Setenv("LODE_TOKEN", token)
 	if got := command("login", origin); !strings.Contains(got, "as alice") {
 		t.Fatal(got)
@@ -101,7 +105,7 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 		t.Fatalf("credential permissions: %v %v", info, err)
 	}
 	projectURL := origin + "/alice/project"
-	if got := command("projects", "-create", "project", origin); strings.TrimSpace(got) != projectURL {
+	if got := command("projects", "--create", "project", origin); strings.TrimSpace(got) != projectURL {
 		t.Fatal(got)
 	}
 	if got := command("projects", origin); !strings.Contains(got, projectURL) {
@@ -130,7 +134,7 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 	}
 	command("-C", first, "tag", "create", "initial")
 	second := filepath.Join(root, "second")
-	command("clone", "-include", "assets", projectURL, second)
+	command("clone", "--include", "assets", projectURL, second)
 	b, err := os.ReadFile(filepath.Join(second, "assets", "model.bin"))
 	if err != nil || !bytes.Equal(b, large) {
 		t.Fatalf("clone bytes: %v", err)
@@ -195,12 +199,12 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 	}
 	command("-C", first, "save", "-m", "independent edit")
 	command("-C", second, "update")
-	command("-C", second, "select", "-include", "assets", "-include", "references")
+	command("-C", second, "select", "--include", "assets", "--include", "references")
 	b, err = os.ReadFile(filepath.Join(second, "references", "keep"))
 	if err != nil || string(b) != "local reference edit" {
 		t.Fatalf("loaded reference: %q %v", b, err)
 	}
-	command("-C", second, "select", "-include", "assets")
+	command("-C", second, "select", "--include", "assets")
 	if _, err := os.Stat(filepath.Join(second, "references")); !os.IsNotExist(err) {
 		t.Fatalf("unloaded reference: %v", err)
 	}
@@ -216,14 +220,14 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 	}
 	conflict := exec.CommandContext(ctx, filepath.Join(bin, "lode"), "-C", third, "update")
 	output, conflictErr := conflict.CombinedOutput()
-	if conflictErr == nil || !bytes.Contains(output, []byte("C  assets/model.bin")) || !bytes.Contains(output, []byte("-incoming")) {
+	if conflictErr == nil || !bytes.Contains(output, []byte("C  assets/model.bin")) || !bytes.Contains(output, []byte("--incoming")) {
 		t.Fatalf("conflict presentation: %v\n%s", conflictErr, output)
 	}
 	b, err = os.ReadFile(filepath.Join(third, "assets", "model.bin"))
 	if err != nil || string(b) != "local conflict" {
 		t.Fatalf("conflict preservation: %q %v", b, err)
 	}
-	command("-C", third, "update", "-incoming", "assets/model.bin")
+	command("-C", third, "update", "--incoming", "assets/model.bin")
 	b, err = os.ReadFile(filepath.Join(third, "assets", "model.bin"))
 	if err != nil || string(b) != "incoming conflict" {
 		t.Fatalf("conflict choice: %q %v", b, err)
@@ -247,7 +251,7 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 		t.Fatal(got)
 	}
 	fourth := filepath.Join(root, "fourth")
-	command("clone", "-branch", "experiment", "-include", "assets", projectURL, fourth)
+	command("clone", "--branch", "experiment", "--include", "assets", projectURL, fourth)
 	b, err = os.ReadFile(filepath.Join(fourth, "assets", "model.bin"))
 	if err != nil || string(b) != "branch contents" {
 		t.Fatalf("CLI branch clone: %q %v", b, err)
@@ -261,10 +265,10 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 	command("-C", third, "save", "-m", "target change")
 	conflict = exec.CommandContext(ctx, filepath.Join(bin, "lode"), "-C", third, "merge", "experiment")
 	output, conflictErr = conflict.CombinedOutput()
-	if conflictErr == nil || !bytes.Contains(output, []byte("C  assets/model.bin")) || !bytes.Contains(output, []byte("-incoming")) {
+	if conflictErr == nil || !bytes.Contains(output, []byte("C  assets/model.bin")) || !bytes.Contains(output, []byte("--incoming")) {
 		t.Fatalf("merge conflict presentation: %v\n%s", conflictErr, output)
 	}
-	if got := command("-C", third, "merge", "-incoming", "assets/model.bin", "experiment"); !strings.Contains(got, "Merged ") {
+	if got := command("-C", third, "merge", "--incoming", "assets/model.bin", "experiment"); !strings.Contains(got, "Merged ") {
 		t.Fatal(got)
 	}
 	b, err = os.ReadFile(filepath.Join(third, "assets", "model.bin"))
@@ -282,16 +286,16 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("LODE_TOKEN", maintenanceToken)
-	command("-C", third, "retention", "-keep", "1", "-history-days", "1")
+	command("-C", third, "retention", "--keep", "1", "--history-days", "1")
 	preview := command("-C", third, "cleanup")
 	if !strings.Contains(preview, "Expire ") || !strings.Contains(preview, "Local files are unchanged.") {
 		t.Fatalf("cleanup preview: %s", preview)
 	}
-	_, apply, ok := strings.Cut(preview, "lode cleanup -apply ")
+	_, apply, ok := strings.Cut(preview, "lode cleanup --apply ")
 	if !ok {
 		t.Fatal("missing apply command")
 	}
-	if got := command("-C", third, "cleanup", "-apply", strings.TrimSpace(apply)); !strings.Contains(got, "Cleanup applied;") {
+	if got := command("-C", third, "cleanup", "--apply", strings.TrimSpace(apply)); !strings.Contains(got, "Cleanup applied;") {
 		t.Fatal(got)
 	}
 	if got := command("-C", third, "collect"); !strings.Contains(got, "Content repository:") || !strings.Contains(got, "allocated.") {
@@ -350,7 +354,7 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 	var interrupted []string
 	for _, name := range []string{"missing-credentials", "invalid-credentials"} {
 		destination := filepath.Join(root, name)
-		clone := exec.CommandContext(ctx, filepath.Join(bin, "lode"), "clone", "-include", "assets/model.bin", projectURL, destination)
+		clone := exec.CommandContext(ctx, filepath.Join(bin, "lode"), "clone", "--include", "assets/model.bin", projectURL, destination)
 		if output, err := clone.CombinedOutput(); err == nil || !bytes.Contains(output, []byte("download interrupted")) {
 			t.Fatalf("interrupted clone: %v\n%s", err, output)
 		}

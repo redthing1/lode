@@ -81,16 +81,24 @@ func TestBrowserSharingAndCurrentTokenAuthority(t *testing.T) {
 	bob.request("GET", "/admin/users", nil, 403)
 	bob.request("GET", "/admin/users/new", nil, 403)
 	bob.request("POST", "/admin/users/new", url.Values{"username": {"eve"}, "password": {password}}, 403)
+	if body := bob.request("GET", "/bob", nil, 200); !strings.Contains(body, "No projects yet.") || !strings.Contains(body, `href="/projects/new"`) {
+		t.Fatal("empty owner page missing project creation")
+	}
 	bob.request("POST", "/projects/new", url.Values{"name": {"own"}}, 303)
 	bob.request("GET", "/bob/own", nil, 200)
 	if body := bob.request("GET", "/", nil, 200); strings.Contains(body, "/alice/project") {
 		t.Fatal("unshared project listed")
 	}
 	bob.request("GET", "/alice/project", nil, 403)
+	bob.request("GET", "/alice", nil, 404)
+	bob.request("GET", "/unknown", nil, 404)
 	members := "/alice/project/settings/members"
 	alice.request("POST", members, url.Values{"username": {"bob"}, "role": {"writer"}}, 303)
 	if body := bob.request("GET", "/", nil, 200); !strings.Contains(body, "/alice/project") {
 		t.Fatal("shared project missing")
+	}
+	if body := bob.request("GET", "/alice", nil, 200); !strings.Contains(body, `href="/alice/project"`) || strings.Contains(body, `href="/bob/own"`) || strings.Contains(body, `href="/projects/new"`) {
+		t.Fatal("owner page did not restrict its projects and creation action")
 	}
 	if body := bob.request("GET", "/alice/project", nil, 200); strings.Contains(body, `href="`+members+`"`) {
 		t.Fatal("writer offered settings")
@@ -146,6 +154,7 @@ func TestBrowserSharingAndCurrentTokenAuthority(t *testing.T) {
 	bob.request("POST", members+"/alice/remove", nil, 400)
 	alice.request("POST", members+"/bob/remove", nil, 303)
 	bob.request("GET", "/alice/project", nil, 403)
+	bob.request("GET", "/alice", nil, 404)
 	bob.request("GET", "/alice/project/history", nil, 403)
 	bob.request("GET", "/alice/project/raw/"+v.ID+"/a", nil, 403)
 	if _, err := c.Head(ctx, "alice", "project", "main"); !errors.As(err, &denial) || denial.Status != 403 {

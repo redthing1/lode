@@ -78,14 +78,8 @@ func (s *Server) initBrowser(secure bool) http.Handler {
 		http.Redirect(w, r, "/login", 303)
 		return nil
 	})
-	bind("GET /{$}", func(w http.ResponseWriter, r *http.Request, actor instance.Principal) error {
-		projects, err := s.instance.Projects(r.Context(), actor)
-		if err != nil {
-			return err
-		}
-		render(w, 200, "projects", page{Title: "Projects", User: actor.User, Projects: projects})
-		return nil
-	})
+	bind("GET /{$}", s.projectsPage)
+	bind("GET /{owner}", s.projectsPage)
 	bind("GET /projects/new", func(w http.ResponseWriter, r *http.Request, actor instance.Principal) error {
 		render(w, 200, "new-project", page{Title: "New project", User: actor.User})
 		return nil

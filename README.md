@@ -8,6 +8,16 @@ Lode is experimental. Selected workspaces support saves, updates, branches, merg
 
 From a source checkout, use Go 1.27.2 or later, a C compiler, and the librsync development library. The installed command also needs the librsync shared library.
 
+On macOS with Homebrew, make its headers and library available to Go's C compiler:
+
+```sh
+brew install librsync
+export CGO_CPPFLAGS="-I$(brew --prefix librsync)/include"
+export CGO_LDFLAGS="-L$(brew --prefix librsync)/lib"
+```
+
+Then install:
+
 ```sh
 GOBIN="$HOME/.local/bin" go install ./cmd/lode
 export PATH="$HOME/.local/bin:$PATH"
@@ -25,7 +35,7 @@ lode serve ./instance
 
 Open `http://localhost:8473`, enter the printed setup code, and create the administrator account. Create a project, then create an access token under **Settings → Access tokens**.
 
-For remote access, initialize with `-url https://lode.example` and put an HTTPS reverse proxy in front of the listen address. The canonical URL requires a hostname; local development uses `localhost`.
+For remote access, initialize with `--url https://lode.example` and put an HTTPS reverse proxy in front of the listen address. The canonical URL requires a hostname; local development uses `localhost`.
 
 Administrators add accounts under **Site administration → Users**. Each user can create private projects and share them through **Project settings → Collaborators**.
 
