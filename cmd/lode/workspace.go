@@ -1,19 +1,24 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/redthing1/lode/internal/model"
+	"github.com/redthing1/lode/internal/progress"
 	"github.com/redthing1/lode/internal/remote"
 	"github.com/redthing1/lode/internal/workspace"
+	"golang.org/x/term"
 )
 
 type paths []string
@@ -100,6 +105,8 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 	usage := "Usage: lode " + command
 	if command == "merge" {
 		usage += " [options] <branch-or-version>"
+	} else if command == "save" {
+		usage += " [-m message]\nPrompt for an optional message in an interactive terminal."
 	}
 	f := flags(command, usage, out)
 	message := ""
@@ -125,6 +132,12 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 	if err := f.Parse(args); err != nil {
 		return err
 	}
+	messageSet := false
+	f.Visit(func(option *flag.Flag) {
+		if option.Name == "m" {
+			messageSet = true
+		}
+	})
 	if command == "merge" && f.NArg() != 1 || command != "merge" && f.NArg() != 0 {
 		return errors.New(usage)
 	}
@@ -256,6 +269,12 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 		}
 		fmt.Fprintln(out, "Workspace ready.")
 	case "save":
+		if !messageSet && term.IsTerminal(int(os.Stdin.Fd())) {
+			message, err = promptSaveMessage(ctx, os.Stdin, os.Stderr)
+			if err != nil {
+				return err
+			}
+		}
 		v, err := w.Save(ctx, cred.Token, message)
 		if errors.Is(err, workspace.ErrNoChanges) {
 			fmt.Fprintln(out, "No selected changes.")
@@ -313,6 +332,42 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 		return nil
 	}
 	return nil
+}
+
+func promptSaveMessage(ctx context.Context, in io.Reader, out io.Writer) (string, error) {
+	progress.Report(ctx, progress.Event{})
+	if _, err := fmt.Fprint(out, "Message (optional): "); err != nil {
+		return "", err
+	}
+	type result struct {
+		message string
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		line, err := bufio.NewReader(io.LimitReader(in, 4098)).ReadString('\n')
+		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		if len(line) > 4096 {
+			err = errors.New("message exceeds 4096 bytes")
+		} else if errors.Is(err, io.EOF) {
+			if line == "" {
+				err = errors.New("save cancelled")
+			} else {
+				err = nil
+			}
+		}
+		done <- result{line, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			fmt.Fprintln(out)
+		}
+		return r.message, r.err
+	case <-ctx.Done():
+		fmt.Fprintln(out)
+		return "", ctx.Err()
+	}
 }
 
 func projects(ctx context.Context, args []string, out io.Writer) error {

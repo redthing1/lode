@@ -35,4 +35,10 @@ func TestProgressKeepsOutputReadable(t *testing.T) {
 	if !strings.Contains(stderr.String()[quiet:], "Waiting for server") {
 		t.Fatal("server wait was silent")
 	}
+	d.update(progress.Event{})
+	quiet = stderr.Len()
+	d.draw()
+	if stderr.Len() != quiet || d.visible {
+		t.Fatal("progress interfered with user input")
+	}
 }

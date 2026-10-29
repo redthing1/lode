@@ -134,6 +134,21 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 		t.Fatal(got)
 	}
 	command("-C", first, "tag", "create", "initial")
+	// Exercise the actual interactive path, including terminal detection.
+	if script, err := exec.LookPath("script"); err == nil {
+		if err := os.WriteFile(filepath.Join(first, "prompt-test"), []byte("interactive"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		interactive := exec.CommandContext(ctx, script, "-qefc", `exec "$LODE_TEST_BIN" -C "$LODE_TEST_WORKSPACE" save`, "/dev/null")
+		interactive.Env = append(os.Environ(), "LODE_TEST_BIN="+filepath.Join(bin, "lode"), "LODE_TEST_WORKSPACE="+first)
+		interactive.Stdin = strings.NewReader("Interactive save\n")
+		if output, err := interactive.CombinedOutput(); err != nil || !bytes.Contains(output, []byte("Message (optional):")) || !bytes.Contains(output, []byte("Saved ")) {
+			t.Fatalf("interactive save: %v\n%s", err, output)
+		}
+		if got := command("-C", first, "log"); !strings.Contains(got, `"Interactive save"`) {
+			t.Fatal(got)
+		}
+	}
 	// Route the private hostname to this local server without external DNS.
 	// The executable still sees a non-loopback HTTP origin and its real Host.
 	t.Setenv("HTTP_PROXY", origin)

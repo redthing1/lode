@@ -70,7 +70,10 @@ func startProgress(ctx context.Context, out io.Writer, command string, disabled 
 func (d *progressDisplay) update(e progress.Event) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.event, d.quiet = e, false
+	d.event, d.quiet = e, e.Phase == ""
+	if d.quiet {
+		d.clear()
+	}
 }
 
 func (d *progressDisplay) clear() {

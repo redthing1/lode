@@ -51,9 +51,11 @@ After editing your files:
 
 ```sh
 lode status
-lode save -m 'Update assets'
+lode save
 lode log
 ```
+
+In a terminal, `save` prompts for an optional message; press Enter to leave it blank. Use `lode save -m 'Update assets'` to skip the prompt. Scripts do not prompt; supply `-m` when you want a message.
 
 Stop applications writing to the project during saves and workspace changes. Lode versions ordinary files and directories; it does not capture a consistent snapshot of a running application. Selected symlinks and special files are refused.
 

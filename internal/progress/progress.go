@@ -7,6 +7,7 @@ import (
 )
 
 type Event struct {
+	// An empty phase clears activity, for example while awaiting user input.
 	Phase, Path  string
 	Bytes, Total int64
 }
