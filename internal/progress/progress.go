@@ -10,6 +10,8 @@ type Event struct {
 	// An empty phase clears activity, for example while awaiting user input.
 	Phase, Path  string
 	Bytes, Total int64
+	// Files is the current one-based file position; TotalFiles is zero while scanning.
+	Files, TotalFiles int
 }
 
 type key struct{}
@@ -17,6 +19,24 @@ type key struct{}
 // WithReporter attaches an observer. The observer must permit concurrent calls.
 func WithReporter(ctx context.Context, report func(Event)) context.Context {
 	return context.WithValue(ctx, key{}, report)
+}
+
+// WithFiles adds file positions to activity for the supplied ordered paths.
+func WithFiles(ctx context.Context, paths []string) context.Context {
+	report, ok := ctx.Value(key{}).(func(Event))
+	if !ok || len(paths) == 0 {
+		return ctx
+	}
+	positions := make(map[string]int, len(paths))
+	for i, path := range paths {
+		positions[path] = i + 1
+	}
+	return WithReporter(ctx, func(e Event) {
+		if position := positions[e.Path]; position > 0 {
+			e.Files, e.TotalFiles = position, len(paths)
+		}
+		report(e)
+	})
 }
 
 func Report(ctx context.Context, event Event) {

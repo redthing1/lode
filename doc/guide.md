@@ -59,7 +59,7 @@ In a terminal, `save` prompts for an optional message; press Enter to leave it b
 
 Stop applications writing to the project during saves and workspace changes. Lode versions ordinary files and directories; it does not capture a consistent snapshot of a running application. Selected symlinks and special files are refused.
 
-Longer commands show one updating progress line in an interactive terminal: the current phase, file, bytes processed, and elapsed time. Byte counts cover the current file, including local processing during delta transfers. Progress goes to stderr and disappears when the command finishes. Redirect stderr or use `lode --no-progress save` to disable it.
+Longer commands show one updating progress line in an interactive terminal: the phase, file count, path, bytes processed, and elapsed time. `[12/140]` identifies the current file; scanning shows a running count. Byte counts cover the current file, including local processing during delta transfers. Progress goes to stderr and disappears when the command finishes. Redirect stderr or use `lode --no-progress save` to disable it.
 
 ### Get others' changes
 

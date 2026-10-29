@@ -34,3 +34,26 @@ func TestProgressPreservesStreamAndErrors(t *testing.T) {
 		t.Fatal("unobserved stream was wrapped")
 	}
 }
+
+func TestFilePositionsFollowStreamsAndClearBetweenPhases(t *testing.T) {
+	var events []Event
+	ctx := WithReporter(context.Background(), func(e Event) { events = append(events, e) })
+	ctx = WithFiles(ctx, []string{"first", "second", "empty"})
+	var out bytes.Buffer
+	if _, err := io.Copy(Writer(ctx, "Downloading", "second", 5, &out), Reader(ctx, "Preparing", "second", 5, strings.NewReader("bytes"))); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Files != 2 || event.TotalFiles != 3 {
+			t.Fatalf("lost file position during IO: %+v", event)
+		}
+	}
+	Writer(ctx, "Downloading", "empty", 0, io.Discard)
+	if event := events[len(events)-1]; event.Files != 3 || event.TotalFiles != 3 {
+		t.Fatalf("empty file was not counted: %+v", event)
+	}
+	Report(ctx, Event{Phase: "Waiting for server"})
+	if event := events[len(events)-1]; event.Files != 0 || event.TotalFiles != 0 {
+		t.Fatalf("file counts leaked into waiting: %+v", event)
+	}
+}

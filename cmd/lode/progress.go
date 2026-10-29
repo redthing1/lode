@@ -27,7 +27,7 @@ type progressDisplay struct {
 
 func startProgress(ctx context.Context, out io.Writer, command string, disabled bool) (context.Context, io.Writer, func()) {
 	phases := map[string]string{
-		"attach": "Connecting", "clone": "Cloning", "status": "Checking files", "save": "Saving",
+		"attach": "Connecting", "clone": "Cloning", "status": "Checking", "save": "Saving",
 		"update": "Updating", "select": "Selecting files", "switch": "Switching branch", "restore": "Restoring",
 		"merge": "Merging", "resume": "Resuming", "cancel": "Cancelling", "collect": "Collecting",
 		"cleanup": "Checking retention", "backup": "Backing up", "projects": "Loading projects", "log": "Loading history",
@@ -91,14 +91,22 @@ func (d *progressDisplay) draw() {
 	}
 	e := d.event
 	line := e.Phase
+	if e.TotalFiles > 0 {
+		line += fmt.Sprintf(" [%d/%d]", e.Files, e.TotalFiles)
+	} else if e.Files > 0 {
+		line += fmt.Sprintf(" [%d files]", e.Files)
+	}
 	suffix := ""
 	if e.Total > 0 {
-		suffix = fmt.Sprintf(" · %s / %s", byteSize(e.Bytes), byteSize(e.Total))
+		current, total := byteSize(e.Bytes), byteSize(e.Total)
+		_, unit, _ := strings.Cut(total, " ")
+		current = strings.TrimSuffix(current, " "+unit)
+		suffix = fmt.Sprintf(" · %s/%s", current, total)
 	}
 	suffix += " · " + time.Since(d.started).Truncate(time.Second).String()
 	budget := max(0, d.width()-4)
-	if room := budget - len(line) - len(suffix) - len(" · "); e.Path != "" && room >= 8 {
-		line += " · " + clipProgress(e.Path, room)
+	if room := budget - len(line) - len(suffix) - 1; e.Path != "" && room >= 8 {
+		line += " " + clipProgress(e.Path, room)
 	}
 	line = clipProgress(line+suffix, budget)
 	fmt.Fprintf(d.out, "\r\x1b[2K%c %s", "|/-\\"[d.frame%4], line)
@@ -139,7 +147,7 @@ func byteSize(n int64) string {
 			break
 		}
 	}
-	return fmt.Sprintf("%.1f %s", value, unit)
+	return strings.TrimSuffix(fmt.Sprintf("%.1f", value), ".0") + " " + unit
 }
 
 // Stop redrawing before normal output, including conflicts and help.

@@ -40,7 +40,12 @@ func (w *Workspace) observeSelection(ctx context.Context, selection model.Select
 	if err != nil {
 		return nil, err
 	}
-	progress.Report(ctx, progress.Event{Phase: "Checking files"})
+	progress.Report(ctx, progress.Event{Phase: "Checking"})
+	files := 0
+	fileCtx := progress.WithReporter(ctx, func(e progress.Event) {
+		e.Files = files
+		progress.Report(ctx, e)
+	})
 	var entries []model.Entry
 	err = fs.WalkDir(w.root.FS(), ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -88,7 +93,8 @@ func (w *Workspace) observeSelection(ctx context.Context, selection model.Select
 		if !included {
 			return fmt.Errorf("cannot inspect selected descendants of file %q", name)
 		}
-		e, err := w.observeFile(ctx, name, info)
+		files++
+		e, err := w.observeFile(fileCtx, name, info)
 		if err != nil {
 			return err
 		}
@@ -120,7 +126,7 @@ func (w *Workspace) observeFile(ctx context.Context, name string, observed fs.Fi
 	if strings.HasPrefix(name, ".lode/") {
 		displayName = ""
 	}
-	n, err := io.Copy(h, progress.Reader(ctx, "Checking files", displayName, before.Size(), contextReader{ctx, f}))
+	n, err := io.Copy(h, progress.Reader(ctx, "Checking", displayName, before.Size(), contextReader{ctx, f}))
 	if err != nil {
 		return model.Entry{}, err
 	}

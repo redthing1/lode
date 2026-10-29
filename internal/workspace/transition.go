@@ -163,6 +163,7 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 	if progress.ID != plan.ID || progress.Cursor < -1 || progress.Cursor > len(plan.Changes) || (!progress.Reverse && progress.Cursor < 0) || (progress.Reverse && progress.Cursor >= len(plan.Changes)) {
 		return errors.New("invalid workspace progress")
 	}
+	var files []string
 	for _, a := range plan.Changes {
 		if a.Before.Path != a.After.Path || !model.ValidPath(a.Before.Path) || a.Before == a.After {
 			return errors.New("invalid workspace action")
@@ -173,7 +174,11 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 		if err := model.ValidateChanges([]model.Entry{a.After}); err != nil {
 			return err
 		}
+		if a.Before.Kind == model.File || a.After.Kind == model.File {
+			files = append(files, a.After.Path)
+		}
 	}
+	ctx = activity.WithFiles(ctx, files)
 	// Reaching the end commits the operation. Cancellation after that point only
 	// completes the baseline write and cleanup, even if that write was interrupted.
 	if cancel && !progress.Reverse && progress.Cursor < len(plan.Changes) {
@@ -196,10 +201,10 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 		a := plan.Changes[progress.Cursor]
 		var err error
 		if progress.Reverse {
-			activity.Report(ctx, activity.Event{Phase: "Reverting files", Path: a.Before.Path})
+			activity.Report(ctx, activity.Event{Phase: "Reverting", Path: a.Before.Path})
 			err = w.reverseAction(ctx, a, progress.Cursor)
 		} else {
-			activity.Report(ctx, activity.Event{Phase: "Updating files", Path: a.After.Path})
+			activity.Report(ctx, activity.Event{Phase: "Updating", Path: a.After.Path})
 			err = w.applyAction(ctx, c, plan.Source, a, progress.Cursor)
 		}
 		if err != nil {
@@ -288,7 +293,11 @@ func (w *Workspace) verifyFile(ctx context.Context, name string, e model.Entry) 
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("preserving unexpected local entry %q", name)
 	}
-	got, err := w.observeFile(ctx, name, info)
+	fileCtx := activity.WithReporter(ctx, func(event activity.Event) {
+		event.Path = e.Path
+		activity.Report(ctx, event)
+	})
+	got, err := w.observeFile(fileCtx, name, info)
 	if err != nil {
 		return err
 	}

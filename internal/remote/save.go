@@ -68,6 +68,11 @@ func (c *Client) Save(ctx context.Context, owner, name string, request model.Sav
 	sort.Slice(files, func(i, j int) bool {
 		return strings.ReplaceAll(files[i].Path, "/", "\x00") < strings.ReplaceAll(files[j].Path, "/", "\x00")
 	})
+	paths := make([]string, len(files))
+	for i, e := range files {
+		paths[i] = e.Path
+	}
+	ctx = progress.WithFiles(ctx, paths)
 	var spool *os.File
 	defer func() {
 		if spool != nil {
