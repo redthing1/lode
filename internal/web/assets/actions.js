@@ -18,6 +18,31 @@ for (const element of document.querySelectorAll("[data-storage]")) {
 }
 
 const menus = document.querySelectorAll("details[data-menu]");
+for (const picker of document.querySelectorAll("[data-picker]")) {
+  const summary = picker.querySelector("summary");
+  const close = () => { picker.open = false; summary.focus(); };
+  picker.addEventListener("toggle", () => {
+    if (picker.open) picker.querySelector("input:checked").focus();
+  });
+  picker.addEventListener("change", event => {
+    summary.firstElementChild.textContent = event.target.nextElementSibling.textContent;
+  });
+  picker.addEventListener("click", event => {
+    if (event.target.matches("input") && event.detail > 0) close();
+  });
+  picker.addEventListener("keydown", event => {
+    if (event.target === summary && ["ArrowDown", "ArrowUp"].includes(event.key)) {
+      event.preventDefault();
+      picker.open = true;
+    } else if (event.target.matches("input") && ["Enter", " "].includes(event.key)) {
+      event.preventDefault();
+      close();
+    }
+  });
+}
+document.addEventListener("focusin", event => {
+  for (const menu of menus) if (!menu.contains(event.target)) menu.open = false;
+});
 document.addEventListener("click", event => {
   for (const menu of menus) if (!menu.contains(event.target)) menu.open = false;
 });

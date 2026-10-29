@@ -103,7 +103,7 @@ func TestBrowserSharingAndCurrentTokenAuthority(t *testing.T) {
 	if body := bob.request("GET", "/alice/project", nil, 200); strings.Contains(body, `href="`+members+`"`) {
 		t.Fatal("writer offered settings")
 	}
-	if body := bob.request("GET", "/settings/tokens", nil, 200); !strings.Contains(body, ">alice/project</label>") {
+	if body := bob.request("GET", "/settings/tokens", nil, 200); !strings.Contains(body, `value="`+f.project.ID+`"><span>alice/project</span>`) {
 		t.Fatal("shared project scope missing")
 	}
 	token := browserToken(t, bob, f.project.ID, "writer")
