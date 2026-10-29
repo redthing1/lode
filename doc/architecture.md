@@ -73,6 +73,8 @@ The repository filesystem must be local, strongly consistent, and honor file and
 
 Browser sessions and CLI bearer tokens share current account and project authorization. Tokens are capped by role and project scope and do not inherit browser administrator authority. Requests already authorized may finish after access changes.
 
+An optional private origin exposes only the token API and health check, using an exact host and port match. The public browser origin, secure cookies, and WebAuthn configuration remain independent. Client HTTP consent lives with origin-specific user credentials. Changing a workspace's remote URL verifies its existing instance and project identities before updating local metadata.
+
 Sessions carry the account generation captured during authentication. Security changes invalidate old generations and tokens atomically; delayed requests cannot revive them. WebAuthn challenges are bound to the browser and purpose, expire after three minutes, and are consumed once. Both passwordless key flows require user verification. Password sign-in with an enrolled key also requires key verification or a recovery code.
 
 Browser forms have same-origin protection. Text previews are escaped; Markdown omits embedded HTML and external images. Local links and media identify immutable versions and use the same authorized content reader as downloads. Inline HTML and SVG are refused.

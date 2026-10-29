@@ -64,13 +64,30 @@ Edit `data/state/config.json` (under your configured data directory):
 }
 ```
 
-- `url` is the browser and CLI origin. Use HTTPS with a hostname; HTTP at `localhost` is allowed for local development.
+- `url` is the public browser and CLI origin. Use HTTPS with a hostname; HTTP at `localhost` is allowed for local development.
+- `private_url` optionally adds a separate CLI origin; see below.
 - `listen` is the server's HTTP address behind the proxy. Set it during initialization with `--listen`, if needed.
 - `trusted_proxies` is an optional list of IP prefixes, such as `["127.0.0.1/32", "::1/128"]`. Only listed peers may supply `X-Forwarded-For` for per-client sign-in limits. List only your proxy addresses; the default trusts none and limits by the direct peer.
 
 Stop the server before editing this file. Unknown fields are refused.
 
 Keep the canonical URL when restoring an instance. Changing it affects saved CLI credentials, and passkeys are tied to the hostname where they were enrolled.
+
+### Private CLI access
+
+To transfer directly over an intranet or Tailscale connection, add `private_url` to `state/config.json`, keeping `url` unchanged:
+
+```json
+{
+  "url": "https://lode.example",
+  "private_url": "http://lode.internal:8473",
+  "listen": "0.0.0.0:8473"
+}
+```
+
+The private address serves the token-authenticated API and health check only. Browser login, cookies, and passkeys stay at `url`. Both endpoints enforce the same account, project, and token permissions. Other host names and ports are rejected; the private address must use a different host or port from `url`.
+
+Choosing an `http://` private URL explicitly enables HTTP for that endpoint. Restrict its listener to your protected network; the host check does not establish that a connection uses Tailscale. HTTPS private endpoints are also supported. Clients explicitly trust HTTP when signing in; see [changing the server address](guide.md#change-the-server-address).
 
 ## Accounts and recovery
 

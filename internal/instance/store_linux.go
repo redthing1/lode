@@ -32,23 +32,30 @@ import (
 
 type Config struct {
 	URL            string         `json:"url"`
+	PrivateURL     string         `json:"private_url,omitempty"`
 	Listen         string         `json:"listen"`
 	TrustedProxies []netip.Prefix `json:"trusted_proxies,omitempty"`
 }
 
 func (c Config) Validate() error {
-	u, err := url.Parse(c.URL)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" || (u.Path != "" && u.Path != "/") || (u.Scheme != "http" && u.Scheme != "https") {
-		return errors.New("config requires an http(s) origin and listen address")
-	}
-	if strings.HasSuffix(u.Host, ":") || u.Port() != "" && !validPort(u.Port()) {
-		return errors.New("canonical URL has an invalid port")
+	u, err := configOrigin(c.URL)
+	if err != nil {
+		return fmt.Errorf("url: %w", err)
 	}
 	if err := protocol.ValidateRPID(u.Hostname()); err != nil {
 		return fmt.Errorf("invalid canonical URL hostname (use localhost for local access): %w", err)
 	}
 	if u.Scheme == "http" && !strings.EqualFold(u.Hostname(), "localhost") {
 		return errors.New("canonical URL requires HTTPS except on localhost")
+	}
+	if c.PrivateURL != "" {
+		private, err := configOrigin(c.PrivateURL)
+		if err != nil {
+			return fmt.Errorf("private_url: %w", err)
+		}
+		if strings.EqualFold(private.Host, u.Host) {
+			return errors.New("private_url must use a different host or port from url")
+		}
 	}
 	host, port, err := net.SplitHostPort(c.Listen)
 	if err != nil || !validPort(port) || net.ParseIP(host) == nil {
@@ -60,6 +67,17 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func configOrigin(value string) (*url.URL, error) {
+	u, err := url.Parse(value)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" || (u.Path != "" && u.Path != "/") || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, errors.New("use an http(s) origin without credentials, path, query or fragment")
+	}
+	if strings.HasSuffix(u.Host, ":") || u.Port() != "" && !validPort(u.Port()) {
+		return nil, errors.New("invalid URL port")
+	}
+	return u, nil
 }
 
 func validPort(port string) bool {

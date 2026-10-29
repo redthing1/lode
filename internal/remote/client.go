@@ -35,14 +35,19 @@ var ErrCredentialsRequired = errors.New("access token required")
 func (c *Client) Origin() string { return c.origin }
 
 func New(origin, token string) (*Client, error) {
+	return NewWithHTTP(origin, token, false)
+}
+
+// NewWithHTTP permits non-loopback HTTP only with explicit caller consent.
+func NewWithHTTP(origin, token string, allowHTTP bool) (*Client, error) {
 	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" {
 		return nil, errors.New("use the server origin, such as https://lode.example")
 	}
 	if u.Scheme != "https" {
 		ip := net.ParseIP(u.Hostname())
-		if u.Scheme != "http" || !(strings.EqualFold(u.Hostname(), "localhost") || ip != nil && ip.IsLoopback()) {
-			return nil, errors.New("use HTTPS, or an SSH tunnel to localhost")
+		if u.Scheme != "http" || !(allowHTTP || strings.EqualFold(u.Hostname(), "localhost") || ip != nil && ip.IsLoopback()) {
+			return nil, errors.New("use HTTPS; for a trusted private network, run lode login --allow-http <server-url>")
 		}
 	}
 	u.Path = ""

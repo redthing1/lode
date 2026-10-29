@@ -33,6 +33,9 @@ type State struct {
 }
 
 type Workspace struct {
+	// AllowHTTP is runtime transport consent supplied by the caller, never loaded
+	// from workspace metadata. Credentials and consent belong to the OS user.
+	AllowHTTP  bool
 	directory  string
 	root, meta *os.Root
 	lock       *flock.Flock
@@ -153,13 +156,39 @@ func (w *Workspace) Close() error {
 }
 
 func (w *Workspace) Client(token string) (*remote.Client, error) {
-	c, err := remote.New(w.state.Server, token)
+	if token == "" {
+		return nil, remote.ErrCredentialsRequired
+	}
+	c, err := remote.NewWithHTTP(w.state.Server, token, w.AllowHTTP)
 	if err != nil {
 		return nil, err
 	}
 	c.InstanceID = w.state.InstanceID
 	c.ProjectID = w.state.ProjectID
 	return c, nil
+}
+
+// SetRemote changes only the server address, after verifying both identities.
+// Pending work must be settled first because recovery binds the original state.
+func (w *Workspace) SetRemote(ctx context.Context, projectURL string, c *remote.Client) error {
+	if err := w.ready(); err != nil {
+		return err
+	}
+	c.InstanceID, c.ProjectID = w.state.InstanceID, w.state.ProjectID
+	target, err := connect(ctx, projectURL, c, ConnectOptions{Branch: w.state.Branch, Selection: w.state.Selection})
+	if err != nil {
+		return err
+	}
+	if target.InstanceID != w.state.InstanceID || target.ProjectID != w.state.ProjectID || target.Owner != w.state.Owner || target.Project != w.state.Project {
+		return errors.New("remote URL must identify the same instance and project")
+	}
+	next := w.state
+	next.Server = target.Server
+	if err := w.writeJSON("state.json", next); err != nil {
+		return err
+	}
+	w.state = next
+	return nil
 }
 
 type ConnectOptions struct {

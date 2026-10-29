@@ -246,6 +246,27 @@ func TestCanonicalOriginValidatedBeforeInitialization(t *testing.T) {
 }
 
 func TestConfigurationRejectsUnknownFieldsAndInvalidListen(t *testing.T) {
+	for _, tc := range []struct {
+		origin string
+		valid  bool
+	}{
+		{"http://server.tailnet.ts.net:8473", true},
+		{"https://private.example", true},
+		{"http://100.64.0.1:8473", true},
+		{"http://[fd7a:115c:a1e0::1]:8473", true},
+		{"http://lode.example", false},
+		{"https://LODE.example", false},
+		{"http://user@private.example", false},
+		{"http://private.example/api", false},
+		{"http://private.example?", false},
+		{"http://private.example:0", false},
+		{"ftp://private.example", false},
+	} {
+		err := (Config{URL: "https://lode.example", PrivateURL: tc.origin, Listen: "127.0.0.1:8473"}).Validate()
+		if (err == nil) != tc.valid {
+			t.Fatalf("private origin %q: %v", tc.origin, err)
+		}
+	}
 	for _, listen := range []string{"", "localhost", ":8473", "127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1:http"} {
 		if err := (Config{URL: "https://lode.example", Listen: listen}).Validate(); err == nil {
 			t.Fatal("invalid listen accepted", listen)

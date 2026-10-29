@@ -20,18 +20,19 @@ import (
 )
 
 type credential struct {
-	Origin   string `json:"origin"`
-	Instance string `json:"instance"`
-	Token    string `json:"token"`
+	Origin    string `json:"origin"`
+	Instance  string `json:"instance"`
+	Token     string `json:"token"`
+	AllowHTTP bool   `json:"allow_http,omitempty"`
 }
 
-func originOf(address string) (string, error) {
+func originOf(address string, allowHTTP bool) (string, error) {
 	u, err := url.Parse(address)
 	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("use a server or project URL")
 	}
 	u.Path, u.RawPath = "", ""
-	c, err := remote.New(u.String(), "")
+	c, err := remote.NewWithHTTP(u.String(), "", allowHTTP)
 	if err != nil {
 		return "", err
 	}
@@ -87,7 +88,7 @@ func authenticated(origin string) (*remote.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := remote.New(origin, cred.Token)
+	c, err := remote.NewWithHTTP(origin, cred.Token, cred.AllowHTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -96,14 +97,15 @@ func authenticated(origin string) (*remote.Client, error) {
 }
 
 func login(ctx context.Context, args []string, out io.Writer) error {
-	f := flags("login", "Usage: lode login <server-or-project-url>\nCreate an access token in account settings. LODE_TOKEN may supply the token.", out)
+	f := flags("login", "Usage: lode login [--allow-http] <server-or-project-url>\nCreate an access token in account settings. LODE_TOKEN may supply the token.", out)
+	allowHTTP := f.Bool("allow-http", false, "trust HTTP for this origin on a protected private network")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
 	if f.NArg() != 1 {
 		return errors.New("usage: lode login <server-or-project-url>")
 	}
-	origin, err := originOf(f.Arg(0))
+	origin, err := originOf(f.Arg(0), *allowHTTP)
 	if err != nil {
 		return err
 	}
@@ -129,7 +131,7 @@ func login(ctx context.Context, args []string, out io.Writer) error {
 	if token == "" || len(token) > 512 {
 		return errors.New("invalid access token")
 	}
-	c, err := remote.New(origin, token)
+	c, err := remote.NewWithHTTP(origin, token, *allowHTTP)
 	if err != nil {
 		return err
 	}
@@ -148,7 +150,7 @@ func login(ctx context.Context, args []string, out io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
 		return err
 	}
-	b, err := json.Marshal(credential{Origin: origin, Instance: identity.Instance, Token: token})
+	b, err := json.Marshal(credential{Origin: origin, Instance: identity.Instance, Token: token, AllowHTTP: *allowHTTP && strings.HasPrefix(origin, "http://")})
 	if err != nil {
 		return err
 	}

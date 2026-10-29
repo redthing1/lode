@@ -37,6 +37,7 @@ func retentionCommand(ctx context.Context, command string, args []string, direct
 	if err != nil {
 		return err
 	}
+	w.AllowHTTP = cred.AllowHTTP
 	c, err := w.Client(cred.Token)
 	if err != nil {
 		return err

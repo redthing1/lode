@@ -31,6 +31,7 @@ func startProgress(ctx context.Context, out io.Writer, command string, disabled 
 		"update": "Updating", "select": "Selecting files", "switch": "Switching branch", "restore": "Restoring",
 		"merge": "Merging", "resume": "Resuming", "cancel": "Cancelling", "collect": "Collecting",
 		"cleanup": "Checking retention", "backup": "Backing up", "projects": "Loading projects", "log": "Loading history",
+		"remote": "Checking remote",
 	}
 	phase := phases[command]
 	if disabled || phase == "" || os.Getenv("TERM") == "dumb" || !term.IsTerminal(int(os.Stderr.Fd())) {

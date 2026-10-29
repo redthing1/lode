@@ -39,6 +39,29 @@ func TestMissingCredentialsDoNotSendRequests(t *testing.T) {
 	}
 }
 
+func TestHTTPRequiresExplicitConsent(t *testing.T) {
+	for _, tc := range []struct {
+		origin       string
+		allow, valid bool
+	}{
+		{"https://public.example", false, true},
+		{"http://localhost:8473", false, true},
+		{"http://127.0.0.1:8473", false, true},
+		{"http://server.tailnet.ts.net:8473", false, false},
+		{"http://100.64.0.1:8473", false, false},
+		{"http://server.tailnet.ts.net:8473", true, true},
+		{"ftp://server.tailnet.ts.net", true, false},
+	} {
+		c, err := NewWithHTTP(tc.origin, "token", tc.allow)
+		if (err == nil) != tc.valid {
+			t.Fatalf("%s allow=%v: %v", tc.origin, tc.allow, err)
+		}
+		if c != nil {
+			c.HTTP.CloseIdleConnections()
+		}
+	}
+}
+
 func TestIncompleteOrUnexpectedInventoryIsRejected(t *testing.T) {
 	h := sha256.Sum256(nil)
 	e := model.Entry{Path: "selected/a", Kind: model.File, SHA256: hex.EncodeToString(h[:])}

@@ -22,16 +22,19 @@ import (
 )
 
 type Server struct {
-	instance *instance.Store
-	mux      *http.ServeMux
-	host     string
-	sessions *scs.SessionManager
-	attempts signInLimit
+	instance          *instance.Store
+	mux               *http.ServeMux
+	host, privateHost string
+	sessions          *scs.SessionManager
+	attempts          signInLimit
 }
 
 func New(store *instance.Store) *Server {
 	u, _ := url.Parse(store.Config.URL)
 	s := &Server{instance: store, mux: http.NewServeMux(), host: u.Host, attempts: signInLimit{trusted: store.Config.TrustedProxies}}
+	if private, err := url.Parse(store.Config.PrivateURL); err == nil && private != nil {
+		s.privateHost = private.Host
+	}
 	s.mux.Handle("/api/", http.NotFoundHandler())
 	assets, _ := fs.Sub(browserFiles, "assets")
 	s.mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assets))))
@@ -66,8 +69,14 @@ func New(store *instance.Store) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !strings.EqualFold(r.Host, s.host) {
+	private := s.privateHost != "" && strings.EqualFold(r.Host, s.privateHost)
+	if !strings.EqualFold(r.Host, s.host) && !private {
 		http.Error(w, "incorrect host", http.StatusMisdirectedRequest)
+		return
+	}
+	// Private access is token-only: never expose browser sessions on this host.
+	if private && !strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/healthz" {
+		http.Error(w, "private endpoint serves the CLI API only", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")

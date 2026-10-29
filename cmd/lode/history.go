@@ -44,6 +44,7 @@ func historyCommand(ctx context.Context, command string, args []string, director
 	if err != nil {
 		return err
 	}
+	w.AllowHTTP = cred.AllowHTTP
 	if command == "switch" {
 		if err := w.Switch(ctx, cred.Token, f.Arg(0)); err != nil {
 			return err

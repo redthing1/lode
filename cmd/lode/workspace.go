@@ -47,7 +47,7 @@ func connectWorkspace(ctx context.Context, command string, args []string, direct
 	if err != nil {
 		return err
 	}
-	origin, err := originOf(f.Arg(0))
+	origin, err := originOf(f.Arg(0), true)
 	if err != nil {
 		return err
 	}
@@ -209,6 +209,7 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 	if err != nil {
 		return err
 	}
+	w.AllowHTTP = cred.AllowHTTP
 	switch command {
 	case "merge":
 		v, err := w.Merge(ctx, cred.Token, f.Arg(0), message, choices)
@@ -323,7 +324,7 @@ func projects(ctx context.Context, args []string, out io.Writer) error {
 	if f.NArg() != 1 {
 		return errors.New("usage: lode projects [--create name] <server-url>")
 	}
-	origin, err := originOf(f.Arg(0))
+	origin, err := originOf(f.Arg(0), true)
 	if err != nil {
 		return err
 	}

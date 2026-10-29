@@ -14,7 +14,7 @@ Create a project in the browser, or ask its owner to add you. Under **Settings â
 lode login https://lode.example
 ```
 
-The token prompt is hidden. Credentials live in your OS user configuration directory, outside the workspace. Scripts can use `LODE_TOKEN` instead. Remote connections require HTTPS.
+The token prompt is hidden. Credentials live in your OS user configuration directory, outside the workspace. Scripts can use `LODE_TOKEN` instead. Remote connections use HTTPS unless you explicitly trust a private HTTP origin.
 
 Connect an existing folder to an empty project with `attach`. The local folder must already exist:
 
@@ -31,6 +31,19 @@ lode clone https://lode.example/alice/example ./work
 The browser's **Clone** button copies a command for the selected branch. Workspace metadata lives in `.lode/`; leave that directory in place.
 
 Run commands inside the workspace, or use `lode -C ./work status`. For command help, use `lode help clone` or `lode clone --help`. Put options before positional arguments.
+
+### Change the server address
+
+Each workspace has one remote project URL. Show it with `lode remote`. To use a configured [private endpoint](operations.md#private-cli-access), sign in there and change the URL:
+
+```sh
+lode login --allow-http http://lode.internal:8473
+lode remote set-url http://lode.internal:8473/alice/example
+```
+
+`--allow-http` trusts only that exact origin and is remembered with your credentials. Use it only over a protected network such as Tailscale; ordinary HTTP sends tokens and data without TLS. Omit the option for HTTPS. Scripts using `LODE_TOKEN` still need this saved HTTP consent.
+
+The new URL must identify the same instance and project. Branch, selected files, history, and unsaved work stay intact. Finish pending operations with `resume` or `cancel` before changing the URL. Switch back with `lode remote set-url https://lode.example/alice/example`; no download is needed.
 
 ## Daily work
 

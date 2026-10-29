@@ -39,8 +39,9 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 	}
 	t.Cleanup(func() { listener.Close() })
 	origin := "http://" + strings.Replace(listener.Addr().String(), "127.0.0.1", "localhost", 1)
+	privateOrigin := strings.Replace(origin, "localhost", "private.example", 1)
 	dir := filepath.Join(root, "instance")
-	code, err := instance.Initialize(ctx, dir, instance.Config{URL: origin, Listen: listener.Addr().String()})
+	code, err := instance.Initialize(ctx, dir, instance.Config{URL: origin, PrivateURL: privateOrigin, Listen: listener.Addr().String()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +134,41 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 		t.Fatal(got)
 	}
 	command("-C", first, "tag", "create", "initial")
+	// Route the private hostname to this local server without external DNS.
+	// The executable still sees a non-loopback HTTP origin and its real Host.
+	t.Setenv("HTTP_PROXY", origin)
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("LODE_TOKEN", token)
+	refusedHTTP := exec.CommandContext(ctx, filepath.Join(bin, "lode"), "login", privateOrigin)
+	if output, err := refusedHTTP.CombinedOutput(); err == nil || !bytes.Contains(output, []byte("--allow-http")) {
+		t.Fatalf("HTTP without consent: %v\n%s", err, output)
+	}
+	command("login", "--allow-http", privateOrigin)
+	t.Setenv("LODE_TOKEN", "")
+	privateProjectURL := privateOrigin + "/alice/project"
+	if got := command("-C", first, "remote"); strings.TrimSpace(got) != projectURL {
+		t.Fatal(got)
+	}
+	command("-C", first, "remote", "set-url", privateProjectURL)
+	if got := command("-C", first, "remote"); strings.TrimSpace(got) != privateProjectURL {
+		t.Fatal(got)
+	}
+	if err := os.WriteFile(filepath.Join(first, "private-test"), []byte("private connection"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	command("-C", first, "save", "-m", "private save")
+	if got := command("projects", privateOrigin); !strings.Contains(got, privateProjectURL) {
+		t.Fatal(got)
+	}
+	// Consent is scoped to this exact origin, even with an environment token.
+	t.Setenv("LODE_TOKEN", token)
+	otherOrigin := strings.Replace(privateOrigin, "private.example", "other.example", 1)
+	otherHTTP := exec.CommandContext(ctx, filepath.Join(bin, "lode"), "projects", otherOrigin)
+	if output, err := otherHTTP.CombinedOutput(); err == nil || !bytes.Contains(output, []byte("--allow-http")) {
+		t.Fatalf("HTTP consent escaped its origin: %v\n%s", err, output)
+	}
+	t.Setenv("LODE_TOKEN", "")
+	command("-C", first, "remote", "set-url", projectURL)
 	second := filepath.Join(root, "second")
 	command("clone", "--include", "assets", projectURL, second)
 	b, err := os.ReadFile(filepath.Join(second, "assets", "model.bin"))

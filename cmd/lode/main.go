@@ -29,6 +29,7 @@ const usage = `Usage: lode [-C directory] [--no-progress] <command>
   projects      List or create projects
   attach        Connect an existing folder to an empty project
   clone         Download a project, optionally selecting paths
+  remote        Show or change this workspace's project URL
   status        Show selected local changes (works offline)
   save          Publish local changes
   update        Reconcile the latest shared version with local work
@@ -84,6 +85,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return login(ctx, args[1:], out)
 	case "projects":
 		return projects(ctx, args[1:], out)
+	case "remote":
+		return remoteCommand(ctx, args[1:], *directory, out)
 	case "attach", "clone":
 		return connectWorkspace(ctx, args[0], args[1:], *directory, out)
 	case "status", "save", "update", "select", "merge", "resume", "cancel", "log":

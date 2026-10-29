@@ -6,9 +6,11 @@ import (
 	"net/url"
 
 	"github.com/redthing1/lode/internal/model"
+	"github.com/redthing1/lode/internal/progress"
 )
 
 func (c *Client) Collect(ctx context.Context, owner, project string) (model.Collection, error) {
+	progress.Report(ctx, progress.Event{Phase: "Collecting storage"})
 	// Collection may exceed the ordinary response-header deadline. Keep request
 	// cancellation and this client's authentication/redirect policy unchanged.
 	client, connection := *c, *c.HTTP
