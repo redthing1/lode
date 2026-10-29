@@ -16,6 +16,7 @@ import (
 
 	"github.com/redthing1/lode/internal/instance"
 	"github.com/redthing1/lode/internal/model"
+	"github.com/redthing1/lode/internal/remote"
 	"github.com/redthing1/lode/internal/web"
 )
 
@@ -93,7 +94,7 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 		t.Fatal("command help is inconsistent or uses single-dash long options")
 	}
 	t.Setenv("LODE_TOKEN", token)
-	if got := command("login", origin); !strings.Contains(got, "as alice") {
+	if got := command("auth", "login", origin); !strings.Contains(got, "as alice") {
 		t.Fatal(got)
 	}
 	t.Setenv("LODE_TOKEN", "")
@@ -134,6 +135,45 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 		t.Fatal(got)
 	}
 	command("-C", first, "tag", "create", "initial")
+	// A collaborator authenticates as themselves on the owner's project URL.
+	bob, err := store.CreateUser(ctx, instance.Principal{User: user}, "bob", "another sufficiently long password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMember(ctx, instance.Principal{User: user}, "alice", "project", "bob", instance.Writer); err != nil {
+		t.Fatal(err)
+	}
+	bobToken, err := store.CreateToken(ctx, bob, instance.TokenOptions{Name: "cli", Role: instance.Writer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LODE_TOKEN", bobToken)
+	command("-C", first, "auth", "login")
+	t.Setenv("LODE_TOKEN", "")
+	if got := command("-C", first, "auth", "status"); !strings.Contains(got, "bob @") {
+		t.Fatal(got)
+	}
+	if err := os.WriteFile(filepath.Join(first, "collaboration-test"), []byte("bob's work"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	command("-C", first, "save", "-m", "collaborator save")
+	client, err := remote.New(origin, bobToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.HTTP.CloseIdleConnections()
+	history, err := client.History(ctx, "alice", "project", "main", 1)
+	if err != nil || len(history.Versions) != 1 || history.Versions[0].Actor != bob.ID {
+		t.Fatal("save used the project owner's identity", err)
+	}
+	command("-C", first, "auth", "logout")
+	signedOut := exec.CommandContext(ctx, filepath.Join(bin, "lode"), "-C", first, "log")
+	if output, err := signedOut.CombinedOutput(); err == nil || !bytes.Contains(output, []byte("sign in first")) {
+		t.Fatalf("signed-out project fell back to another account: %v\n%s", err, output)
+	}
+	t.Setenv("LODE_TOKEN", token)
+	command("-C", first, "auth", "login")
+	t.Setenv("LODE_TOKEN", "")
 	// Exercise the actual interactive path, including terminal detection.
 	if script, err := exec.LookPath("script"); err == nil {
 		if err := os.WriteFile(filepath.Join(first, "prompt-test"), []byte("interactive"), 0644); err != nil {
@@ -154,11 +194,11 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 	t.Setenv("HTTP_PROXY", origin)
 	t.Setenv("NO_PROXY", "")
 	t.Setenv("LODE_TOKEN", token)
-	refusedHTTP := exec.CommandContext(ctx, filepath.Join(bin, "lode"), "login", privateOrigin)
+	refusedHTTP := exec.CommandContext(ctx, filepath.Join(bin, "lode"), "auth", "login", privateOrigin)
 	if output, err := refusedHTTP.CombinedOutput(); err == nil || !bytes.Contains(output, []byte("--allow-http")) {
 		t.Fatalf("HTTP without consent: %v\n%s", err, output)
 	}
-	command("login", "--allow-http", privateOrigin)
+	command("auth", "login", "--allow-http", privateOrigin)
 	t.Setenv("LODE_TOKEN", "")
 	privateProjectURL := privateOrigin + "/alice/project"
 	if got := command("-C", first, "remote"); strings.TrimSpace(got) != projectURL {
@@ -389,7 +429,7 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("LODE_TOKEN", replacement)
-	command("login", origin)
+	command("auth", "login", origin)
 	t.Setenv("LODE_TOKEN", "")
 	if got := command("projects", origin); !strings.Contains(got, projectURL) {
 		t.Fatal(got)

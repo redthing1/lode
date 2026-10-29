@@ -33,7 +33,7 @@ func retentionCommand(ctx context.Context, command string, args []string, direct
 	}
 	defer w.Close()
 	s := w.State()
-	cred, err := workspaceCredentials(s)
+	cred, err := workspaceCredentials(ctx, s)
 	if err != nil {
 		return err
 	}

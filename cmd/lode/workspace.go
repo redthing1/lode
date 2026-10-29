@@ -52,11 +52,7 @@ func connectWorkspace(ctx context.Context, command string, args []string, direct
 	if err != nil {
 		return err
 	}
-	origin, err := originOf(f.Arg(0), true)
-	if err != nil {
-		return err
-	}
-	c, err := authenticated(origin)
+	c, err := authenticated(ctx, f.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -218,7 +214,7 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 			return err
 		}
 	}
-	cred, err := workspaceCredentials(s)
+	cred, err := workspaceCredentials(ctx, s)
 	if err != nil {
 		return err
 	}
@@ -383,7 +379,7 @@ func projects(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	c, err := authenticated(origin)
+	c, err := authenticated(ctx, origin)
 	if err != nil {
 		return err
 	}

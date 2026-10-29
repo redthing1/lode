@@ -18,7 +18,8 @@ Run commands in the workspace or use `lode -C <directory> <command>`. Use `lode 
 
 | To | Run |
 | --- | --- |
-| Sign in with an access token | `lode login <server-url>` |
+| Sign in with an access token | `lode auth login <server-url>` |
+| Inspect authentication or sign out | `lode auth status`, `lode auth logout` |
 | Download into an empty or new folder | `lode clone <project-url> <directory>` |
 | Connect an existing folder to an empty project | `lode attach <project-url> <directory>` |
 | Inspect local changes or selection | `lode status` or `lode select` |
@@ -29,6 +30,8 @@ Run commands in the workspace or use `lode -C <directory> <command>`. Use `lode 
 | Work with branches | `lode branch`, `lode switch <branch>`, `lode merge <branch>` |
 
 Create access tokens in server account settings. `status` works offline. Keep the workspace's `.lode/` directory intact.
+
+Project logins select an account for that project; server logins set the fallback account. Inside a workspace, auth commands infer its project URL. `lode --user <username> <command>` selects a saved account for one command. `LODE_TOKEN` overrides saved tokens; do not combine it with `--user`.
 
 ## Working with files
 

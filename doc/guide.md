@@ -11,10 +11,14 @@ Editing and `status` work offline. Saving and downloading require the server.
 Create a project in the browser, or ask its owner to add you. Under **Settings → Access tokens**, create a token with the access you need, then sign in:
 
 ```sh
-lode login https://lode.example
+lode auth login https://lode.example
 ```
 
 The token prompt is hidden. Credentials live in your OS user configuration directory, outside the workspace. Scripts can use `LODE_TOKEN` instead. Remote connections use HTTPS unless you explicitly trust a private HTTP origin.
+
+Inside a workspace, `lode auth status` shows the verified account and `lode auth logout` forgets that account's saved tokens for the server. Use `lode auth status --all` to list saved accounts offline.
+
+A server login sets its default account. To use another account for a project, run `lode auth login <project-url>`, or just `lode auth login` inside its workspace. The token identifies the user, who may differ from the project owner. Use `lode --user bob <command>` for a one-off choice from saved accounts. Logout preserves project account choices so commands require login again instead of changing users. Logout does not revoke tokens on the server.
 
 Connect an existing folder to an empty project with `attach`. The local folder must already exist:
 
@@ -37,7 +41,7 @@ Run commands inside the workspace, or use `lode -C ./work status`. For command h
 Each workspace has one remote project URL. Show it with `lode remote`. To use a configured [private endpoint](operations.md#private-cli-access), sign in there and change the URL:
 
 ```sh
-lode login --allow-http http://lode.internal:8473
+lode auth login --allow-http http://lode.internal:8473
 lode remote set-url http://lode.internal:8473/alice/example
 ```
 
@@ -251,7 +255,7 @@ Adding or removing a key, or replacing recovery codes, requires your password. I
 
 ### Password changes and recovery
 
-Changing your password signs out every session and revokes access tokens, but preserves enrolled keys. Sign in again, create a new token, and run `lode login` to reconnect the CLI. Local files are unaffected.
+Changing your password signs out every session and revokes access tokens, but preserves enrolled keys. Sign in again, create a new token, and run `lode auth login` to reconnect the CLI. Local files are unaffected.
 
 An administrator can reset your password; this also removes keys and recovery codes. Operators who cannot sign in can use [server account recovery](operations.md#accounts-and-recovery).
 

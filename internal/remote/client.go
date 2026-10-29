@@ -47,7 +47,7 @@ func NewWithHTTP(origin, token string, allowHTTP bool) (*Client, error) {
 	if u.Scheme != "https" {
 		ip := net.ParseIP(u.Hostname())
 		if u.Scheme != "http" || !(allowHTTP || strings.EqualFold(u.Hostname(), "localhost") || ip != nil && ip.IsLoopback()) {
-			return nil, errors.New("use HTTPS; for a trusted private network, run lode login --allow-http <server-url>")
+			return nil, errors.New("use HTTPS; for a trusted private network, run lode auth login --allow-http <server-url>")
 		}
 	}
 	u.Path = ""

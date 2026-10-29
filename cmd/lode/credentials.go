@@ -1,34 +1,51 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/gofrs/flock"
+	"github.com/redthing1/lode/internal/model"
 	"github.com/redthing1/lode/internal/remote"
 	"github.com/redthing1/lode/internal/workspace"
-	"golang.org/x/term"
 )
 
 type credential struct {
-	Origin    string `json:"origin"`
-	Instance  string `json:"instance"`
-	Token     string `json:"token"`
-	AllowHTTP bool   `json:"allow_http,omitempty"`
+	Origin, Instance, User, Username, Token, Source string
+	AllowHTTP                                       bool
+}
+
+type savedAccount struct {
+	Username string            `json:"username"`
+	Tokens   map[string]string `json:"tokens"`
+}
+
+type credentialStore struct {
+	Origin    string                  `json:"origin"`
+	Instance  string                  `json:"instance"`
+	AllowHTTP bool                    `json:"allow_http,omitempty"`
+	Accounts  map[string]savedAccount `json:"accounts"`
+	Selected  map[string]string       `json:"selected"`
+}
+
+type authUserKey struct{}
+
+func selectedUser(ctx context.Context) string {
+	user, _ := ctx.Value(authUserKey{}).(string)
+	return user
 }
 
 func originOf(address string, allowHTTP bool) (string, error) {
 	u, err := url.Parse(address)
-	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return "", errors.New("use a server or project URL")
 	}
 	u.Path, u.RawPath = "", ""
@@ -40,6 +57,39 @@ func originOf(address string, allowHTTP bool) (string, error) {
 	return c.Origin(), nil
 }
 
+func authTarget(address string) (origin, project string, err error) {
+	origin, err = originOf(address, true)
+	if err != nil {
+		return "", "", err
+	}
+	u, _ := url.Parse(address)
+	project = strings.Trim(u.Path, "/")
+	if !validAuthScope(project) {
+		return "", "", errors.New("use a server URL or a project URL ending in /owner/project")
+	}
+	return origin, project, nil
+}
+
+func validAuthScope(project string) bool {
+	if project == "" {
+		return true
+	}
+	parts := strings.Split(project, "/")
+	return len(parts) == 2 && model.ValidPath(parts[0]) && model.ValidPath(parts[1])
+}
+
+func scopeSuffix(project string) string {
+	if project == "" {
+		return ""
+	}
+	parts := strings.Split(project, "/")
+	return "/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1])
+}
+
+func projectAddress(s workspace.State) string {
+	return s.Server + scopeSuffix(s.Owner+"/"+s.Project)
+}
+
 func credentialPath(origin string) (string, error) {
 	root, err := os.UserConfigDir()
 	if err != nil {
@@ -49,100 +99,47 @@ func credentialPath(origin string) (string, error) {
 	return filepath.Join(root, "lode", "credentials", hex.EncodeToString(h[:])+".json"), nil
 }
 
-func credentials(origin string) (credential, error) {
+func readCredentials(origin string) (credentialStore, error) {
+	store := credentialStore{Origin: origin, Accounts: map[string]savedAccount{}, Selected: map[string]string{}}
 	file, err := credentialPath(origin)
 	if err != nil {
-		return credential{}, err
+		return store, err
 	}
-	c := credential{Origin: origin}
 	b, err := os.ReadFile(file)
-	if err == nil {
-		if err := json.Unmarshal(b, &c); err != nil {
-			return credential{}, err
+	if errors.Is(err, os.ErrNotExist) {
+		return store, nil
+	}
+	if err != nil {
+		return store, err
+	}
+	if err := json.Unmarshal(b, &store); err != nil || store.Origin != origin || store.Instance == "" || store.Accounts == nil || store.Selected == nil {
+		return store, errors.New("invalid saved credentials")
+	}
+	for id, account := range store.Accounts {
+		if id == "" || !model.ValidPath(account.Username) || strings.Contains(account.Username, "/") || len(account.Tokens) == 0 {
+			return store, errors.New("invalid saved account")
 		}
-		if c.Origin != origin || c.Instance == "" || c.Token == "" {
-			return credential{}, errors.New("invalid saved credentials; run lode login")
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return credential{}, err
-	}
-	if override := os.Getenv("LODE_TOKEN"); override != "" {
-		c.Token = override
-	}
-	if c.Token == "" {
-		return credential{}, fmt.Errorf("sign in first: lode login %s", origin)
-	}
-	return c, nil
-}
-
-func workspaceCredentials(s workspace.State) (credential, error) {
-	c, err := credentials(s.Server)
-	if err == nil && c.Instance != "" && c.Instance != s.InstanceID {
-		err = errors.New("saved credentials belong to another instance; check this workspace's server")
-	}
-	return c, err
-}
-
-func authenticated(origin string) (*remote.Client, error) {
-	cred, err := credentials(origin)
-	if err != nil {
-		return nil, err
-	}
-	c, err := remote.NewWithHTTP(origin, cred.Token, cred.AllowHTTP)
-	if err != nil {
-		return nil, err
-	}
-	c.InstanceID = cred.Instance
-	return c, nil
-}
-
-func login(ctx context.Context, args []string, out io.Writer) error {
-	f := flags("login", "Usage: lode login [--allow-http] <server-or-project-url>\nCreate an access token in account settings. LODE_TOKEN may supply the token.", out)
-	allowHTTP := f.Bool("allow-http", false, "trust HTTP for this origin on a protected private network")
-	if err := f.Parse(args); err != nil {
-		return err
-	}
-	if f.NArg() != 1 {
-		return errors.New("usage: lode login <server-or-project-url>")
-	}
-	origin, err := originOf(f.Arg(0), *allowHTTP)
-	if err != nil {
-		return err
-	}
-	token := os.Getenv("LODE_TOKEN")
-	if token == "" {
-		if term.IsTerminal(int(os.Stdin.Fd())) {
-			fmt.Fprint(out, "Access token: ")
-			b, err := term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Fprintln(out)
-			if err != nil {
-				return err
+		for project, token := range account.Tokens {
+			if token == "" || len(token) > 512 {
+				return store, errors.New("invalid saved token")
 			}
-			token = string(b)
-		} else {
-			b, err := bufio.NewReader(io.LimitReader(os.Stdin, 513)).ReadString('\n')
-			if err != nil && !errors.Is(err, io.EOF) {
-				return err
+			if !validAuthScope(project) {
+				return store, errors.New("invalid saved project")
 			}
-			token = b
 		}
 	}
-	token = strings.TrimSpace(token)
-	if token == "" || len(token) > 512 {
-		return errors.New("invalid access token")
+	for project, id := range store.Selected {
+		if id == "" {
+			return store, errors.New("invalid saved account selection")
+		}
+		if !validAuthScope(project) {
+			return store, errors.New("invalid saved project selection")
+		}
 	}
-	c, err := remote.NewWithHTTP(origin, token, *allowHTTP)
-	if err != nil {
-		return err
-	}
-	defer c.HTTP.CloseIdleConnections()
-	identity, err := c.Me(ctx)
-	if err != nil {
-		return err
-	}
-	if identity.Instance == "" || identity.User == "" {
-		return errors.New("server returned an invalid identity")
-	}
+	return store, nil
+}
+
+func updateCredentials(origin string, update func(*credentialStore) error) error {
 	file, err := credentialPath(origin)
 	if err != nil {
 		return err
@@ -150,11 +147,27 @@ func login(ctx context.Context, args []string, out io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
 		return err
 	}
-	b, err := json.Marshal(credential{Origin: origin, Instance: identity.Instance, Token: token, AllowHTTP: *allowHTTP && strings.HasPrefix(origin, "http://")})
+	lock := flock.New(file + ".lock")
+	defer lock.Close()
+	locked, err := lock.TryLock()
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(file), ".login-")
+	if !locked {
+		return errors.New("credentials are in use; retry the command")
+	}
+	store, err := readCredentials(origin)
+	if err != nil {
+		return err
+	}
+	if err := update(&store); err != nil {
+		return err
+	}
+	b, err := json.Marshal(store)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(file), ".auth-")
 	if err != nil {
 		return err
 	}
@@ -167,9 +180,93 @@ func login(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp.Name(), file); err != nil {
-		return err
+	return os.Rename(tmp.Name(), file)
+}
+
+func (s credentialStore) account(project, username string) (string, savedAccount, error) {
+	id, bound := s.Selected[project]
+	if !bound {
+		id = s.Selected[""]
 	}
-	fmt.Fprintf(out, "Signed in to %s as %s.\n", origin, identity.Username)
+	if username != "" {
+		id = ""
+		for candidate, account := range s.Accounts {
+			if account.Username == username {
+				if id != "" {
+					return "", savedAccount{}, errors.New("ambiguous saved account; sign in again")
+				}
+				id = candidate
+			}
+		}
+	}
+	account, ok := s.Accounts[id]
+	if !ok {
+		return "", savedAccount{}, fmt.Errorf("sign in first: lode auth login %s", s.Origin+scopeSuffix(project))
+	}
+	return id, account, nil
+}
+
+func credentials(ctx context.Context, address string) (credential, error) {
+	origin, project, err := authTarget(address)
+	if err != nil {
+		return credential{}, err
+	}
+	store, err := readCredentials(origin)
+	if err != nil {
+		return credential{}, err
+	}
+	c := credential{Origin: origin, Instance: store.Instance, AllowHTTP: store.AllowHTTP}
+	if override := os.Getenv("LODE_TOKEN"); override != "" {
+		if selectedUser(ctx) != "" {
+			return credential{}, errors.New("use --user or LODE_TOKEN, not both")
+		}
+		c.Token, c.Source = override, "LODE_TOKEN"
+		return c, nil
+	}
+	id, account, err := store.account(project, selectedUser(ctx))
+	if err != nil {
+		return credential{}, err
+	}
+	c.User, c.Username, c.Source = id, account.Username, "server"
+	c.Token = account.Tokens[project]
+	if project != "" && c.Token != "" {
+		c.Source = "project"
+	} else {
+		c.Token = account.Tokens[""]
+	}
+	if c.Token == "" {
+		return credential{}, fmt.Errorf("no saved token for %s here; run lode auth login %s", c.Username, address)
+	}
+	if selectedUser(ctx) != "" {
+		c.Source = "--user"
+	}
+	return c, nil
+}
+
+func workspaceCredentials(ctx context.Context, s workspace.State) (credential, error) {
+	c, err := credentials(ctx, projectAddress(s))
+	if err == nil && c.Instance != "" && c.Instance != s.InstanceID {
+		err = errors.New("saved credentials belong to another instance; check this workspace's server")
+	}
+	return c, err
+}
+
+func authenticated(ctx context.Context, address string) (*remote.Client, error) {
+	cred, err := credentials(ctx, address)
+	if err != nil {
+		return nil, err
+	}
+	c, err := remote.NewWithHTTP(cred.Origin, cred.Token, cred.AllowHTTP)
+	if err != nil {
+		return nil, err
+	}
+	c.InstanceID = cred.Instance
+	return c, nil
+}
+
+func checkIdentity(identity remote.Identity) error {
+	if identity.Instance == "" || identity.User == "" || !model.ValidPath(identity.Username) || strings.Contains(identity.Username, "/") {
+		return errors.New("server returned an invalid identity")
+	}
 	return nil
 }

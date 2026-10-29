@@ -23,9 +23,9 @@ func main() {
 	}
 }
 
-const usage = `Usage: lode [-C directory] [--no-progress] <command>
+const usage = `Usage: lode [-C directory] [--user username] [--no-progress] <command>
 
-  login         Save an access token for a server
+  auth          Sign in, inspect accounts, or sign out
   projects      List or create projects
   attach        Connect an existing folder to an empty project
   clone         Download a project, optionally selecting paths
@@ -60,10 +60,12 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	global := flags("lode", usage, out)
 	directory := global.String("C", ".", "working `directory`")
+	user := global.String("user", "", "use a saved account's `username` for this command")
 	noProgress := global.Bool("no-progress", false, "disable interactive progress")
 	if err := global.Parse(args); err != nil {
 		return err
 	}
+	ctx = context.WithValue(ctx, authUserKey{}, *user)
 	args = global.Args()
 	if len(args) == 0 || len(args) == 1 && args[0] == "help" {
 		_, err := io.WriteString(out, usage)
@@ -81,8 +83,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		}
 		fmt.Fprintln(out, "Lode", version.Current)
 		return nil
-	case "login":
-		return login(ctx, args[1:], out)
+	case "auth":
+		return authCommand(ctx, args[1:], *directory, out)
 	case "projects":
 		return projects(ctx, args[1:], out)
 	case "remote":

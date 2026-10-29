@@ -24,11 +24,7 @@ func remoteCommand(ctx context.Context, args []string, directory string, out io.
 	}
 	defer w.Close()
 	if f.NArg() != 0 {
-		origin, err := originOf(f.Arg(1), true)
-		if err != nil {
-			return err
-		}
-		c, err := authenticated(origin)
+		c, err := authenticated(ctx, f.Arg(1))
 		if err != nil {
 			return err
 		}

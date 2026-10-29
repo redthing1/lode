@@ -29,7 +29,7 @@ Open `http://localhost:8473` and use the printed setup code to create an adminis
 In another terminal, connect an existing folder. Replace `alice` with your username and `./work` with the folder you want to version:
 
 ```sh
-lode login http://localhost:8473
+lode auth login http://localhost:8473
 lode attach http://localhost:8473/alice/example ./work
 cd ./work
 lode save -m 'Initial version'

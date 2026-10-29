@@ -19,6 +19,7 @@ import (
 
 var ErrPending = errors.New("unfinished operation; run lode resume")
 var ErrNoChanges = errors.New("no selected changes")
+var ErrNotWorkspace = errors.New("not in a Lode workspace")
 
 type State struct {
 	Server     string          `json:"server"`
@@ -88,7 +89,7 @@ func Open(directory string) (*Workspace, error) {
 		}
 		parent := filepath.Dir(root)
 		if parent == root {
-			return nil, errors.New("not in a Lode workspace")
+			return nil, ErrNotWorkspace
 		}
 		root = parent
 	}
