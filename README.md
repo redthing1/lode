@@ -56,5 +56,6 @@ Run checks locally:
 ```sh
 make fmt
 make check
+make security
 make build
 ```

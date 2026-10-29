@@ -26,3 +26,7 @@ export CC=gcc
 ```
 
 Keep the UCRT64 `bin` directory on `PATH` when running Lode so its DLLs can be found.
+
+## Dependency verification
+
+`make check` verifies module-file consistency and downloaded dependencies. `make security` runs the pinned Go vulnerability scanner. Module versions and checksums are tracked in `go.mod` and `go.sum`; container base images are pinned by digest. Update dependency and image pins when adopting security fixes. Native packages come from system repositories and are outside these Go checks.
