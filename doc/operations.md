@@ -1,8 +1,8 @@
-# Running Lode
+# Server operations
 
-The server runs on Linux and stores its database and project repositories in one private instance directory. Use a local filesystem that honors file and directory synchronization. Access repositories only through Lode.
+The Linux server keeps its database and project repositories in one private instance directory. Use a local filesystem that honors file and directory synchronization, and access repositories only through Lode.
 
-## Podman Compose
+## Start with Podman Compose
 
 Install Podman and a Compose provider such as `podman-compose`. From the source checkout:
 
@@ -12,9 +12,15 @@ podman compose run --rm lode init --url https://lode.example /data/instance
 podman compose up -d
 ```
 
-Keep the setup code printed by `init`. Put an HTTPS reverse proxy in front of `127.0.0.1:8473`, preserving the original Host header and request path. Allow uploads as large as your project files and sufficient request time for transfers and collection. Open the configured URL, enter the setup code, and create the first administrator.
+To finish setup:
 
-The Compose service uses host networking and the `lode-data` named volume. For local evaluation, omit `--url` and open `http://localhost:8473`. The initialization command's `--listen` flag selects another address if needed.
+1. Keep the setup code printed by `init`.
+2. Put an HTTPS reverse proxy in front of `127.0.0.1:8473`. Preserve the Host header and request path; allow your largest uploads and enough time for transfers and collection.
+3. Open your configured URL and enter the setup code to create the first administrator.
+
+For local evaluation, omit `--url` and open `http://localhost:8473`. To run without containers, follow the [local setup](../README.md#try-it-locally), or initialize with `lode init --url https://lode.example ./instance` for HTTPS hosting.
+
+### Start, stop, and inspect
 
 ```sh
 podman compose logs -f lode
@@ -22,13 +28,13 @@ podman compose stop
 podman compose up -d
 ```
 
-`/healthz` returns 204 at the canonical hostname when the HTTP service is running. It does not verify repository contents. `podman compose down` keeps the named volume; `down -v` deletes it.
+Compose uses host networking and the `lode-data` named volume. `podman compose down` keeps the volume; **`down -v` deletes it**.
 
-Without containers, use `lode init --url https://lode.example ./instance` and `lode serve ./instance`.
+`GET /healthz` returns 204 at the configured hostname while the HTTP service is running. This is a liveness check, not a repository integrity check.
 
-## Configuration and accounts
+## Configuration
 
-Initialization writes `config.json` inside the instance:
+Initialization writes `config.json` inside the instance directory:
 
 ```json
 {
@@ -37,13 +43,20 @@ Initialization writes `config.json` inside the instance:
 }
 ```
 
-Stop the server before editing it. `url` is the browser and CLI origin; HTTPS is required except for local development at `localhost`. `listen` is the HTTP IP address and port behind the proxy. Unknown configuration fields are refused.
+- `url` is the browser and CLI origin. Use HTTPS with a hostname; HTTP at `localhost` is allowed for local development.
+- `listen` is the server's HTTP address behind the proxy. Set it during initialization with `--listen`, if needed.
 
-Changing the hostname affects saved CLI credentials and passkeys, which are tied to the original server identity and hostname. Keep the same canonical URL when restoring an instance.
+Stop the server before editing this file. Unknown fields are refused.
 
-Public registration is closed. Administrators create accounts in **Site administration → Users**; users create and share their own projects. Account security, token scope, and recovery are described in the [user guide](guide.md#account-security).
+Keep the canonical URL when restoring an instance. Changing it affects saved CLI credentials, and passkeys are tied to the hostname where they were enrolled.
 
-For local account recovery, stop the service and run:
+## Accounts and recovery
+
+Public registration is closed. Administrators create accounts under **Site administration → Users**; users create and share their own projects. See [sharing and access](guide.md#sharing-and-access) for roles and token scope.
+
+Administrators can reset passwords, change administrator access, and disable accounts. These changes end the affected account's sessions and revoke its tokens. Disabling an account preserves its projects; re-enabling it requires fresh sign-in. The last enabled administrator cannot be disabled or demoted.
+
+For account recovery without browser access, stop the server and set a new password:
 
 ```sh
 podman compose stop
@@ -51,45 +64,59 @@ podman compose run --rm lode recover-user /data/instance alice
 podman compose up -d
 ```
 
+Without Compose, run `lode recover-user ./instance alice` while the server is stopped. The command enables the account and invalidates its sessions, tokens, keys, and recovery codes. Its role, projects, and memberships remain intact. Interactive use prompts for the password; scripts may supply one line on stdin.
+
 ## Backup and restore
 
-`lode backup SOURCE DEST` copies a stopped whole instance into a new directory. It preserves identity, accounts, credentials, permissions, history and native repositories. Verification checks the staged database and project trees and reads retained file contents against their recorded size and hash. Path-specific connection files are rebuilt when needed.
+`lode backup SOURCE DEST` copies and verifies a whole stopped instance. It preserves identity, accounts, credentials, permissions, and project data. Restore uses the same command.
 
-The destination must not exist and must be outside the source. Allow space for a complete repository copy. The source must remain stopped for the entire copy and verification. Unfinished project creation or deletion must be resolved before backup.
+Before starting:
+
+- Stop the source server for the entire copy and verification.
+- Finish any pending project creation or deletion.
+- Choose a destination that does not exist, outside the source, with space for a complete copy.
+
+### Without containers
 
 ```sh
-lode backup ./instance ./backup-2026-10-28
-lode backup ./backup-2026-10-28 ./restored-instance
+lode backup ./instance ./backup
+lode backup ./backup ./restored-instance
 lode serve ./restored-instance
 ```
 
-With Compose, mount a private backup directory outside the data volume:
+### With Compose
+
+Mount a private backup directory outside the data volume:
 
 ```sh
 mkdir -m 700 backups
 podman compose stop
 podman compose run --rm -v "$PWD/backups:/backups:Z" lode \
-  backup /data/instance /backups/backup-2026-10-28
+  backup /data/instance /backups/backup
 podman compose up -d
 ```
 
-Restore into a separate Compose project's new volume. Stop the original service before starting the restored one at the same address:
+Restore into a separate Compose project's new volume. Keep the original service stopped before starting the restored one at the same address:
 
 ```sh
 podman compose stop
 podman compose -p lode-restored run --rm -v "$PWD/backups:/backups:Z" lode \
-  backup /backups/backup-2026-10-28 /data/instance
+  backup /backups/backup /data/instance
 podman compose -p lode-restored up -d
 ```
 
-Keep backups private: they contain the instance secret and account credentials. A failed copy does not publish its destination. Killing the process can leave a private `.lode-backup-*` staging directory beside the destination; remove that incomplete directory after confirming no backup is running. If the command reports that publication succeeded but parent synchronization failed, inspect the published destination before retrying.
+### Verification and interrupted backups
 
-Restore a backup periodically and check sign-in and representative file downloads. Verification cannot guarantee the backup's future storage health.
+Before publishing the destination, backup checks the copied database and project trees and reads retained files against their recorded sizes and hashes. Restore a backup periodically and check sign-in and representative downloads too.
 
-## Storage and maintenance
+Backups contain account credentials and the instance secret; keep them private. If a process is killed, it may leave a private `.lode-backup-*` staging directory beside the destination. Remove that incomplete directory only after confirming no backup is running.
 
-Project cleanup expires contents and prunes eligible history; collection subsequently reclaims native storage. Both are explicit operations available in project settings and the CLI. Tags and branch tips retain their complete contents. See [retention](guide.md#protect-versions-and-clean-up) for the policy and its effect on older merge ancestry.
+A failed copy does not publish its destination. If an error says publication succeeded but parent synchronization failed, inspect the published destination before retrying.
 
-Collection waits for readers and excludes other operations on that project. Pack rewriting needs temporary free space; reported repository allocation excludes SQLite and caches. Merge currently holds complete comparison metadata in memory. Changed large files use delta transfers when a basis is available; hashing and reconstruction still read local contents. Unrelated rewrites can transfer approximately the whole file plus a bounded signature.
+## Maintenance and upgrades
 
-Back up before replacing the executable or container image. This experimental release does not provide development-format migrations.
+Cleanup expires eligible versions and history. Collection then reclaims unused content storage. Both run explicitly through project settings or the CLI; see [storage policy](guide.md#keep-versions-and-reclaim-space).
+
+Collection waits for readers and temporarily excludes other operations on its project. Leave free space for pack rewriting. Large merges can need substantial memory because their comparison metadata is held on the server.
+
+Back up before replacing the executable or container image. Keep the corresponding binary or image with important backups: experimental storage formats can change, and development-format migrations are not provided.
