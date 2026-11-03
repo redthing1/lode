@@ -51,6 +51,38 @@ func Changes(base, observed []Entry, selection Selection) []Entry {
 	return changes
 }
 
+// ReuseFiles finds identical baseline contents regardless of path. References
+// always name the immutable baseline, even when the source is changed or removed.
+func ReuseFiles(base, changes []Entry) map[string]string {
+	type identity struct {
+		size int64
+		hash string
+	}
+	contents := map[identity]string{}
+	for _, e := range base {
+		if e.Kind != File {
+			continue
+		}
+		id := identity{e.Size, e.SHA256}
+		if name, ok := contents[id]; !ok || e.Path < name {
+			contents[id] = e.Path
+		}
+	}
+	var reuse map[string]string
+	for _, e := range changes {
+		if e.Kind != File {
+			continue
+		}
+		if name, ok := contents[identity{e.Size, e.SHA256}]; ok {
+			if reuse == nil {
+				reuse = map[string]string{}
+			}
+			reuse[e.Path] = name
+		}
+	}
+	return reuse
+}
+
 // ApplySelected updates exact baseline entries after an accepted save.
 func ApplySelected(base, changes []Entry) []Entry {
 	entries := map[string]Entry{}

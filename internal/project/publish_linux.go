@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"time"
 
@@ -206,6 +207,26 @@ func (s *Store) publish(ctx context.Context, actor string, r model.Save, intent 
 		r.Changes, source.reuse, err = s.mergeChanges(ctx, r)
 		if err != nil {
 			return model.Version{}, err
+		}
+	}
+	if len(r.Reuse) > 0 {
+		source.reuse = make(map[string]content.Object, len(r.Reuse))
+		for _, e := range r.Changes {
+			name, ok := r.Reuse[e.Path]
+			if !ok {
+				continue
+			}
+			previous, err := s.lookup(ctx, base, name)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return model.Version{}, fmt.Errorf("%w: missing reuse source %q", ErrRequest, name)
+				}
+				return model.Version{}, err
+			}
+			if previous.Kind != model.File || previous.Size != e.Size || previous.SHA256 != e.SHA256 {
+				return model.Version{}, fmt.Errorf("%w: reused contents differ for %q", ErrRequest, e.Path)
+			}
+			source.reuse[e.Path] = previous.Object
 		}
 	}
 	var root content.Object

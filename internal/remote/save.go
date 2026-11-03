@@ -60,7 +60,7 @@ func (c *Client) Save(ctx context.Context, owner, name string, request model.Sav
 	}
 	var files []model.Entry
 	for _, e := range request.Changes {
-		if e.Kind == model.File {
+		if e.Kind == model.File && request.Reuse[e.Path] == "" {
 			files = append(files, e)
 		}
 	}

@@ -42,7 +42,17 @@ func (w *Workspace) Save(ctx context.Context, token, message string) (model.Vers
 	if err != nil {
 		return model.Version{}, err
 	}
-	pending := pendingSave{Actor: identity.User, Request: model.Save{ID: id.String(), Branch: w.state.Branch, Base: w.state.Version, Message: message, Changes: changes}}
+	pending := pendingSave{
+		Actor: identity.User,
+		Request: model.Save{
+			ID:      id.String(),
+			Branch:  w.state.Branch,
+			Base:    w.state.Version,
+			Message: message,
+			Changes: changes,
+			Reuse:   model.ReuseFiles(w.state.Baseline, changes),
+		},
+	}
 	if err := w.writeJSON("save.json", pending); err != nil {
 		return model.Version{}, err
 	}

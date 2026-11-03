@@ -56,18 +56,30 @@ type Save struct {
 	Changes []Entry         `json:"changes"`
 	Merge   string          `json:"merge,omitempty"`
 	Choices map[string]Side `json:"choices,omitempty"`
+
+	// Reuse maps changed file paths to source paths in Base with identical contents.
+	Reuse map[string]string `json:"reuse,omitempty"`
 }
 
 func (s Save) Validate() error {
 	if !ValidReference(s.Branch) || len(s.Message) > 4096 {
 		return errors.New("invalid branch or version message")
 	}
-	if s.Merge != "" && len(s.Changes) != 0 || s.Merge == "" && len(s.Choices) != 0 {
+	if s.Merge != "" && (len(s.Changes) != 0 || len(s.Reuse) != 0) || s.Merge == "" && len(s.Choices) != 0 {
 		return errors.New("save requires either file changes or a merge source and choices")
 	}
 	for name, side := range s.Choices {
 		if !ValidPath(name) || side != Local && side != Incoming {
 			return errors.New("invalid merge conflict choice")
+		}
+	}
+	files := make(map[string]bool, len(s.Changes))
+	for _, e := range s.Changes {
+		files[e.Path] = e.Kind == File
+	}
+	for name, base := range s.Reuse {
+		if s.Base == "" || !files[name] || !ValidPath(base) {
+			return errors.New("content reuse requires a changed file and a valid base path")
 		}
 	}
 	return ValidateChanges(s.Changes)

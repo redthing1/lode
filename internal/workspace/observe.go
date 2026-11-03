@@ -40,12 +40,12 @@ func (w *Workspace) observeSelection(ctx context.Context, selection model.Select
 	if err != nil {
 		return nil, err
 	}
-	progress.Report(ctx, progress.Event{Phase: "Checking"})
-	files := 0
-	fileCtx := progress.WithReporter(ctx, func(e progress.Event) {
-		e.Files = files
-		progress.Report(ctx, e)
-	})
+	progress.Report(ctx, progress.Event{Phase: "Scanning"})
+	type observedFile struct {
+		name string
+		info fs.FileInfo
+	}
+	var files []observedFile
 	var entries []model.Entry
 	err = fs.WalkDir(w.root.FS(), ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -93,16 +93,27 @@ func (w *Workspace) observeSelection(ctx context.Context, selection model.Select
 		if !included {
 			return fmt.Errorf("cannot inspect selected descendants of file %q", name)
 		}
-		files++
-		e, err := w.observeFile(fileCtx, name, info)
-		if err != nil {
-			return err
-		}
-		entries = append(entries, e)
+		files = append(files, observedFile{name, info})
+		progress.Report(ctx, progress.Event{Phase: "Scanning", Path: name, Files: len(files)})
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	paths := make([]string, len(files))
+	for i, file := range files {
+		paths[i] = file.name
+	}
+	fileCtx := progress.WithFiles(ctx, paths)
+	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		e, err := w.observeFile(fileCtx, file.name, file.info)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 	return entries, nil

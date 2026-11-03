@@ -72,7 +72,8 @@ func TestFileProgressAcrossScanUploadBatchesAndDeltas(t *testing.T) {
 		t.Fatal(err)
 	}
 	upload := take()
-	check(upload, "Checking", 0, count+1)
+	check(upload, "Scanning", 0, count+1)
+	check(upload, "Checking", count+1, count+1)
 	check(upload, "Uploading", count+1, count+1)
 	clone, err := Clone(ctx, f.url, f.client, filepath.Join(t.TempDir(), "clone"), ConnectOptions{Selection: model.Selection{{Path: "assets", Include: true}}})
 	if err != nil {
@@ -87,6 +88,12 @@ func TestFileProgressAcrossScanUploadBatchesAndDeltas(t *testing.T) {
 	if got := readFile(t, clone.Directory(), "assets/000"); got != "" {
 		t.Fatalf("empty file changed: %q", got)
 	}
+	writeFile(t, clone.Directory(), "omitted", "unselected local file")
+	writeFile(t, clone.Directory(), "assets/.DS_Store", "ignored local file")
+	if changes, err := clone.Status(ctx); err != nil || len(changes) != 0 {
+		t.Fatalf("selected workspace status: %v, %v", changes, err)
+	}
+	check(take(), "Checking", count, count)
 	writeFile(t, w.Directory(), "assets/134", strings.Repeat("y", 2<<20))
 	if _, err := w.Save(ctx, f.token, "delta"); err != nil {
 		t.Fatal(err)

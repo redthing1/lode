@@ -85,7 +85,7 @@ Sign-in attempts are throttled by source address in a bounded table. Forwarded a
 
 ## Resource costs
 
-Changed large files use librsync deltas when a suitable basis exists; other files transfer whole. Small downloads use bounded batches. Every reconstructed file is checked against its complete size and hash before installation.
+Files matching saved baseline contents reuse verified server objects, including after renames or copies. Changed large files use librsync deltas when a suitable basis exists; other files transfer whole. Small downloads use bounded batches. Every reconstructed file is checked against its complete size and hash before installation.
 
 Workspaces avoid downloading omitted trees and contents, but observation still hashes local files. Merge currently holds complete comparison metadata in server memory. Collection needs temporary space to rewrite packs; backup needs space for a complete copy.
 

@@ -51,7 +51,8 @@ func TestProgressFileCounts(t *testing.T) {
 		want  string
 	}{
 		{"transfer", progress.Event{Phase: "Uploading", Path: "assets/scene.blend", Files: 12, TotalFiles: 140, Bytes: 8 << 20, Total: 32 << 20}, 100, "Uploading [12/140] assets/scene.blend · 8/32 MiB"},
-		{"scan", progress.Event{Phase: "Checking", Path: "asset", Files: 12}, 80, "Checking [12 files] asset"},
+		{"scan", progress.Event{Phase: "Scanning", Path: "asset", Files: 12}, 80, "Scanning [12 files] asset"},
+		{"checking", progress.Event{Phase: "Checking", Path: "FILE.ISO", Files: 1, TotalFiles: 3, Bytes: 1 << 20, Total: 2 << 20}, 80, "Checking [1/3] FILE.ISO · 1/2 MiB"},
 		{"narrow", progress.Event{Phase: "Downloading", Path: strings.Repeat("long/", 30), Files: 12, TotalFiles: 140, Bytes: 8 << 20, Total: 32 << 20}, 36, "Downloading [12/140]"},
 		{"empty file", progress.Event{Phase: "Uploading", Path: "empty", Files: 1, TotalFiles: 1}, 80, "Uploading [1/1] empty"},
 		{"waiting", progress.Event{Phase: "Waiting for server"}, 80, "Waiting for server ·"},
