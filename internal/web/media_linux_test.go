@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"html"
 	"image"
 	"image/color"
 	"image/png"
@@ -29,6 +30,7 @@ func TestFilePreviewsAndDownloads(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := map[string][]byte{
+		"empty.bin":         nil,
 		"notes.txt":         []byte("exact text <script>not markup</script>"),
 		"odd ?#&.bin":       []byte("opaque\x00\xff"),
 		"images/pixel.png":  encoded.Bytes(),
@@ -101,6 +103,18 @@ func TestFilePreviewsAndDownloads(t *testing.T) {
 		page := b.request("GET", treeURL(p, v.ID, tc.name, ""), nil, 200)
 		if !strings.Contains(page, tc.element) || !strings.Contains(page, path) {
 			t.Fatalf("missing %s preview", tc.name)
+		}
+	}
+	for _, name := range []string{"notes.txt", "odd ?#&.bin", "empty.bin", "images/pixel.png"} {
+		body := b.request("GET", treeURL(p, v.ID, name, ""), nil, 200)
+		decoded := html.UnescapeString(body)
+		for _, value := range []string{name, f.origin + treeURL(p, v.ID, name, "")} {
+			if !strings.Contains(decoded, `data-copy-text="`+value+`"`) {
+				t.Fatalf("copy control lost path or immutable link for %s", name)
+			}
+		}
+		if !strings.Contains(body, `class="muted file-size">`+size(int64(len(data[name])))) {
+			t.Fatalf("file header size missing for %s", name)
 		}
 	}
 	for _, name := range []string{"vector.svg", "page.html", "docs/README.md"} {

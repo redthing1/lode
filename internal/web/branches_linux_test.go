@@ -84,6 +84,17 @@ func TestBrowserBranchFilesAndHistory(t *testing.T) {
 	if !strings.Contains(page, "lode clone --branch experiment/model "+f.origin+"/alice/project") {
 		t.Fatal("clone command does not follow the selected branch")
 	}
+	if strings.Contains(page, `class="ref-kind"`) || strings.Contains(page, `class="latest-link"`) {
+		t.Fatal("live branch displayed as a saved version")
+	}
+	pinned := browser.request("GET", "/alice/project?branch=experiment%2Fmodel&version="+v.ID+"&path=README.md", nil, 200)
+	if !strings.Contains(pinned, `class="ref-kind">Version</span>`) || !strings.Contains(pinned, `class="latest-link" href="/alice/project?branch=experiment%2Fmodel"`) {
+		t.Fatal("pinned version lacks distinct context or branch return link")
+	}
+	pinned = browser.request("GET", "/alice/project?version="+v.ID+"&path=README.md", nil, 200)
+	if !strings.Contains(pinned, `class="latest-link" href="/alice/project?branch=main"`) {
+		t.Fatal("unqualified saved version lacks an explicit main return link")
+	}
 	page = browser.request("GET", "/alice/project/history?branch=experiment%2Fmodel", nil, 200)
 	if !strings.Contains(page, "Experimental model") || !strings.Contains(page, `>experiment/model</span>`) {
 		t.Fatal("history followed the wrong branch")

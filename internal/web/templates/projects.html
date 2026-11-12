@@ -50,11 +50,17 @@
 
 {{define "project"}}{{template "top" .}}{{template "project-heading" .}}
 <div class="toolbar">
-  <details class="branch-picker" data-menu><summary class="ref">{{template "branch-icon"}} {{.Ref}}</summary><div class="menu">
-    {{range .Branches}}<a href="{{branchURL $.Project .Name}}" {{if eq $.Branch .Name}}aria-current="page"{{end}}>{{.Name}}</a>{{end}}
-    <a href="{{projectURL .Project}}/branches">All branches</a>
-    <a href="{{projectURL .Project}}/tags">Tags</a>
-  </div></details>
+  <div class="ref-navigation">
+    <details class="branch-picker" data-menu>
+      <summary class="ref">{{if .Branch}}{{template "branch-icon"}}{{else}}{{template "commit-icon"}}<span class="ref-kind">Version</span>{{end}}<span>{{.Ref}}</span><span class="caret" aria-hidden="true">▾</span></summary>
+      <div class="menu">
+        {{range .Branches}}<a href="{{branchURL $.Project .Name}}" {{if eq $.Branch .Name}}aria-current="page"{{end}}>{{.Name}}</a>{{end}}
+        <a href="{{projectURL .Project}}/branches">All branches</a>
+        <a href="{{projectURL .Project}}/tags">Tags</a>
+      </div>
+    </details>
+    {{if not .Branch}}<a class="latest-link" href="{{branchURL .Project .LatestBranch}}">Latest on {{.LatestBranch}}</a>{{end}}
+  </div>
   {{if .Version.ID}}
   <nav class="breadcrumbs" aria-label="Files"><a href="{{tree .Project .Version.ID "" ""}}">{{.Project.Name}}</a>{{range crumbs .Path}}<span>/</span>{{if eq . $.Path}}<span aria-current="page">{{base .}}</span>{{else}}<a href="{{tree $.Project $.Version.ID . ""}}">{{base .}}</a>{{end}}{{end}}</nav>
   {{end}}
@@ -79,7 +85,14 @@
 </div>
 {{if not .Version.Retained}}<p class="notice">This version's contents have expired.</p>{{end}}
 {{if .File}}
-<div class="file-header"><strong>{{base .Path}}</strong>{{if .Version.Retained}}<a class="button secondary" href="{{raw .Project .Version.ID .Path}}">{{template "download-icon"}}Download</a>{{end}}</div>
+<div class="file-header">
+  <div class="file-info"><strong>{{base .Path}}</strong><span class="muted file-size">{{size .FileEntry.Size}}</span></div>
+  <div class="file-actions">
+    <button class="secondary icon-button" type="button" data-copy-text="{{.Path}}" title="Copy path" aria-label="Copy path">{{template "copy-icon"}}<span class="copy-feedback">{{template "check-icon"}}</span><span class="sr-only" aria-live="polite">Copy path</span></button>
+    <button class="secondary icon-button" type="button" data-copy-text="{{.Origin}}{{tree .Project .Version.ID .Path ""}}" title="Copy permanent link" aria-label="Copy permanent link">{{template "link-icon"}}<span class="copy-feedback">{{template "check-icon"}}</span><span class="sr-only" aria-live="polite">Copy permanent link</span></button>
+    {{if .Version.Retained}}<a class="button secondary" href="{{raw .Project .Version.ID .Path}}">{{template "download-icon"}}Download</a>{{end}}
+  </div>
+</div>
 {{if .Markdown}}<article class="markdown panel">{{.Markdown}}</article>{{else if .Media}}<div class="media-preview panel">
 {{if eq .Media "image"}}<img src="{{media .Project .Version.ID .Path}}" alt="{{base .Path}}">
 {{else if eq .Media "audio"}}<audio controls preload="metadata" src="{{media .Project .Version.ID .Path}}"></audio>

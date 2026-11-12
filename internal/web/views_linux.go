@@ -45,6 +45,7 @@ type page struct {
 	Markdown                              template.HTML
 	Media                                 string
 	File                                  bool
+	FileEntry                             model.Entry
 	Token                                 string
 	Tokens                                []instance.TokenInfo
 	Keys                                  []instance.Key
@@ -54,7 +55,7 @@ type page struct {
 	Username                              string
 	Authors                               map[string]string
 	Branches                              []model.Reference
-	Branch                                string
+	Branch, LatestBranch                  string
 	Tags                                  []model.Reference
 	Tag                                   model.Reference
 	Policy                                model.Retention

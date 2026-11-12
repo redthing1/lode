@@ -55,21 +55,34 @@ document.addEventListener("keydown", event => {
   }
 });
 
-for (const button of document.querySelectorAll("button[data-copy]")) {
+for (const button of document.querySelectorAll("button[data-copy], button[data-copy-text]")) {
+  const input = button.dataset.copy ? document.getElementById(button.dataset.copy) : null;
+  const label = button.querySelector("[aria-live]");
+  const originalLabel = label.textContent;
+  const originalTitle = button.getAttribute("title");
   let timer;
   button.addEventListener("click", async () => {
-    const input = document.getElementById(button.dataset.copy);
-    const label = button.querySelector("span");
     clearTimeout(timer);
+    delete button.dataset.copied;
     try {
-      await navigator.clipboard.writeText(input.value);
+      await navigator.clipboard.writeText(input ? input.value : button.dataset.copyText);
+      button.dataset.copied = "true";
       label.textContent = "Copied";
+      button.title = "Copied";
     } catch {
-      input.focus();
-      input.select();
-      label.textContent = "Select text";
+      if (input) {
+        input.focus();
+        input.select();
+      }
+      label.textContent = input ? "Select text" : "Unable to copy";
+      button.title = label.textContent;
     }
-    timer = setTimeout(() => { label.textContent = "Copy"; }, 2500);
+    timer = setTimeout(() => {
+      delete button.dataset.copied;
+      label.textContent = originalLabel;
+      if (originalTitle === null) button.removeAttribute("title");
+      else button.title = originalTitle;
+    }, 2500);
   });
 }
 

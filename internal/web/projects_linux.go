@@ -60,7 +60,8 @@ func (s *Server) projectsPage(w http.ResponseWriter, r *http.Request, actor inst
 }
 
 func (s *Server) projectPage(w http.ResponseWriter, r *http.Request, actor instance.Principal) error {
-	p := page{User: actor.User, Path: r.URL.Query().Get("path"), Origin: s.instance.Config.URL, Branch: branch(r), Ref: branch(r)}
+	branchName := branch(r)
+	p := page{User: actor.User, Path: r.URL.Query().Get("path"), Origin: s.instance.Config.URL, Branch: branchName, Ref: branchName, LatestBranch: branchName}
 	var err error
 	err = s.instance.WithProject(r.Context(), actor, r.PathValue("owner"), r.PathValue("project"), instance.Reader, func(info instance.Project, store *project.Store) error {
 		p.Project = info
@@ -96,6 +97,7 @@ func (s *Server) projectPage(w http.ResponseWriter, r *http.Request, actor insta
 			}
 			p.File = e.Kind == model.File
 			if p.File {
+				p.FileEntry = e
 				return preview(r, store, e, &p)
 			}
 		}
