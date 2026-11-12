@@ -96,13 +96,15 @@ func projectFor(ctx context.Context, q userQuery, actor Principal, owner, name s
 	return p, nil
 }
 
+const projectListFilter = " WHERE p.state<>'deleting' AND (p.owner=? OR ? OR m.user_id IS NOT NULL) AND (?='' OR p.id=?)"
+
 func (s *Store) Projects(ctx context.Context, actor Principal) ([]Project, error) {
 	user, err := currentUser(ctx, s.db, actor.User)
 	if err != nil {
 		return nil, err
 	}
 	admin := user.Admin && !actor.Token
-	rows, err := s.db.QueryContext(ctx, projectAccess+" WHERE p.state<>'deleting' AND (p.owner=? OR ? OR m.user_id IS NOT NULL) AND (?='' OR p.id=?) ORDER BY u.name,p.name", user.ID, admin, user.ID, user.ID, admin, actor.Project, actor.Project)
+	rows, err := s.db.QueryContext(ctx, projectAccess+projectListFilter+" ORDER BY u.name,p.name", user.ID, admin, user.ID, user.ID, admin, actor.Project, actor.Project)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +121,50 @@ func (s *Store) Projects(ctx context.Context, actor Principal) ([]Project, error
 		}
 	}
 	return projects, rows.Err()
+}
+
+// ProjectSummary describes project activity and cached storage.
+type ProjectSummary struct {
+	Project
+	Created, LastSaved time.Time
+	Storage            StorageSample
+}
+
+// ProjectSummaries reads authorized metadata without opening content repositories.
+func (s *Store) ProjectSummaries(ctx context.Context, actor Principal) ([]ProjectSummary, error) {
+	user, err := currentUser(ctx, s.db, actor.User)
+	if err != nil {
+		return nil, err
+	}
+	admin := user.Admin && !actor.Token
+	rows, err := s.db.QueryContext(ctx, "WITH accessible(id,owner,name,state,role) AS ("+projectAccess+projectListFilter+`)
+SELECT a.id,a.owner,a.name,a.state,a.role,p.created,
+ COALESCE((SELECT created FROM versions WHERE project=a.id ORDER BY created DESC,id LIMIT 1),0)
+FROM accessible a JOIN projects p ON p.id=a.id ORDER BY a.owner,a.name`,
+		user.ID, admin, user.ID, user.ID, admin, actor.Project, actor.Project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []ProjectSummary
+	for rows.Next() {
+		var p ProjectSummary
+		var created, saved int64
+		if err := rows.Scan(&p.ID, &p.Owner, &p.Name, &p.State, &p.Role, &created, &saved); err != nil {
+			return nil, err
+		}
+		p.limit(actor)
+		if !p.Role.Allows(Reader) {
+			continue
+		}
+		p.Created = time.UnixMilli(created)
+		if saved != 0 {
+			p.LastSaved = time.UnixMilli(saved)
+		}
+		p.Storage = s.CachedUsage(p.ID)
+		result = append(result, p)
+	}
+	return result, rows.Err()
 }
 
 // WithProject supplies the authorized metadata and keeps that same project's

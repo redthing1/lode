@@ -2,30 +2,58 @@ package web
 
 import (
 	"errors"
-	"github.com/redthing1/lode/internal/instance"
-	"github.com/redthing1/lode/internal/model"
-	"github.com/redthing1/lode/internal/project"
 	"net/http"
 	"os"
 	"path"
+	"sort"
+	"strings"
+
+	"github.com/redthing1/lode/internal/instance"
+	"github.com/redthing1/lode/internal/model"
+	"github.com/redthing1/lode/internal/project"
 )
 
 func (s *Server) projectsPage(w http.ResponseWriter, r *http.Request, actor instance.Principal) error {
 	p := page{Title: "Projects", User: actor.User, Owner: r.PathValue("owner")}
-	projects, err := s.instance.Projects(r.Context(), actor)
+	projects, err := s.instance.ProjectSummaries(r.Context(), actor)
 	if err != nil {
 		return err
 	}
 	for _, project := range projects {
 		if p.Owner == "" || project.Owner == p.Owner {
-			p.Projects = append(p.Projects, project)
+			p.ProjectSummaries = append(p.ProjectSummaries, project)
 		}
 	}
 	if p.Owner != "" {
-		if len(p.Projects) == 0 && p.Owner != actor.User.Name {
+		if len(p.ProjectSummaries) == 0 && p.Owner != actor.User.Name {
 			return instance.ErrNotFound
 		}
 		p.Title = p.Owner
+	}
+	p.Query = strings.TrimSpace(r.URL.Query().Get("q"))
+	query := strings.ToLower(p.Query)
+	p.ProjectMatches = make(map[string]bool, len(p.ProjectSummaries))
+	for _, item := range p.ProjectSummaries {
+		matches := strings.Contains(strings.ToLower(item.Owner+"/"+item.Name), query)
+		p.ProjectMatches[item.ID] = matches
+		if matches {
+			p.ProjectCount++
+		}
+	}
+	p.Sort = r.URL.Query().Get("sort")
+	if p.Sort != "name" {
+		p.Sort = "updated"
+		sort.SliceStable(p.ProjectSummaries, func(i, j int) bool {
+			a, b := p.ProjectSummaries[i], p.ProjectSummaries[j]
+			at, bt := a.LastSaved, b.LastSaved
+			if at.IsZero() {
+				at = a.Created
+			}
+			if bt.IsZero() {
+				bt = b.Created
+			}
+			return at.After(bt)
+		})
 	}
 	render(w, 200, "projects", p)
 	return nil

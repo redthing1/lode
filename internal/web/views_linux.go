@@ -31,6 +31,10 @@ type page struct {
 	Subject                               instance.User
 	Setup                                 bool
 	Projects                              []instance.Project
+	ProjectSummaries                      []instance.ProjectSummary
+	ProjectMatches                        map[string]bool
+	ProjectCount                          int
+	Sort, Query                           string
 	Owner                                 string
 	Project                               instance.Project
 	Version                               model.Version

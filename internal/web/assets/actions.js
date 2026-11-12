@@ -72,3 +72,75 @@ for (const button of document.querySelectorAll("button[data-copy]")) {
     timer = setTimeout(() => { label.textContent = "Copy"; }, 2500);
   });
 }
+
+// Recent activity uses relative wording; older activity keeps a calendar date.
+const relativeTimes = document.querySelectorAll("time[data-relative-time]");
+const relativeFormat = new Intl.RelativeTimeFormat("en", {numeric: "auto"});
+const calendarFormat = new Intl.DateTimeFormat("en", {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"});
+function updateRelativeTimes() {
+  const now = Date.now();
+  for (const element of relativeTimes) {
+    const date = new Date(element.dateTime);
+    if (!Number.isFinite(date.getTime())) continue;
+    const seconds = (date.getTime() - now) / 1000;
+    const age = Math.abs(seconds);
+    let text;
+    if (age >= 30 * 86400) {
+      text = calendarFormat.format(date);
+    } else if (age < 60) {
+      text = "just now";
+    } else {
+      const [unit, length] = age < 3600 ? ["minute", 60]
+        : age < 86400 ? ["hour", 3600]
+        : age < 7 * 86400 ? ["day", 86400] : ["week", 7 * 86400];
+      text = relativeFormat.format(Math.trunc(seconds / length), unit);
+    }
+    element.textContent = text;
+  }
+}
+updateRelativeTimes();
+if (relativeTimes.length) setInterval(updateRelativeTimes, 30000);
+
+const projectFilter = document.querySelector("[data-project-filter]");
+if (projectFilter) {
+  const input = projectFilter.querySelector('input[name="q"]');
+  const rows = [...document.querySelectorAll("[data-project-name]")];
+  const count = document.querySelector(".project-count");
+  const empty = document.querySelector("[data-project-empty]");
+  const clear = empty.querySelector("[data-clear-filter]");
+  const filterProjects = () => {
+    const value = input.value.trim();
+    const query = value.toLowerCase();
+    let matches = 0;
+    for (const row of rows) {
+      row.hidden = !row.dataset.projectName.toLowerCase().includes(query);
+      if (!row.hidden) matches++;
+    }
+    count.textContent = matches;
+    empty.hidden = matches !== 0;
+    empty.querySelector("span").textContent = query ? "No matching projects." : "No projects yet.";
+    clear.hidden = !query;
+    const url = new URL(location.href);
+    if (value) url.searchParams.set("q", value);
+    else url.searchParams.delete("q");
+    if (url.href !== location.href) history.replaceState(history.state, "", url);
+    for (const link of document.querySelectorAll(".project-sort a")) {
+      const target = new URL(link.href);
+      if (value) target.searchParams.set("q", value);
+      else target.searchParams.delete("q");
+      link.href = target.pathname + target.search;
+    }
+  };
+  input.addEventListener("input", filterProjects);
+  projectFilter.addEventListener("submit", event => { event.preventDefault(); filterProjects(); });
+  clear.addEventListener("click", event => {
+    event.preventDefault();
+    input.value = "";
+    filterProjects();
+    input.focus();
+  });
+  window.addEventListener("popstate", () => {
+    input.value = new URL(location.href).searchParams.get("q") || "";
+    filterProjects();
+  });
+}

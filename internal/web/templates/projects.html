@@ -1,8 +1,31 @@
 {{define "projects"}}{{template "top" .}}
-<div class="heading"><h1>{{.Title}}</h1>{{if or (not .Owner) (eq .Owner .User.Name)}}<a class="button" href="/projects/new">New project</a>{{end}}</div>
+<div class="heading"><h1>{{.Title}} <span class="project-count muted" aria-live="polite">{{.ProjectCount}}</span></h1>{{if or (not .Owner) (eq .Owner .User.Name)}}<a class="button" href="/projects/new">New project</a>{{end}}</div>
+<div class="project-list-toolbar">
+  <form class="project-filter" data-project-filter method="get" role="search">
+    <label class="sr-only" for="project-query">Filter projects</label>
+    {{template "search-icon"}}<input id="project-query" type="search" name="q" value="{{.Query}}" placeholder="Filter projects…" autocomplete="off">
+    <input type="hidden" name="sort" value="{{.Sort}}">
+  </form>
+  <details class="project-sort" data-menu>
+    <summary class="button secondary">Sort: {{if eq .Sort "name"}}Name{{else}}Recently updated{{end}}<span class="caret" aria-hidden="true">▾</span></summary>
+    <div class="menu">
+      <a href="?sort=updated{{if .Query}}&amp;q={{urlquery .Query}}{{end}}" {{if eq .Sort "updated"}}aria-current="true"{{end}}>Recently updated</a>
+      <a href="?sort=name{{if .Query}}&amp;q={{urlquery .Query}}{{end}}" {{if eq .Sort "name"}}aria-current="true"{{end}}>Name</a>
+    </div>
+  </details>
+</div>
 <div class="panel project-list">
-{{range .Projects}}<a class="project-row" href="{{projectURL .}}">{{template "folder"}}<span>{{.Owner}} / <strong>{{.Name}}</strong></span><span class="badge">Private</span></a>
-{{else}}<p class="empty">No projects yet.</p>{{end}}
+  {{range .ProjectSummaries}}
+  <div class="project-row" data-project-name="{{.Owner}}/{{.Name}}"{{if not (index $.ProjectMatches .ID)}} hidden{{end}}>
+    {{template "folder"}}
+    <div class="project-title"><a href="{{projectURL .Project}}">{{.Owner}} / <strong>{{.Name}}</strong></a><span class="badge">Private</span></div>
+    <div class="project-meta">
+      <span data-storage="{{projectURL .Project}}/usage">{{template "storage-size" .Storage}}</span>
+      <span class="project-updated" title="Latest saved version">{{template "clock-icon"}}{{if .LastSaved.IsZero}}<span>No saved versions</span>{{else}}{{template "relative-time" .LastSaved}}{{end}}</span>
+    </div>
+  </div>
+  {{end}}
+  <p class="empty" data-project-empty{{if .ProjectCount}} hidden{{end}}><span>{{if .Query}}No matching projects.{{else}}No projects yet.{{end}}</span> <a href="?sort={{.Sort}}" data-clear-filter{{if not .Query}} hidden{{end}}>Clear filter</a></p>
 </div>
 {{template "bottom" .}}{{end}}
 
@@ -49,7 +72,11 @@
   </div>
 </div>
 {{if .Version.ID}}
-<div class="version-row"><span>{{if .Version.Message}}{{.Version.Message}}{{else}}Saved version{{end}}</span>{{with index .Authors .Version.Actor}}<strong>{{.}}</strong>{{end}}<a href="{{tree .Project .Version.ID "" ""}}"><code>{{short .Version.ID}}</code></a><time>{{time .Version.Created}}</time></div>
+<div class="version-row">
+  <span class="version-summary">{{with index .Authors .Version.Actor}}<strong>{{.}}</strong>{{end}}<span>{{if .Version.Message}}{{.Version.Message}}{{else}}Saved version{{end}}</span></span>
+  <a class="version-id" href="{{tree .Project .Version.ID "" ""}}" aria-label="Version {{short .Version.ID}}">{{template "commit-icon"}}<code>{{short .Version.ID}}</code></a>
+  {{template "relative-time" .Version.Created}}
+</div>
 {{if not .Version.Retained}}<p class="notice">This version's contents have expired.</p>{{end}}
 {{if .File}}
 <div class="file-header"><strong>{{base .Path}}</strong>{{if .Version.Retained}}<a class="button secondary" href="{{raw .Project .Version.ID .Path}}">{{template "download-icon"}}Download</a>{{end}}</div>
@@ -81,7 +108,7 @@ lode save -m 'Initial version'</pre>
 {{define "history"}}{{template "top" .}}{{template "project-heading" .}}
 <div class="toolbar"><a class="button secondary" href="{{tree .Project .Version.ID "" ""}}">← Files</a><h2>History</h2><span class="ref">{{.Ref}}</span></div>
 <div class="panel history">
-{{range .History}}<div class="history-row"><div><a href="{{tree $.Project .ID "" ""}}">{{if .Message}}{{.Message}}{{else}}Saved version{{end}}</a><div class="muted">{{with index $.Authors .Actor}}{{.}} · {{end}}{{time .Created}}{{if .MergeParent}} · merged <a href="{{tree $.Project .MergeParent "" ""}}">{{short .MergeParent}}</a>{{end}}{{if not .Retained}} · Contents expired{{end}}</div></div><a class="ref" href="{{tree $.Project .ID "" ""}}">{{short .ID}}</a></div>{{else}}<p class="empty">No saved versions.</p>{{end}}
+{{range .History}}<div class="history-row"><div><a href="{{tree $.Project .ID "" ""}}">{{if .Message}}{{.Message}}{{else}}Saved version{{end}}</a><div class="muted">{{with index $.Authors .Actor}}{{.}} · {{end}}{{template "relative-time" .Created}}{{if .MergeParent}} · merged <a href="{{tree $.Project .MergeParent "" ""}}">{{short .MergeParent}}</a>{{end}}{{if not .Retained}} · Contents expired{{end}}</div></div><a class="ref" href="{{tree $.Project .ID "" ""}}">{{short .ID}}</a></div>{{else}}<p class="empty">No saved versions.</p>{{end}}
 </div>
 {{if .Boundary}}<p class="empty">Earlier history has been removed.</p>{{end}}
 {{if .Next}}<div class="pagination"><a class="button secondary" href="{{historyURL .Project .Branch .Next}}">Older versions →</a></div>{{end}}
