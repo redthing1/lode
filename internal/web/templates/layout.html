@@ -13,7 +13,7 @@
 <body>
   <a class="skip" href="#main">Skip to content</a>
   <header class="bar">
-    <a class="brand" href="/"><img src="/assets/icon.svg" alt="" width="28" height="28">Lode</a>
+    <a class="brand" href="/"><svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--primary)"/><path d="m7 11 9-4 9 4-9 4Z" fill="var(--on-primary)"/><path d="m7 16 9 4 9-4M7 21l9 4 9-4" fill="none" stroke="var(--on-primary)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Lode</a>
     {{if .User.ID}}<a href="/">Projects</a>
     <details class="account-menu" data-menu>
       <summary>{{.User.Name}}</summary>
@@ -30,7 +30,12 @@
 {{end}}
 {{define "bottom"}}
   </main>
-  <footer>Lode · {{version}}</footer>
+  <footer><span>Lode · {{version}}</span><label class="theme-switcher">Theme
+    <select name="theme" aria-label="Theme">
+      <option value="dark">Dark</option><option value="light">Light</option>
+      <option value="charcoal">Charcoal</option><option value="rose">Rose</option>
+    </select>
+  </label></footer>
 </body>
 </html>{{end}}
 {{define "error"}}{{template "top" .}}<h1>{{.Title}}</h1><a href="/">Projects</a>{{template "bottom" .}}{{end}}

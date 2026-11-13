@@ -46,8 +46,10 @@
 {{define "appearance"}}{{template "top" .}}{{template "settings-top" .}}
 <section class="panel padded"><h1>Appearance</h1>
   <fieldset class="theme-options"><legend>Theme</legend>
-    <label class="choice"><input type="radio" name="theme" value="dark">Dark</label>
-    <label class="choice"><input type="radio" name="theme" value="light">Light</label>
+    <label class="choice"><input type="radio" name="theme" value="dark"><span class="theme-swatch" data-theme-preview="dark" aria-hidden="true"></span>Dark</label>
+    <label class="choice"><input type="radio" name="theme" value="light"><span class="theme-swatch" data-theme-preview="light" aria-hidden="true"></span>Light</label>
+    <label class="choice"><input type="radio" name="theme" value="charcoal"><span class="theme-swatch" data-theme-preview="charcoal" aria-hidden="true"></span>Charcoal</label>
+    <label class="choice"><input type="radio" name="theme" value="rose"><span class="theme-swatch" data-theme-preview="rose" aria-hidden="true"></span>Rose</label>
   </fieldset>
 </section>
 {{template "settings-bottom" .}}{{template "bottom" .}}{{end}}
