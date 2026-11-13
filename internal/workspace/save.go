@@ -154,7 +154,7 @@ func (w *Workspace) publish(ctx context.Context, c *remote.Client, pending pendi
 		}
 	}
 	if err != nil {
-		return model.Version{}, err
+		return model.Version{}, fmt.Errorf("save remains pending; run lode resume or lode cancel: %w", err)
 	}
 	progress.Report(ctx, progress.Event{Phase: "Finishing save"})
 	if err := w.acceptSave(pending, v); err != nil {

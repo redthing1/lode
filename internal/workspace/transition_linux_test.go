@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/redthing1/lode/internal/model"
+	"github.com/redthing1/lode/internal/progress"
 )
 
 func cloneWorkspace(t *testing.T, f *fixture, selection model.Selection) *Workspace {
@@ -720,5 +722,36 @@ func TestPrefetchedFilesRecoverBeforeFirstAction(t *testing.T) {
 				t.Fatalf("operation remains pending: %v %v", exists, err)
 			}
 		})
+	}
+}
+
+func TestInterruptedCloneExplainsRecoveryAndCanResume(t *testing.T) {
+	f := newFixture(t)
+	seed := attach(t, f, t.TempDir())
+	contents := strings.Repeat("x", 2<<20)
+	writeFile(t, seed.Directory(), "large.bin", contents)
+	save(t, f, seed, "initial")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = progress.WithReporter(ctx, func(event progress.Event) {
+		if event.Phase == "Downloading" {
+			cancel()
+		}
+	})
+	directory := filepath.Join(t.TempDir(), "clone")
+	_, err := Clone(ctx, f.url, f.client, directory, ConnectOptions{Selection: model.Selection{{Include: true}}})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "lode resume or lode cancel in that directory") || !strings.Contains(err.Error(), directory) {
+		t.Fatalf("interrupted clone lacks recovery guidance or cause: %v", err)
+	}
+	recovered, err := Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recovered.Close()
+	if err := recovered.Resume(context.Background(), f.token); err != nil {
+		t.Fatal(err)
+	}
+	if readFile(t, directory, "large.bin") != contents {
+		t.Fatal("resumed clone contents differ")
 	}
 }

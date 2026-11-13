@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -393,6 +394,11 @@ func TestAcceptedSaveResumePreservesLaterEdits(t *testing.T) {
 	f.dropSave.Store(true)
 	if _, err := w.Save(ctx, f.token, "first"); err == nil {
 		t.Fatal("save response was not lost")
+	} else {
+		var transportError *url.Error
+		if !strings.Contains(err.Error(), "lode resume or lode cancel") || !errors.As(err, &transportError) {
+			t.Fatalf("lost response lacks recovery guidance or cause: %v", err)
+		}
 	}
 	if w.State().Version != "" {
 		t.Fatal("baseline advanced without a response")
@@ -527,6 +533,11 @@ func TestCancelFailedSaveAllowsNewWork(t *testing.T) {
 	f.refuseSave.Store(true)
 	if _, err := w.Save(ctx, f.token, "interrupted"); err == nil {
 		t.Fatal("save was not interrupted")
+	} else {
+		var transportError *url.Error
+		if !strings.Contains(err.Error(), "lode resume or lode cancel") || !errors.As(err, &transportError) {
+			t.Fatalf("interrupted save lacks recovery guidance or cause: %v", err)
+		}
 	}
 	var pending pendingSave
 	if err := w.readJSON("save.json", &pending); err != nil {

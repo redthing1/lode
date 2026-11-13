@@ -61,7 +61,7 @@ func Clone(ctx context.Context, projectURL string, c *remote.Client, directory s
 	}
 	if err := w.resumeTransition(ctx, c, false); err != nil {
 		w.Close()
-		return nil, fmt.Errorf("clone in %q: %w", directory, err)
+		return nil, fmt.Errorf("clone in %q is unfinished; run lode resume or lode cancel in that directory: %w", directory, err)
 	}
 	return w, nil
 }
