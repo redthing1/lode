@@ -3,8 +3,11 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
+	"html"
 	"io"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -70,8 +73,8 @@ func TestBrowserBranchFilesAndHistory(t *testing.T) {
 	if _, err := f.client.CreateBranch(ctx, "alice", "project", model.Reference{Name: "experiment/model"}); err != nil {
 		t.Fatal(err)
 	}
-	contents := "# Branch contents\n"
-	v, err := f.client.Save(ctx, "alice", "project", model.Save{ID: operation(t), Branch: "experiment/model", Message: "Experimental model", Changes: []model.Entry{entry("README.md", []byte(contents))}}, nil, func(model.Entry) (io.ReadCloser, error) {
+	contents := "# Branch contents\n\n[Project file](README.md)\n"
+	v, err := f.client.Save(ctx, "alice", "project", model.Save{ID: operation(t), Branch: "experiment/model", Message: "Experimental model", Changes: []model.Entry{entry("README.md", []byte(contents)), {Path: "docs", Kind: model.Directory}, entry("docs/note.txt", []byte(contents))}}, nil, func(model.Entry) (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader(contents)), nil
 	})
 	if err != nil {
@@ -87,9 +90,30 @@ func TestBrowserBranchFilesAndHistory(t *testing.T) {
 	if strings.Contains(page, `class="ref-kind"`) || strings.Contains(page, `class="latest-link"`) {
 		t.Fatal("live branch displayed as a saved version")
 	}
+	projectInfo := instance.Project{Owner: "alice", Name: "project"}
+	folderURL := referenceTreeURL(projectInfo, "experiment/model", "", "docs", "")
+	if !strings.Contains(page, `href="`+html.EscapeString(folderURL)+`"`) {
+		t.Fatal("folder navigation does not preserve the live branch")
+	}
+	folder := browser.request("GET", folderURL, nil, 200)
+	if !strings.Contains(folder, "lode clone --branch experiment/model ") || strings.Contains(folder, `class="ref-kind"`) {
+		t.Fatal("browsing a folder lost branch context or changed the clone target")
+	}
+	snapshotLink := referenceTreeURL(projectInfo, "experiment/model", v.ID, "README.md", "")
+	if !strings.Contains(page, `href="`+html.EscapeString(snapshotLink)+`"`) {
+		t.Fatal("Markdown link lost its immutable version or originating branch")
+	}
 	pinned := browser.request("GET", "/alice/project?branch=experiment%2Fmodel&version="+v.ID+"&path=README.md", nil, 200)
 	if !strings.Contains(pinned, `class="ref-kind">Version</span>`) || !strings.Contains(pinned, `class="latest-link" href="/alice/project?branch=experiment%2Fmodel"`) {
 		t.Fatal("pinned version lacks distinct context or branch return link")
+	}
+	if !strings.Contains(pinned, "lode clone --branch experiment/model ") || !strings.Contains(pinned, "Clones the latest experiment/model, not this saved version.") {
+		t.Fatal("saved version clone targets a different branch than its return link")
+	}
+	snapshotFolder := referenceTreeURL(projectInfo, "experiment/model", v.ID, "docs", "")
+	root := browser.request("GET", "/alice/project?branch=experiment%2Fmodel&version="+v.ID, nil, 200)
+	if !strings.Contains(root, `href="`+html.EscapeString(snapshotFolder)+`"`) {
+		t.Fatal("saved directory navigation loses version or branch context")
 	}
 	pinned = browser.request("GET", "/alice/project?version="+v.ID+"&path=README.md", nil, 200)
 	if !strings.Contains(pinned, `class="latest-link" href="/alice/project?branch=main"`) {
@@ -123,5 +147,39 @@ func TestBrowserBranchFilesAndHistory(t *testing.T) {
 	page = browser.request("GET", "/alice/project/history", nil, 200)
 	if !strings.Contains(page, "Integrate model") || !strings.Contains(page, "merged <a") || !strings.Contains(page, model.ShortVersion(v.ID)) {
 		t.Fatal("merge history/source link missing")
+	}
+}
+
+func TestBrowserPaginationKeepsItsVersionWhenBranchAdvances(t *testing.T) {
+	ctx := context.Background()
+	f := apiTest(t)
+	browser := newBrowserSession(t, f.origin)
+	browser.request("POST", "/login", url.Values{"username": {"alice"}, "password": {browserPassword}}, 303)
+	var changes []model.Entry
+	for i := range 102 {
+		changes = append(changes, entry(fmt.Sprintf("asset-%03d.bin", i), []byte("x")))
+	}
+	read := func(model.Entry) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("x")), nil }
+	first, err := f.client.Save(ctx, "alice", "project", model.Save{ID: operation(t), Branch: "main", Message: "Batch baseline", Changes: changes}, nil, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := browser.request("GET", "/alice/project", nil, 200)
+	match := regexp.MustCompile(`class="pagination"><a[^>]*href="([^"]+)"`).FindStringSubmatch(body)
+	if len(match) != 2 {
+		t.Fatal("missing next page")
+	}
+	next := html.UnescapeString(match[1])
+	parsed, err := url.Parse(next)
+	if err != nil || parsed.Query().Get("version") != first.ID || parsed.Query().Get("branch") != "main" {
+		t.Fatalf("pagination lost its snapshot or branch context: %s", next)
+	}
+	_, err = f.client.Save(ctx, "alice", "project", model.Save{ID: operation(t), Branch: "main", Base: first.ID, Message: "Later version", Changes: []model.Entry{entry("asset-999.bin", []byte("x"))}}, nil, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = browser.request("GET", next, nil, 200)
+	if !strings.Contains(body, "asset-100.bin") || !strings.Contains(body, "asset-101.bin") || !strings.Contains(body, "Batch baseline") || strings.Contains(body, "asset-999.bin") {
+		t.Fatal("next page mixed branch versions")
 	}
 }

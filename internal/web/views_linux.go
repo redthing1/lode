@@ -68,7 +68,22 @@ type page struct {
 
 func projectURL(p instance.Project) string { return "/" + p.Owner + "/" + p.Name }
 func treeURL(p instance.Project, version, name, after string) string {
+	return referenceTreeURL(p, "", version, name, after)
+}
+
+func browseURL(p page, name, after string) string {
+	version := ""
+	if p.Branch == "" || after != "" {
+		version = p.Version.ID
+	}
+	return referenceTreeURL(p.Project, p.LatestBranch, version, name, after)
+}
+
+func referenceTreeURL(p instance.Project, branch, version, name, after string) string {
 	q := url.Values{}
+	if branch != "" {
+		q.Set("branch", branch)
+	}
 	if version != "" {
 		q.Set("version", version)
 	}
@@ -100,7 +115,7 @@ func size(n int64) string {
 
 var views = template.Must(template.New("pages").Funcs(template.FuncMap{
 	"version":    func() string { return version.Current },
-	"projectURL": projectURL, "tree": treeURL, "base": path.Base,
+	"projectURL": projectURL, "tree": treeURL, "browse": browseURL, "base": path.Base,
 	"media": mediaURL,
 	"crumbs": func(name string) []string {
 		if name == "" {
@@ -205,7 +220,7 @@ func preview(r *http.Request, store *project.Store, e model.Entry, p *page) erro
 			u, err := url.Parse(string(link.Destination))
 			if err == nil && !u.IsAbs() && u.Host == "" && u.Path != "" {
 				if name, ok := markdownPath(e.Path, u); ok {
-					link.Destination = []byte(treeURL(p.Project, p.Version.ID, name, ""))
+					link.Destination = []byte(referenceTreeURL(p.Project, p.LatestBranch, p.Version.ID, name, ""))
 				} else {
 					link.Destination = []byte("#")
 				}

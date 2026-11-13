@@ -62,16 +62,16 @@
     {{if not .Branch}}<a class="latest-link" href="{{branchURL .Project .LatestBranch}}">Latest on {{.LatestBranch}}</a>{{end}}
   </div>
   {{if .Version.ID}}
-  <nav class="breadcrumbs" aria-label="Files"><a href="{{tree .Project .Version.ID "" ""}}">{{.Project.Name}}</a>{{range crumbs .Path}}<span>/</span>{{if eq . $.Path}}<span aria-current="page">{{base .}}</span>{{else}}<a href="{{tree $.Project $.Version.ID . ""}}">{{base .}}</a>{{end}}{{end}}</nav>
+  <nav class="breadcrumbs" aria-label="Files"><a href="{{browse . "" ""}}">{{.Project.Name}}</a>{{range crumbs .Path}}<span>/</span>{{if eq . $.Path}}<span aria-current="page">{{base .}}</span>{{else}}<a href="{{browse $ . ""}}">{{base .}}</a>{{end}}{{end}}</nav>
   {{end}}
   <div class="actions">
     {{if eq .Project.Role "maintainer"}}<a class="project-size" href="{{projectURL .Project}}/settings/storage" data-storage="{{projectURL .Project}}/usage">{{template "storage-size" .Storage}}</a>{{else}}<span class="project-size" data-storage="{{projectURL .Project}}/usage">{{template "storage-size" .Storage}}</span>{{end}}
     {{if .Version.ID}}<a class="button secondary" href="{{historyURL .Project .Branch .Version.ID}}">{{template "history-icon"}}History</a>{{end}}
     <details class="clone-picker" data-menu><summary class="button">{{template "terminal-icon"}}Clone<span class="caret" aria-hidden="true">▾</span></summary>
       <div class="menu clone-menu">
-        <label for="clone-command">Clone {{if .Branch}}{{.Branch}}{{else}}main{{end}}</label>
-        <div class="copy-row"><input id="clone-command" readonly spellcheck="false" value="lode clone{{if and .Branch (ne .Branch "main")}} --branch {{.Branch}}{{end}} {{.Origin}}{{projectURL .Project}}"><button class="secondary" type="button" data-copy="clone-command">{{template "copy-icon"}}<span aria-live="polite">Copy</span></button></div>
-        {{if not .Branch}}<p class="hint muted">Clones the latest main, not this historical version.</p>{{end}}
+        <label for="clone-command">Clone {{.LatestBranch}}</label>
+        <div class="copy-row"><input id="clone-command" readonly spellcheck="false" value="lode clone{{if ne .LatestBranch "main"}} --branch {{.LatestBranch}}{{end}} {{.Origin}}{{projectURL .Project}}"><button class="secondary" type="button" data-copy="clone-command">{{template "copy-icon"}}<span aria-live="polite">Copy</span></button></div>
+        {{if not .Branch}}<p class="hint muted">Clones the latest {{.LatestBranch}}, not this saved version.</p>{{end}}
         <p class="hint muted">Sign in first: <code>lode auth login {{.Origin}}{{projectURL .Project}}</code></p>
       </div>
     </details>
@@ -100,10 +100,10 @@
 </div>{{else if .Text}}<pre class="text-preview panel">{{.Text}}</pre>{{else}}<div class="panel empty">No inline preview.</div>{{end}}
 {{else}}
 <div class="panel files">
-  {{if .Path}}<a class="file-row" href="{{tree .Project .Version.ID (parent .Path) ""}}">{{template "folder"}}<span>..</span></a>{{end}}
-  {{range .Entries}}<a class="file-row" href="{{tree $.Project $.Version.ID .Path ""}}">{{if eq .Kind "directory"}}{{template "folder"}}{{else}}{{template "file"}}{{end}}<span>{{base .Path}}</span><span class="muted">{{if eq .Kind "file"}}{{size .Size}}{{end}}</span></a>{{else}}<p class="empty">Empty directory.</p>{{end}}
+  {{if .Path}}<a class="file-row" href="{{browse . (parent .Path) ""}}">{{template "folder"}}<span>..</span></a>{{end}}
+  {{range .Entries}}<a class="file-row" href="{{browse $ .Path ""}}">{{if eq .Kind "directory"}}{{template "folder"}}{{else}}{{template "file"}}{{end}}<span>{{base .Path}}</span><span class="muted">{{if eq .Kind "file"}}{{size .Size}}{{end}}</span></a>{{else}}<p class="empty">Empty directory.</p>{{end}}
 </div>
-{{if .Next}}<div class="pagination"><a class="button secondary" href="{{tree .Project .Version.ID .Path .Next}}">Next files →</a></div>{{end}}
+{{if .Next}}<div class="pagination"><a class="button secondary" href="{{browse . .Path .Next}}">Next files →</a></div>{{end}}
 {{if .Markdown}}<section class="readme"><h2>README.md</h2><article class="markdown panel">{{.Markdown}}</article></section>{{end}}
 {{end}}
 {{else}}
