@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -139,15 +138,13 @@ func authLogin(ctx context.Context, origin, project string, state workspace.Stat
 	token := os.Getenv("LODE_TOKEN")
 	if token == "" {
 		if term.IsTerminal(int(os.Stdin.Fd())) {
-			fmt.Fprint(out, "Access token: ")
-			b, err := term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Fprintln(out)
+			values, err := promptSecrets(ctx, "Access token: ")
 			if err != nil {
 				return err
 			}
-			token = string(b)
+			token = values[0]
 		} else {
-			b, err := bufio.NewReader(io.LimitReader(os.Stdin, 513)).ReadString('\n')
+			b, err := readInputLine(ctx, os.Stdin, 513)
 			if err != nil && !errors.Is(err, io.EOF) {
 				return err
 			}

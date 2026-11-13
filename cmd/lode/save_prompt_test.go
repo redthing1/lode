@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSaveMessagePrompt(t *testing.T) {
@@ -37,5 +38,30 @@ func TestSaveMessagePromptCancellation(t *testing.T) {
 	cancel()
 	if _, err := promptSaveMessage(ctx, in, io.Discard); !errors.Is(err, context.Canceled) {
 		t.Fatalf("prompt ignored cancellation: %v", err)
+	}
+}
+
+func TestInputLineCancellationAfterPartialInput(t *testing.T) {
+	in, writer := io.Pipe()
+	defer in.Close()
+	defer writer.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := readInputLine(ctx, in, 513)
+		done <- err
+	}()
+	if _, err := io.WriteString(writer, "partial input"); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("blocked input ignored cancellation: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked input did not return")
 	}
 }

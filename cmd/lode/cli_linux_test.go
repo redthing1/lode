@@ -176,6 +176,14 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 	t.Setenv("LODE_TOKEN", "")
 	// Exercise the actual interactive path, including terminal detection.
 	if script, err := exec.LookPath("script"); err == nil {
+		stdout, terminal, err := terminalCommand(t, ctx, filepath.Join(bin, "lode"), []string{"auth", "login", origin}, [][2]string{{"Access token: ", "hidden-token\x03"}})
+		if err == nil || stdout != "" || strings.Contains(terminal, "hidden-token") || !strings.Contains(terminal, "input cancelled") {
+			t.Fatalf("token prompt cancellation: %v\nstdout: %s\nterminal: %s", err, stdout, terminal)
+		}
+		stdout, terminal, err = terminalCommand(t, ctx, filepath.Join(bin, "lode"), []string{"auth", "login", origin}, [][2]string{{"Access token: ", token + "\r"}})
+		if err != nil || !strings.Contains(stdout, "as alice") || strings.Contains(stdout, "Access token:") || strings.Contains(terminal, token) {
+			t.Fatalf("hidden token login: %v\nstdout: %s\nterminal: %s", err, stdout, terminal)
+		}
 		if err := os.WriteFile(filepath.Join(first, "prompt-test"), []byte("interactive"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -290,7 +298,21 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 	}
 	command("-C", first, "save", "-m", "independent edit")
 	command("-C", second, "update")
-	command("-C", second, "select", "--include", "assets", "--include", "references")
+	if err := os.MkdirAll(filepath.Join(second, "references"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "references", "keep"), []byte("unselected local reference"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	selectionConflict := exec.CommandContext(ctx, filepath.Join(bin, "lode"), "-C", second, "select", "--include", "assets", "--include", "references")
+	if output, err := selectionConflict.CombinedOutput(); err == nil || !bytes.Contains(output, []byte("same selection")) {
+		t.Fatalf("selection conflict guidance: %v\n%s", err, output)
+	}
+	b, err = os.ReadFile(filepath.Join(second, "references", "keep"))
+	if err != nil || string(b) != "unselected local reference" {
+		t.Fatalf("selection conflict overwrote local contents: %q %v", b, err)
+	}
+	command("-C", second, "select", "--include", "assets", "--include", "references", "--incoming", "references/keep")
 	b, err = os.ReadFile(filepath.Join(second, "references", "keep"))
 	if err != nil || string(b) != "local reference edit" {
 		t.Fatalf("loaded reference: %q %v", b, err)
@@ -484,6 +506,22 @@ func TestInstalledCLISelectedWorkflow(t *testing.T) {
 	}
 	if err := store.Close(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := exec.LookPath("script"); err == nil {
+		for _, steps := range [][][2]string{
+			{{"New password: ", "hidden-password\x03"}},
+			{{"New password: ", "hidden-password\r"}, {"Confirm password: ", "\x03"}},
+		} {
+			stdout, terminal, err := terminalCommand(t, ctx, filepath.Join(bin, "lode"), []string{"recover-user", dir, "alice"}, steps)
+			if err == nil || stdout != "" || strings.Contains(terminal, "hidden-password") || !strings.Contains(terminal, "input cancelled") {
+				t.Fatalf("password prompt cancellation: %v\nstdout: %s\nterminal: %s", err, stdout, terminal)
+			}
+		}
+		password := "interactive recovery password"
+		stdout, terminal, err := terminalCommand(t, ctx, filepath.Join(bin, "lode"), []string{"recover-user", dir, "alice"}, [][2]string{{"New password: ", password + "\r" + password + "\r"}})
+		if err != nil || !strings.Contains(stdout, "Account recovered") || strings.Contains(stdout, "password:") || strings.Contains(terminal, password) {
+			t.Fatalf("hidden password recovery: %v\nstdout: %s\nterminal: %s", err, stdout, terminal)
+		}
 	}
 	operatorPassword := "operator recovery password"
 	recoverCommand := exec.CommandContext(ctx, filepath.Join(bin, "lode"), "recover-user", dir, "alice")

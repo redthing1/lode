@@ -19,6 +19,11 @@ func historyCommand(ctx context.Context, command string, args []string, director
 		usage = "Usage: lode " + command + " [create [--from reference] <name> | delete <name>]"
 		if len(args) > 0 && (args[0] == "create" || args[0] == "delete") {
 			action, args = args[0], args[1:]
+			usage = "Usage: lode " + command + " " + action
+			if action == "create" {
+				usage += " [--from reference]"
+			}
+			usage += " <name>"
 		}
 	} else if command == "restore" {
 		usage = "Usage: lode restore <reference> [path ...]"

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -71,7 +70,7 @@ func serverCommand(ctx context.Context, command string, args []string, directory
 	}
 	defer store.Close(context.Background())
 	if command == "recover-user" {
-		password, err := recoveryPassword(out)
+		password, err := recoveryPassword(ctx)
 		if err != nil {
 			return err
 		}
@@ -117,28 +116,20 @@ func serverCommand(ctx context.Context, command string, args []string, directory
 	}
 }
 
-func recoveryPassword(out io.Writer) (string, error) {
+func recoveryPassword(ctx context.Context) (string, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		line, err := bufio.NewReader(io.LimitReader(os.Stdin, 75)).ReadString('\n')
+		line, err := readInputLine(ctx, os.Stdin, 75)
 		if err != nil && !errors.Is(err, io.EOF) {
 			return "", err
 		}
 		return strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"), nil
 	}
-	fmt.Fprint(out, "New password: ")
-	password, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Fprintln(out)
+	values, err := promptSecrets(ctx, "New password: ", "Confirm password: ")
 	if err != nil {
 		return "", err
 	}
-	fmt.Fprint(out, "Confirm password: ")
-	confirmation, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Fprintln(out)
-	if err != nil {
-		return "", err
-	}
-	if string(password) != string(confirmation) {
+	if values[0] != values[1] {
 		return "", errors.New("passwords do not match")
 	}
-	return string(password), nil
+	return values[0], nil
 }

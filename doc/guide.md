@@ -208,7 +208,7 @@ lode cleanup
 lode collect
 ```
 
-The defaults keep 20 versions per branch and 90 days of unprotected history metadata. Branch tips and tagged versions remain protected. A cleanup approval lasts one hour and is refused if relevant project state changes; preview again in that case.
+By default, cleanup keeps contents for each branch's latest 20 versions and for tagged versions. It keeps unprotected history metadata for 90 days. Nothing is pruned until cleanup is applied; collection reclaims unused storage separately. A cleanup approval lasts one hour and is refused if relevant project state changes; preview again in that case.
 
 Before applying cleanup:
 

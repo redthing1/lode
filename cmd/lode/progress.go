@@ -103,8 +103,16 @@ func (d *progressDisplay) draw() {
 		current = strings.TrimSuffix(current, " "+unit)
 		suffix = fmt.Sprintf(" · %s/%s", current, total)
 	}
-	suffix += " · " + time.Since(d.started).Truncate(time.Second).String()
 	budget := max(0, d.width()-4)
+	elapsed := " · " + time.Since(d.started).Truncate(time.Second).String()
+	if len(line+suffix+elapsed) <= budget {
+		suffix += elapsed
+	} else if len(line+suffix) > budget {
+		suffix = elapsed
+		if len(line+suffix) > budget {
+			suffix = ""
+		}
+	}
 	if room := budget - len(line) - len(suffix) - 1; e.Path != "" && room >= 8 {
 		line += " " + clipProgress(e.Path, room)
 	}

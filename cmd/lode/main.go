@@ -68,8 +68,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	ctx = context.WithValue(ctx, authUserKey{}, *user)
 	args = global.Args()
 	if len(args) == 0 || len(args) == 1 && args[0] == "help" {
-		_, err := io.WriteString(out, usage)
-		return err
+		global.Usage()
+		return nil
 	}
 	if args[0] == "help" {
 		args = append(args[1:], "--help")
@@ -78,7 +78,11 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	defer finish()
 	switch args[0] {
 	case "version":
-		if len(args) != 1 {
+		f := flags("version", "Usage: lode version", out)
+		if err := f.Parse(args[1:]); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
 			return errors.New("usage: lode version")
 		}
 		fmt.Fprintln(out, "Lode", version.Current)

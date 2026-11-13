@@ -12,7 +12,11 @@ import (
 )
 
 func retentionCommand(ctx context.Context, command string, args []string, directory string, out io.Writer) error {
-	f := flags(command, "Usage: lode "+command+" [options]", out)
+	usage := "Usage: lode " + command
+	if command != "collect" {
+		usage += " [options]"
+	}
+	f := flags(command, usage, out)
 	var keep, days int
 	var token string
 	if command == "retention" {
@@ -71,7 +75,7 @@ func retentionCommand(ctx context.Context, command string, args []string, direct
 				return err
 			}
 		}
-		fmt.Fprintf(out, "Keep %d versions per branch and %d days of history metadata. Tags remain protected.\n", policy.Versions, policy.HistoryDays)
+		fmt.Fprintf(out, "Contents: %d versions per branch; history: %d days. Tags remain protected.\n", policy.Versions, policy.HistoryDays)
 		if changed {
 			fmt.Fprintln(out, "Policy saved; run lode cleanup to review its consequences.")
 		}
@@ -81,11 +85,12 @@ func retentionCommand(ctx context.Context, command string, args []string, direct
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "%d versions keep contents; %d lose contents; %d history records are removed.\n", p.Retained, p.Expire, p.Forget)
 	if token != "" {
+		fmt.Fprintf(out, "Contents: %d kept, %d expired; history: %d removed.\n", p.Retained, p.Expire, p.Forget)
 		fmt.Fprintln(out, "Cleanup applied; run lode collect to reclaim unreferenced storage.")
 		return nil
 	}
+	fmt.Fprintf(out, "Contents: %d kept, %d to expire; history: %d to remove.\n", p.Retained, p.Expire, p.Forget)
 	for _, group := range []struct {
 		label    string
 		versions []model.Version
@@ -98,7 +103,10 @@ func retentionCommand(ctx context.Context, command string, args []string, direct
 			fmt.Fprintf(out, "%s: showing %d of %d versions.\n", group.label, len(group.versions), group.total)
 		}
 	}
-	fmt.Fprintln(out, "Removed history can prevent later automatic merges. Local files are unchanged.")
+	if p.Forget > 0 {
+		fmt.Fprintln(out, "Removed history can prevent later automatic merges.")
+	}
+	fmt.Fprintln(out, "Local files are unchanged.")
 	fmt.Fprintf(out, "Apply within one hour: lode cleanup --apply %s\n", p.Token)
 	return nil
 }

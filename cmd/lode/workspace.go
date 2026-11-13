@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -103,6 +102,8 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 		usage += " [options] <branch-or-version>"
 	} else if command == "save" {
 		usage += " [-m message]\nPrompt for an optional message in an interactive terminal."
+	} else if command == "update" || command == "select" || command == "log" {
+		usage += " [options]"
 	}
 	f := flags(command, usage, out)
 	message := ""
@@ -110,8 +111,14 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 	var local, incoming, include, exclude paths
 	var none, full bool
 	if command == "update" || command == "select" || command == "merge" {
-		f.Var(&local, "local", "keep local contents at conflicting `path` (repeatable)")
-		f.Var(&incoming, "incoming", "use incoming contents at conflicting `path` (repeatable)")
+		localHelp := "keep local contents at conflicting `path` (repeatable)"
+		incomingHelp := "use incoming contents at conflicting `path` (repeatable)"
+		if command == "merge" {
+			localHelp = "keep target branch contents at conflicting `path` (repeatable)"
+			incomingHelp = "use source version contents at conflicting `path` (repeatable)"
+		}
+		f.Var(&local, "local", localHelp)
+		f.Var(&incoming, "incoming", incomingHelp)
 	}
 	if command == "select" {
 		f.Var(&include, "include", "include `path` and descendants (repeatable)")
@@ -258,6 +265,9 @@ func workspaceCommand(ctx context.Context, command string, args []string, direct
 			for _, c := range conflicts.Conflicts {
 				fmt.Fprintf(out, "C  %s (local: %s, incoming: %s)\n", c.Path, c.Local, c.Incoming)
 			}
+			if command == "select" {
+				return errors.New("retry lode select with the same selection and --local <path> or --incoming <path>")
+			}
 			return fmt.Errorf("resolve with lode %s --local <path> or --incoming <path>; repeat flags for multiple conflicts", command)
 		}
 		if err != nil {
@@ -335,35 +345,21 @@ func promptSaveMessage(ctx context.Context, in io.Reader, out io.Writer) (string
 	if _, err := fmt.Fprint(out, "Message (optional): "); err != nil {
 		return "", err
 	}
-	type result struct {
-		message string
-		err     error
+	line, err := readInputLine(ctx, in, 4098)
+	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+	if len(line) > 4096 {
+		err = errors.New("message exceeds 4096 bytes")
+	} else if errors.Is(err, io.EOF) {
+		if line == "" {
+			err = errors.New("save cancelled")
+		} else {
+			err = nil
+		}
 	}
-	done := make(chan result, 1)
-	go func() {
-		line, err := bufio.NewReader(io.LimitReader(in, 4098)).ReadString('\n')
-		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-		if len(line) > 4096 {
-			err = errors.New("message exceeds 4096 bytes")
-		} else if errors.Is(err, io.EOF) {
-			if line == "" {
-				err = errors.New("save cancelled")
-			} else {
-				err = nil
-			}
-		}
-		done <- result{line, err}
-	}()
-	select {
-	case r := <-done:
-		if r.err != nil {
-			fmt.Fprintln(out)
-		}
-		return r.message, r.err
-	case <-ctx.Done():
+	if err != nil {
 		fmt.Fprintln(out)
-		return "", ctx.Err()
 	}
+	return line, err
 }
 
 func projects(ctx context.Context, args []string, out io.Writer) error {
