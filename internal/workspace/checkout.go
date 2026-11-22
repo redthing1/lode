@@ -29,6 +29,11 @@ func Clone(ctx context.Context, projectURL string, c *remote.Client, directory s
 	if err != nil {
 		return nil, err
 	}
+	for _, entry := range entries {
+		if err := checkWorkspacePath(entry.Path); err != nil {
+			return nil, err
+		}
+	}
 	if err := os.Mkdir(directory, 0755); err != nil && !errors.Is(err, os.ErrExist) {
 		return nil, err
 	}
@@ -43,14 +48,23 @@ func Clone(ctx context.Context, projectURL string, c *remote.Client, directory s
 	if err != nil {
 		return nil, err
 	}
+	var before []model.Entry
 	if len(existing) != 0 {
-		return nil, errors.New("clone destination must be empty")
+		if len(target.Scope) == 0 {
+			return nil, errors.New("clone destination must be empty; use --scope to clone selected paths into an existing folder")
+		}
+		before, err = cloneDirectories(ctx, directory, entries)
+		if err != nil {
+			return nil, err
+		}
 	}
 	initial := target
 	initial.Version = ""
-	initial.Selection = model.Selection{}
+	if len(initial.Scope) == 0 {
+		initial.Selection = model.Selection{}
+	}
 	initial.Baseline = nil
-	changes, err := model.PlanChanges(nil, entries)
+	changes, err := model.PlanChanges(before, entries)
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +78,37 @@ func Clone(ctx context.Context, projectURL string, c *remote.Client, directory s
 		return nil, fmt.Errorf("clone in %q is unfinished; run lode resume or lode cancel in that directory: %w", directory, err)
 	}
 	return w, nil
+}
+
+// Materialized entries include parents before their children. Pre-existing
+// directories are kept out of the plan so cancellation leaves them in place.
+func cloneDirectories(ctx context.Context, directory string, entries []model.Entry) ([]model.Entry, error) {
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	if _, err := root.Lstat(".lode"); !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.Join(errors.New("workspace metadata already exists; run lode status"), err)
+	}
+	var before []model.Entry
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		info, err := root.Lstat(filepath.FromSlash(entry.Path))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if entry.Kind != model.Directory || !info.IsDir() {
+			return nil, fmt.Errorf("cannot clone over existing path %q; move it aside and retry", entry.Path)
+		}
+		before = append(before, entry)
+	}
+	return before, nil
 }
 
 type ConflictsError struct{ Conflicts []model.Conflict }
@@ -131,7 +176,8 @@ func (w *Workspace) update(ctx context.Context, c *remote.Client, choices map[st
 // branch baseline. Dirty paths cannot be unloaded; newly loaded collisions use
 // the same explicit whole-entry choices as update.
 func (w *Workspace) Select(ctx context.Context, token string, selection model.Selection, choices map[string]model.Side) error {
-	if err := selection.Validate(); err != nil {
+	selection, err := withinScope(selection, w.state.Scope)
+	if err != nil {
 		return err
 	}
 	if err := w.ready(); err != nil {

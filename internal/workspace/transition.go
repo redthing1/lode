@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"syscall"
 
@@ -63,7 +64,7 @@ func (w *Workspace) beginTransition(ctx context.Context, c *remote.Client, targe
 		return err
 	}
 	if len(changes) == 0 {
-		if err := w.writeJSON("state.json", target); err != nil {
+		if err := w.writeState(target); err != nil {
 			return err
 		}
 		w.state = target
@@ -102,6 +103,9 @@ func (w *Workspace) writeTransition(plan transition) error {
 func (w *Workspace) keepUnselectedDirectories(changes []model.Change) ([]model.Change, error) {
 	removed, created := map[string]bool{}, map[string]bool{}
 	for _, c := range changes {
+		if err := checkWorkspacePath(c.Before.Path); err != nil {
+			return nil, err
+		}
 		if c.After.Kind == model.Absent {
 			removed[c.Before.Path] = true
 		} else {
@@ -111,6 +115,10 @@ func (w *Workspace) keepUnselectedDirectories(changes []model.Change) ([]model.C
 	var result []model.Change
 	for _, c := range changes {
 		if c.Before.Kind == model.Directory && c.After.Kind == model.Absent {
+			if scope := w.state.Scope; len(scope) != 0 && !scope.Includes(c.Before.Path) {
+				delete(removed, c.Before.Path)
+				continue
+			}
 			f, err := w.root.Open(filepath.FromSlash(c.Before.Path))
 			if err != nil {
 				return nil, err
@@ -153,7 +161,8 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 	if err := plan.Target.validate(); err != nil {
 		return err
 	}
-	if plan.ID == "" || (stateDigest(w.state) != plan.Base && stateDigest(w.state) != stateDigest(plan.Target)) {
+	if plan.ID == "" || !slices.Equal(w.state.Scope, plan.Target.Scope) ||
+		(stateDigest(w.state) != plan.Base && stateDigest(w.state) != stateDigest(plan.Target)) {
 		return errors.New("operation does not match the workspace baseline")
 	}
 	var progress transitionProgress
@@ -173,6 +182,15 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 		}
 		if err := model.ValidateChanges([]model.Entry{a.After}); err != nil {
 			return err
+		}
+		if progress.Reverse || progress.Cursor < len(plan.Changes) {
+			if err := checkWorkspacePath(a.Before.Path); err != nil {
+				return err
+			}
+		}
+		if scope := w.state.Scope; len(scope) != 0 && !scope.Includes(a.Before.Path) &&
+			!(scope.Descends(a.Before.Path) && a.Before.Kind == model.Absent && a.After.Kind == model.Directory) {
+			return fmt.Errorf("workspace action is outside the scope at %q", a.Before.Path)
 		}
 		if a.Before.Kind == model.File || a.After.Kind == model.File {
 			files = append(files, a.After.Path)
@@ -221,7 +239,7 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 	}
 	activity.Report(ctx, activity.Event{Phase: "Finishing workspace"})
 	if !progress.Reverse {
-		if err := w.writeJSON("state.json", plan.Target); err != nil {
+		if err := w.writeState(plan.Target); err != nil {
 			return err
 		}
 		w.state = plan.Target

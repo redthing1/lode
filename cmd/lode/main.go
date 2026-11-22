@@ -34,6 +34,7 @@ const usage = `Usage: lode [-C directory] [--user username] [--no-progress] <com
   save          Publish local changes
   update        Reconcile the latest shared version with local work
   select        Show or change the paths present locally
+  scope         Show or set the workspace's path boundary
   branch        List, create or delete shared branches
   tag           Name and protect a saved version
   retention     Show or change the project's cleanup policy
@@ -95,6 +96,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return remoteCommand(ctx, args[1:], *directory, out)
 	case "attach", "clone":
 		return connectWorkspace(ctx, args[0], args[1:], *directory, out)
+	case "scope":
+		return scopeCommand(args[1:], *directory, out)
 	case "status", "save", "update", "select", "merge", "resume", "cancel", "log":
 		return workspaceCommand(ctx, args[0], args[1:], *directory, out)
 	case "branch", "tag", "switch", "restore":

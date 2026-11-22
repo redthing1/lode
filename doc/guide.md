@@ -4,7 +4,7 @@ A **project** holds complete saved versions on the server. A **workspace** is yo
 
 Editing and `status` work offline. Saving and downloading require the server.
 
-[Connect](#connect) · [Daily work](#daily-work) · [Ignore files](#ignore-files) · [Selected files](#selected-files) · [Branches](#branches-and-versions) · [Storage](#keep-versions-and-reclaim-space) · [Sharing](#sharing-and-access) · [Security](#account-security) · [Recovery](#interrupted-work)
+[Connect](#connect) · [Git](#use-with-git) · [Daily work](#daily-work) · [Ignore files](#ignore-files) · [Selected files](#selected-files) · [Branches](#branches-and-versions) · [Storage](#keep-versions-and-reclaim-space) · [Sharing](#sharing-and-access) · [Security](#account-security) · [Recovery](#interrupted-work)
 
 ## Connect
 
@@ -26,7 +26,7 @@ Connect an existing folder to an empty project with `attach`. The local folder m
 lode attach https://lode.example/alice/example ./work
 ```
 
-To download a saved project into an empty or nonexistent folder, use `clone`:
+Use `clone` to download a project into an empty or new folder. For a populated folder, [set a scope](#use-with-git).
 
 ```sh
 lode clone https://lode.example/alice/example ./work
@@ -35,6 +35,22 @@ lode clone https://lode.example/alice/example ./work
 The browser's **Clone** button copies a command for the selected branch. Workspace metadata lives in `.lode/`; leave that directory in place.
 
 Run commands inside the workspace, or use `lode -C ./work status`. For command help, use `lode help clone` or `lode clone --help`. Put options before positional arguments.
+
+### Use with Git
+
+For a dedicated asset folder, add `/assets/` to `.gitignore` and clone the Lode project into `assets/`.
+
+To share the root, add `/.lode/` and the asset paths to `.gitignore`. Give Lode a **scope** by naming the files or directories it can work on.
+
+```sh
+lode clone --scope art --scope captures <project-url> .
+```
+
+Clone reuses existing directories and checks for collisions before installing files. Use the same options with `attach` to start an empty project from local files.
+
+In an existing workspace, `lode scope` lists the paths. `lode scope art captures` sets them if they cover the saved local files.
+
+If Git already tracks an asset, save it in Lode before removing it from Git's index. Git can overwrite the file when you switch to a branch that still tracks it.
 
 ### Change the server address
 
@@ -89,7 +105,7 @@ Repeat these options for additional conflicts. Lode treats binary files as whole
 
 ## Ignore files
 
-Lode ignores new `.DS_Store`, `Thumbs.db`, and `desktop.ini` files at any depth. Other dotfiles and application files are included normally.
+Lode skips local `.git` files and directories. It ignores new `.DS_Store`, `Thumbs.db`, and `desktop.ini` files at any depth. To download a saved version containing Git metadata, scope the workspace to paths outside it.
 
 Put project rules in `.lodeignore` at the workspace root:
 
@@ -127,7 +143,7 @@ lode select --include assets --include references
 lode select --include assets
 ```
 
-Changing selection uses the workspace's current version. Clean files outside the new selection are unloaded. Lode refuses to unload changed files and leaves unselected local files alone. Use `lode select --none` to unload all clean selected paths.
+Changing selection uses the workspace's current version. Clean files outside the new selection are unloaded. Lode refuses to unload changed files and leaves unselected local files alone. Use `lode select --include .` to load everything within scope or `lode select --none` to unload all clean selected paths.
 
 Loading over different local contents requires `--local` or `--incoming`, alongside the selection options. Deleting a partially selected directory removes its selected contents while preserving unseen descendants.
 

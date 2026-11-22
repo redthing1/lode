@@ -36,6 +36,13 @@ func (w *Workspace) observe(ctx context.Context) ([]model.Entry, error) {
 }
 
 func (w *Workspace) observeSelection(ctx context.Context, selection model.Selection, incoming ...model.Entry) ([]model.Entry, error) {
+	for _, inventory := range [][]model.Entry{w.state.Baseline, incoming} {
+		for _, entry := range inventory {
+			if gitMetadata(entry.Path) {
+				return nil, fmt.Errorf("Git metadata path %q is protected", entry.Path)
+			}
+		}
+	}
 	ignored, err := w.ignoreNew(incoming)
 	if err != nil {
 		return nil, err
@@ -54,8 +61,11 @@ func (w *Workspace) observeSelection(ctx context.Context, selection model.Select
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if name == ".lode" {
-			return fs.SkipDir
+		if name == ".lode" || gitMetadata(path.Base(name)) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if name == "." {
 			if !selection.Descends("") {
@@ -76,8 +86,8 @@ func (w *Workspace) observeSelection(ctx context.Context, selection model.Select
 			}
 			return nil
 		}
-		if !model.ValidPath(name) || !filepath.IsLocal(filepath.FromSlash(name)) {
-			return fmt.Errorf("unsupported local path %q", name)
+		if err := checkWorkspacePath(name); err != nil {
+			return err
 		}
 		info, err := d.Info()
 		if err != nil {
@@ -165,8 +175,8 @@ func (w *Workspace) Status(ctx context.Context) ([]model.Entry, error) {
 }
 
 func (w *Workspace) checkParents(name string) error {
-	if !model.ValidPath(name) || !filepath.IsLocal(filepath.FromSlash(name)) {
-		return fmt.Errorf("unsupported local path %q", name)
+	if err := checkWorkspacePath(name); err != nil {
+		return err
 	}
 	for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
 		info, err := w.root.Lstat(filepath.FromSlash(parent))

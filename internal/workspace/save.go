@@ -79,7 +79,7 @@ func (w *Workspace) acceptSave(pending pendingSave, v model.Version) error {
 		if err := next.validate(); err != nil {
 			return err
 		}
-		if err := w.writeJSON("state.json", next); err != nil {
+		if err := w.writeState(next); err != nil {
 			return fmt.Errorf("version %s accepted; local state needs recovery: %w", v.ID, err)
 		}
 		w.state = next
@@ -134,6 +134,17 @@ func (w *Workspace) Resume(ctx context.Context, token string) error {
 }
 
 func (w *Workspace) publish(ctx context.Context, c *remote.Client, pending pendingSave) (model.Version, error) {
+	// Older clients could leave a save with Git paths pending. Record an
+	// accepted result without resending the request or reading those files.
+	for _, change := range pending.Request.Changes {
+		if gitMetadata(change.Path) || gitMetadata(pending.Request.Reuse[change.Path]) {
+			v, err := c.Resolve(ctx, w.state.Owner, w.state.Project, pending.Request)
+			if err != nil {
+				return model.Version{}, fmt.Errorf("pending save includes Git metadata; run lode cancel to settle it: %w", err)
+			}
+			return v, w.acceptSave(pending, v)
+		}
+	}
 	v, err := c.Save(ctx, w.state.Owner, w.state.Project, pending.Request, w.state.Baseline, func(e model.Entry) (io.ReadCloser, error) { return w.openSource(e) })
 	if err != nil && pending.Request.Merge != "" {
 		var failure *remote.Error

@@ -13,7 +13,7 @@ import (
 func TestHelpRoutesWithoutOpeningAWorkspace(t *testing.T) {
 	commands := []string{
 		"auth", "auth login", "auth status", "auth logout", "projects", "attach", "clone", "remote",
-		"status", "save", "update", "select", "branch", "branch create", "branch delete",
+		"status", "save", "update", "select", "scope", "branch", "branch create", "branch delete",
 		"tag", "tag create", "tag delete", "retention", "cleanup", "collect", "switch", "merge",
 		"restore", "resume", "cancel", "log", "version",
 	}

@@ -39,7 +39,7 @@ Branches point to immutable versions. Tags protect individual versions from expi
 
 Update compares three states: the saved baseline, local files, and the incoming version. Independent changes combine; conflicts require explicit whole-file or whole-directory choices. Unloading selected paths refuses to discard changed files or unselected children.
 
-Workspace ignore rules filter new local paths during observation. Baseline and incoming paths stay visible so ignores cannot hide tracked changes or overwrite local data. Selection remains independent of ignores.
+Workspace scope limits the client's inventory requests and save changes. Ignore rules filter new local paths during observation. Baseline and incoming paths stay visible so ignores cannot hide tracked changes or overwrite local data. Selection remains independent of ignores.
 
 Clone, update, selection changes, switch, and restore share a durable plan and progress record. Downloads are verified before installation. Original files and replacements remain in staging until commitment; unexpected local paths stop the operation.
 

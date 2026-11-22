@@ -38,6 +38,7 @@ Project logins select an account for that project; server logins set the fallbac
 - Review `status` before saving. If the branch advanced, update, review, and save again.
 - Stop applications writing to the workspace during saves and file-changing operations.
 - Clone with `--include <path>` and `--exclude <path>` to select project-relative paths. `lode select --include <path>` replaces the selection and may unload clean files.
+- For a workspace that shares a folder with Git, follow the [user guide](https://github.com/redthing1/lode/blob/main/doc/guide.md#use-with-git).
 - `.lodeignore` and `.lode/ignore` filter new local paths, not tracked changes. Lode does not read `.gitignore`.
 - Merge combines complete server versions, including paths absent from the workspace, then updates selected files.
 

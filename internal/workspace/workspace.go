@@ -31,6 +31,7 @@ type State struct {
 	Version    string          `json:"version"`
 	Selection  model.Selection `json:"selection"`
 	Baseline   []model.Entry   `json:"baseline"`
+	Scope      model.Selection `json:"scope,omitempty"`
 }
 
 type Workspace struct {
@@ -52,6 +53,16 @@ func (s State) validate() error {
 	}
 	if err := s.Selection.Validate(); err != nil {
 		return err
+	}
+	if err := validateScope(s.Scope); err != nil {
+		return err
+	}
+	if len(s.Scope) != 0 {
+		for _, rule := range s.Selection {
+			if rule.Include && !s.Scope.Includes(rule.Path) {
+				return fmt.Errorf("selection includes %q outside the workspace scope", rule.Path)
+			}
+		}
 	}
 	if err := model.ValidateInventory(s.Baseline); err != nil {
 		return err
@@ -97,7 +108,7 @@ func Open(directory string) (*Workspace, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := w.readJSON("state.json", &w.state); err != nil {
+	if err := w.readState(); err != nil {
 		w.Close()
 		return nil, err
 	}
@@ -185,7 +196,7 @@ func (w *Workspace) SetRemote(ctx context.Context, projectURL string, c *remote.
 	}
 	next := w.state
 	next.Server = target.Server
-	if err := w.writeJSON("state.json", next); err != nil {
+	if err := w.writeState(next); err != nil {
 		return err
 	}
 	w.state = next
@@ -195,6 +206,7 @@ func (w *Workspace) SetRemote(ctx context.Context, projectURL string, c *remote.
 type ConnectOptions struct {
 	Branch    string
 	Selection model.Selection
+	Scope     model.Selection
 }
 
 func connect(ctx context.Context, projectURL string, c *remote.Client, options ConnectOptions) (State, error) {
@@ -224,10 +236,14 @@ func connect(ctx context.Context, projectURL string, c *remote.Client, options C
 	if options.Selection == nil {
 		options.Selection = model.Selection{{Include: true}}
 	}
+	selection, err := withinScope(options.Selection, options.Scope)
+	if err != nil {
+		return State{}, err
+	}
 	if options.Branch == "" {
 		options.Branch = "main"
 	}
-	state := State{Server: u.String(), InstanceID: identity.Instance, Owner: p.Owner, Project: p.Name, ProjectID: p.ID, Branch: options.Branch, Selection: options.Selection}
+	state := State{Server: u.String(), InstanceID: identity.Instance, Owner: p.Owner, Project: p.Name, ProjectID: p.ID, Branch: options.Branch, Selection: selection, Scope: options.Scope}
 	if err := state.validate(); err != nil {
 		return State{}, err
 	}
@@ -257,7 +273,7 @@ func initialize(directory string, state State, plan *transition) (*Workspace, er
 		return nil, err
 	}
 	temporary := &Workspace{meta: meta}
-	err = temporary.writeJSON("state.json", state)
+	err = temporary.writeState(state)
 	if err == nil && plan != nil {
 		err = temporary.writeTransition(*plan)
 	}
@@ -298,9 +314,41 @@ func Attach(ctx context.Context, projectURL string, c *remote.Client, directory 
 		return nil, err
 	}
 	if head != "" {
-		return nil, errors.New("project already has versions; clone it into a new folder")
+		return nil, errors.New("project already has versions; use lode clone")
 	}
 	return initialize(directory, state, nil)
+}
+
+// Scoped state is wrapped so older clients reject it instead of ignoring the
+// scope. Ordinary state keeps the same encoding, including for pending plans.
+type workspaceState struct {
+	State
+	Scoped *State `json:"workspace,omitempty"`
+}
+
+func (w *Workspace) readState() error {
+	var stored workspaceState
+	if err := w.readJSON("state.json", &stored); err != nil {
+		return err
+	}
+	if stored.Scoped != nil && len(stored.Scoped.Scope) != 0 {
+		w.state = *stored.Scoped
+		return nil
+	}
+	if stored.Scoped != nil || len(stored.Scope) != 0 {
+		return errors.New("invalid scoped workspace state")
+	}
+	w.state = stored.State
+	return nil
+}
+
+func (w *Workspace) writeState(state State) error {
+	if len(state.Scope) == 0 {
+		return w.writeJSON("state.json", state)
+	}
+	return w.writeJSON("state.json", struct {
+		Workspace State `json:"workspace"`
+	}{Workspace: state})
 }
 
 func (w *Workspace) readJSON(name string, value any) error {

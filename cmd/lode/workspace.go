@@ -37,9 +37,10 @@ func (p *paths) Set(value string) error {
 
 func connectWorkspace(ctx context.Context, command string, args []string, directory string, out io.Writer) error {
 	f := flags(command, "Usage: lode "+command+" [options] <project-url> [directory]", out)
-	var include, exclude paths
-	f.Var(&include, "include", "include `path` and descendants (repeatable; default: all)")
+	var include, exclude, scope paths
+	f.Var(&include, "include", "include `path` and descendants (repeatable; default: all in scope)")
 	f.Var(&exclude, "exclude", "exclude `path` and descendants (repeatable)")
+	f.Var(&scope, "scope", "limit the workspace to `path` and descendants (repeatable)")
 	branch := f.String("branch", "main", "branch `name` to connect")
 	if err := f.Parse(args); err != nil {
 		return err
@@ -50,6 +51,13 @@ func connectWorkspace(ctx context.Context, command string, args []string, direct
 	selection, err := selectionOf(include, exclude)
 	if err != nil {
 		return err
+	}
+	options := workspace.ConnectOptions{Branch: *branch, Selection: selection}
+	if len(scope) != 0 {
+		options.Scope, err = selectionOf(scope, nil)
+		if err != nil {
+			return err
+		}
 	}
 	c, err := authenticated(ctx, f.Arg(0))
 	if err != nil {
@@ -69,9 +77,9 @@ func connectWorkspace(ctx context.Context, command string, args []string, direct
 	}
 	var w *workspace.Workspace
 	if command == "clone" {
-		w, err = workspace.Clone(ctx, f.Arg(0), c, target, workspace.ConnectOptions{Branch: *branch, Selection: selection})
+		w, err = workspace.Clone(ctx, f.Arg(0), c, target, options)
 	} else {
-		w, err = workspace.Attach(ctx, f.Arg(0), c, target, workspace.ConnectOptions{Branch: *branch, Selection: selection})
+		w, err = workspace.Attach(ctx, f.Arg(0), c, target, options)
 	}
 	if err != nil {
 		return err
@@ -94,6 +102,41 @@ func selectionOf(include, exclude paths) (model.Selection, error) {
 		selection = append(selection, model.Rule{Path: p})
 	}
 	return selection, selection.Validate()
+}
+
+func scopeCommand(args []string, directory string, out io.Writer) error {
+	f := flags("scope", "Usage: lode scope [path ...]\nShow the scope or replace it with the listed paths.", out)
+	if err := f.Parse(args); err != nil {
+		return err
+	}
+	var scope paths
+	for _, name := range f.Args() {
+		if err := scope.Set(name); err != nil {
+			return err
+		}
+	}
+	w, err := workspace.Open(directory)
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+	if len(scope) != 0 {
+		rules, err := selectionOf(scope, nil)
+		if err != nil {
+			return err
+		}
+		if err := w.SetScope(rules); err != nil {
+			return err
+		}
+	}
+	rules := w.State().Scope
+	if len(rules) == 0 {
+		fmt.Fprintln(out, ".")
+	}
+	for _, rule := range rules {
+		fmt.Fprintln(out, rule.Path)
+	}
+	return nil
 }
 
 func workspaceCommand(ctx context.Context, command string, args []string, directory string, out io.Writer) error {
