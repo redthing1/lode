@@ -88,10 +88,10 @@ func TestSetScopeKeepsFilesAndRejectsLegacyReader(t *testing.T) {
 	w := attach(t, f, dir)
 	save(t, f, w, "before scope")
 	writeFile(t, dir, "src/main.go", "source")
-	if err := w.SetScope(model.Selection{{Path: "src", Include: true}}); err == nil || !strings.Contains(err.Error(), "saved path") {
+	if err := w.SetScope(model.Selection{{Path: "art/other", Include: true}}); err == nil || !strings.Contains(err.Error(), `saved path "art/scene"`) {
 		t.Fatalf("excluded saved baseline: %v", err)
 	}
-	if err := w.SetScope(model.Selection{{Path: "art", Include: true}}); err != nil {
+	if err := w.SetScope(model.Selection{{Path: "art/scene", Include: true}}); err != nil {
 		t.Fatal(err)
 	}
 	// Released clients decode state at the top level and validate its identity.
@@ -107,7 +107,7 @@ func TestSetScopeKeepsFilesAndRejectsLegacyReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if changes, err := reopened.Status(ctx); err != nil || len(changes) != 0 || !reopened.State().Scope.Includes("art/scene") {
+	if changes, err := reopened.Status(ctx); err != nil || len(changes) != 0 || reopened.State().Scope.Includes("art") || !reopened.State().Scope.Includes("art/scene") {
 		t.Fatalf("scoped status after reopen: %v %v", changes, err)
 	}
 	if readFile(t, dir, "art/scene") != "saved" || readFile(t, dir, "src/main.go") != "source" {

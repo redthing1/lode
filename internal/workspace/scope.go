@@ -55,13 +55,15 @@ func (w *Workspace) SetScope(scope model.Selection) error {
 		if err := checkWorkspacePath(entry.Path); err != nil {
 			return err
 		}
-		if !scope.Includes(entry.Path) {
+		if !scope.Includes(entry.Path) && !(entry.Kind == model.Directory && scope.Descends(entry.Path)) {
 			return fmt.Errorf("scope would exclude saved path %q", entry.Path)
 		}
 	}
 	next := w.state
 	next.Scope = scope
 	next.Selection = next.Selection.Intersect(scope)
+	// A saved directory can become a structural parent of an in-scope path.
+	next.Baseline = model.Selected(next.Baseline, next.Selection)
 	if err := w.writeState(next); err != nil {
 		return err
 	}
