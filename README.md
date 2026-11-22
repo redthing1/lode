@@ -6,6 +6,8 @@ Lode is experimental. The client targets Linux, macOS, and Windows; the server r
 
 ## Install
 
+On Linux, download a [release](https://github.com/redthing1/lode/releases/latest), extract `lode`, and put it on your `PATH`.
+
 From a source checkout, install Go 1.26 or later, a C compiler, and librsync. See [build prerequisites](doc/build.md) for platform setup.
 
 Install the command, then add Go's binary installation directory to your `PATH` (`go env GOBIN`, or `bin` under `go env GOPATH` when unset):
