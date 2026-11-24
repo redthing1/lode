@@ -53,7 +53,7 @@ func Clone(ctx context.Context, projectURL string, c *remote.Client, directory s
 		if len(target.Scope) == 0 {
 			return nil, errors.New("clone destination must be empty; use --scope to clone selected paths into an existing folder")
 		}
-		before, err = cloneDirectories(ctx, directory, entries)
+		before, err = cloneExisting(ctx, directory, entries)
 		if err != nil {
 			return nil, err
 		}
@@ -68,6 +68,12 @@ func Clone(ctx context.Context, projectURL string, c *remote.Client, directory s
 	if err != nil {
 		return nil, err
 	}
+	// Equal file entries are read-only checks at the end of the durable plan.
+	for _, entry := range before {
+		if entry.Kind == model.File {
+			changes = append(changes, model.Change{Before: entry, After: entry})
+		}
+	}
 	plan := transition{ID: uuid.NewString(), Base: stateDigest(initial), Target: target, Source: target.Version, Changes: changes}
 	w, err := initialize(directory, initial, &plan)
 	if err != nil {
@@ -80,9 +86,9 @@ func Clone(ctx context.Context, projectURL string, c *remote.Client, directory s
 	return w, nil
 }
 
-// Materialized entries include parents before their children. Pre-existing
-// directories are kept out of the plan so cancellation leaves them in place.
-func cloneDirectories(ctx context.Context, directory string, entries []model.Entry) ([]model.Entry, error) {
+// Materialized entries include parents before their children, so each parent
+// is checked before inspecting paths beneath it.
+func cloneExisting(ctx context.Context, directory string, entries []model.Entry) ([]model.Entry, error) {
 	root, err := os.OpenRoot(directory)
 	if err != nil {
 		return nil, err
@@ -91,6 +97,7 @@ func cloneDirectories(ctx context.Context, directory string, entries []model.Ent
 	if _, err := root.Lstat(".lode"); !errors.Is(err, os.ErrNotExist) {
 		return nil, errors.Join(errors.New("workspace metadata already exists; run lode status"), err)
 	}
+	local := Workspace{root: root}
 	var before []model.Entry
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
@@ -103,7 +110,17 @@ func cloneDirectories(ctx context.Context, directory string, entries []model.Ent
 		if err != nil {
 			return nil, err
 		}
-		if entry.Kind != model.Directory || !info.IsDir() {
+		switch {
+		case entry.Kind == model.Directory && info.IsDir():
+		case entry.Kind == model.File && info.Mode().IsRegular():
+			matches, err := local.matchesFile(ctx, entry.Path, info, entry)
+			if err != nil {
+				return nil, err
+			}
+			if !matches {
+				return nil, fmt.Errorf("existing file %q differs from the saved version. Move it aside and retry", entry.Path)
+			}
+		default:
 			return nil, fmt.Errorf("cannot clone over existing path %q; move it aside and retry", entry.Path)
 		}
 		before = append(before, entry)

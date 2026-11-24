@@ -161,6 +161,15 @@ func (w *Workspace) observeFile(ctx context.Context, name string, observed fs.Fi
 	return model.Entry{Path: name, Kind: model.File, Size: n, SHA256: hex.EncodeToString(h.Sum(nil))}, nil
 }
 
+func (w *Workspace) matchesFile(ctx context.Context, name string, info fs.FileInfo, expected model.Entry) (bool, error) {
+	if info.Size() != expected.Size {
+		return false, nil
+	}
+	observed, err := w.observeFile(ctx, name, info)
+	observed.Path = expected.Path
+	return observed == expected, err
+}
+
 func (w *Workspace) Status(ctx context.Context) ([]model.Entry, error) {
 	if pending, err := w.pending("transition.json"); err != nil {
 		return nil, err

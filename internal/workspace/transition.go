@@ -169,13 +169,20 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 	if err := w.readJSON("progress.json", &progress); err != nil {
 		return err
 	}
-	if progress.ID != plan.ID || progress.Cursor < -1 || progress.Cursor > len(plan.Changes) || (!progress.Reverse && progress.Cursor < 0) || (progress.Reverse && progress.Cursor >= len(plan.Changes)) {
-		return errors.New("invalid workspace progress")
-	}
 	var files []string
-	for _, a := range plan.Changes {
-		if a.Before.Path != a.After.Path || !model.ValidPath(a.Before.Path) || a.Before == a.After {
+	end := len(plan.Changes)
+	firstCheck := end
+	for i, a := range plan.Changes {
+		if a.Before.Path != a.After.Path || !model.ValidPath(a.Before.Path) {
 			return errors.New("invalid workspace action")
+		}
+		if a.Before == a.After {
+			if a.Before.Kind != model.File {
+				return errors.New("invalid workspace file check")
+			}
+			firstCheck = min(firstCheck, i)
+		} else if i >= firstCheck {
+			return errors.New("workspace file checks must follow file changes")
 		}
 		if err := model.ValidateChanges([]model.Entry{a.Before}); err != nil {
 			return err
@@ -183,7 +190,7 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 		if err := model.ValidateChanges([]model.Entry{a.After}); err != nil {
 			return err
 		}
-		if progress.Reverse || progress.Cursor < len(plan.Changes) {
+		if progress.Reverse || progress.Cursor < end {
 			if err := checkWorkspacePath(a.Before.Path); err != nil {
 				return err
 			}
@@ -196,22 +203,30 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 			files = append(files, a.After.Path)
 		}
 	}
+	cursor := progress.Cursor
+	if progress.ID != plan.ID || cursor < -1 || cursor > end ||
+		(progress.Reverse && cursor >= firstCheck) || (!progress.Reverse && cursor < 0) ||
+		(cursor > firstCheck && cursor < end) {
+		return errors.New("invalid workspace progress")
+	}
 	ctx = activity.WithFiles(ctx, files)
 	// Reaching the end commits the operation. Cancellation after that point only
 	// completes the baseline write and cleanup, even if that write was interrupted.
-	if cancel && !progress.Reverse && progress.Cursor < len(plan.Changes) {
+	if cancel && !progress.Reverse && progress.Cursor < end {
 		progress.Reverse = true
+		// At the check step, the preceding change was the last write.
+		progress.Cursor = min(progress.Cursor, firstCheck-1)
 		if err := w.writeJSON("progress.json", progress); err != nil {
 			return err
 		}
 	}
 	preparedUntil := progress.Cursor
-	for progress.Reverse && progress.Cursor >= 0 || !progress.Reverse && progress.Cursor < len(plan.Changes) {
+	for progress.Reverse && progress.Cursor >= 0 || !progress.Reverse && progress.Cursor < firstCheck {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if !progress.Reverse && c != nil && progress.Cursor >= preparedUntil {
-			preparedUntil = min(progress.Cursor+remote.DownloadBatchFiles, len(plan.Changes))
+			preparedUntil = min(progress.Cursor+remote.DownloadBatchFiles, firstCheck)
 			if err := w.prepareFiles(ctx, c, plan, progress.Cursor, preparedUntil); err != nil {
 				return err
 			}
@@ -233,6 +248,26 @@ func (w *Workspace) resumeTransition(ctx context.Context, c *remote.Client, canc
 		} else {
 			progress.Cursor++
 		}
+		if err := w.writeJSON("progress.json", progress); err != nil {
+			return err
+		}
+	}
+	if !progress.Reverse && progress.Cursor < end {
+		// Verify all reused files before committing, including after a restart.
+		for _, check := range plan.Changes[firstCheck:] {
+			entry := check.After
+			err := w.checkParents(entry.Path)
+			if err == nil {
+				err = w.verifyFile(ctx, entry.Path, entry)
+			}
+			if err != nil {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				return fmt.Errorf("%w. Restore the matching file and run lode resume, or run lode cancel", err)
+			}
+		}
+		progress.Cursor = end
 		if err := w.writeJSON("progress.json", progress); err != nil {
 			return err
 		}
@@ -315,12 +350,11 @@ func (w *Workspace) verifyFile(ctx context.Context, name string, e model.Entry) 
 		event.Path = e.Path
 		activity.Report(ctx, event)
 	})
-	got, err := w.observeFile(fileCtx, name, info)
+	matches, err := w.matchesFile(fileCtx, name, info, e)
 	if err != nil {
 		return err
 	}
-	got.Path = e.Path
-	if got != e {
+	if !matches {
 		return fmt.Errorf("preserving changed file %q", name)
 	}
 	return nil
@@ -673,6 +707,9 @@ func (w *Workspace) cleanTransition(ctx context.Context, plan transition) error 
 		return err
 	}
 	for i, a := range plan.Changes {
+		if a.Before == a.After {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}

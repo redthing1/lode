@@ -46,7 +46,7 @@ To share the root, add `/.lode/` and the asset paths to `.gitignore`. Give Lode 
 lode clone --scope art --scope captures <project-url> .
 ```
 
-Clone reuses existing directories and checks for collisions before installing files. Use the same options with `attach` to start an empty project from local files.
+Scoped clone reuses existing directories and files that match the saved version. It checks for conflicts before installing files. Use the same options with `attach` to start an empty project from local files.
 
 In an existing workspace, `lode scope` lists the paths. `lode scope art captures` sets them if they cover the saved local files.
 
@@ -279,7 +279,7 @@ An administrator can reset your password; this also removes keys and recovery co
 
 ## Interrupted work
 
-Start with `lode resume`. If recovery reports an unexpected local path, move that path aside before retrying; it will not be overwritten.
+Start with `lode resume`. Follow the instructions in the error, or move an unexpected file aside and retry.
 
 | Situation | What to do |
 | --- | --- |

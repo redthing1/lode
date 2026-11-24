@@ -123,14 +123,19 @@ func TestScopedClonePreflightAndRecovery(t *testing.T) {
 	writeFile(t, owner.Directory(), "levels/b", "second")
 	save(t, f, owner, "initial assets")
 	options := ConnectOptions{Scope: model.Selection{{Path: "levels/a", Include: true}, {Path: "levels/b", Include: true}}}
-	for _, mode := range []string{"existing collision", "late collision", "resume", "cancel"} {
+	for _, mode := range []string{"existing collision", "symlink collision", "late collision", "resume", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			writeFile(t, dir, "levels/source", "keep")
 			cloneCtx := ctx
 			switch mode {
 			case "existing collision":
-				writeFile(t, dir, "levels/b", "second")
+				writeFile(t, dir, "levels/b", "differ")
+			case "symlink collision":
+				writeFile(t, dir, "copy", "second")
+				if err := os.Symlink("../copy", filepath.Join(dir, "levels/b")); err != nil {
+					t.Fatal(err)
+				}
 			case "late collision":
 				cloneCtx = progress.WithReporter(ctx, func(e progress.Event) {
 					if e.Phase == "Updating" && e.Path == "levels/b" {
@@ -145,7 +150,7 @@ func TestScopedClonePreflightAndRecovery(t *testing.T) {
 			} else if strings.Contains(mode, "collision") && !strings.Contains(err.Error(), "levels/b") {
 				t.Fatal(err)
 			}
-			if mode == "existing collision" {
+			if mode == "existing collision" || mode == "symlink collision" {
 				for _, name := range []string{".lode", "levels/a"} {
 					if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
 						t.Fatalf("preflight created %s: %v", name, err)
@@ -187,6 +192,146 @@ func TestScopedClonePreflightAndRecovery(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScopedCloneReusesMatchingFiles(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	owner := attach(t, f, t.TempDir())
+	writeFile(t, owner.Directory(), "assets/a", "already here")
+	writeFile(t, owner.Directory(), "assets/b", "second file")
+	saved := save(t, f, owner, "assets")
+	options := ConnectOptions{Scope: model.Selection{{Path: "assets", Include: true}}}
+	for _, mode := range []string{"all present", "partially present"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "assets/a", "already here")
+			if mode == "all present" {
+				writeFile(t, dir, "assets/b", "second file")
+			}
+			name := filepath.Join(dir, "assets/a")
+			original, err := os.Stat(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			transport := f.client.HTTP.Transport
+			counts := &batchTransport{RoundTripper: transport}
+			f.client.HTTP.Transport = counts
+			t.Cleanup(func() { f.client.HTTP.Transport = transport })
+			w, err := Clone(ctx, f.url, f.client, dir, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close()
+			if now, err := os.Stat(name); err != nil || !os.SameFile(original, now) {
+				t.Fatalf("matching file was replaced: %v", err)
+			}
+			if mode == "all present" && len(counts.requests) != 0 ||
+				mode == "partially present" && (len(counts.requests) != 1 || len(counts.requests[0]) != 1 || counts.requests[0][0].Path != "assets/b") ||
+				counts.singles != 0 {
+				t.Fatalf("unexpected downloads: batches=%v singles=%d", counts.requests, counts.singles)
+			}
+			if changes, err := w.Status(ctx); err != nil || len(changes) != 0 || w.State().Version != saved.ID {
+				t.Fatalf("clone did not establish a clean baseline: %v %v", changes, err)
+			}
+		})
+	}
+}
+
+func TestScopedCloneRechecksReusedFilesOnResume(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	owner := attach(t, f, t.TempDir())
+	writeFile(t, owner.Directory(), "assets/a", "original")
+	writeFile(t, owner.Directory(), "assets/b", "download")
+	saved := save(t, f, owner, "assets")
+	options := ConnectOptions{Scope: model.Selection{{Path: "assets", Include: true}}}
+	for _, mode := range []string{"resume", "cancel", "cancel with all files present"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "assets/a", "original")
+			allPresent := mode == "cancel with all files present"
+			if allPresent {
+				writeFile(t, dir, "assets/b", "download")
+			}
+			cloneCtx, interrupt := context.WithCancel(ctx)
+			defer interrupt()
+			cloneCtx = progress.WithReporter(cloneCtx, func(e progress.Event) {
+				if e.Phase == "Checking" && e.Path == "assets/a" {
+					if _, err := os.Stat(filepath.Join(dir, ".lode", "transition.json")); err == nil {
+						interrupt()
+					}
+				}
+			})
+			if _, err := Clone(cloneCtx, f.url, f.client, dir, options); !errors.Is(err, context.Canceled) {
+				t.Fatalf("clone should stop before committing: %v", err)
+			}
+			if readFile(t, dir, "assets/b") != "download" {
+				t.Fatal("clone stopped before installing the missing file")
+			}
+			writeFile(t, dir, "assets/a", "modified")
+			w, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close()
+			if err := w.Resume(ctx, f.token); err == nil || !strings.Contains(err.Error(), `changed file "assets/a"`) || w.State().Version != "" {
+				t.Fatalf("resume accepted the changed file: %v", err)
+			}
+			if mode == "resume" {
+				writeFile(t, dir, "assets/a", "original")
+				if err := w.Resume(ctx, f.token); err != nil || w.State().Version != saved.ID {
+					t.Fatalf("resume failed with the matching file restored: %v", err)
+				}
+				return
+			}
+			if err := w.Cancel(ctx, ""); err != nil {
+				t.Fatal(err)
+			}
+			if allPresent {
+				if readFile(t, dir, "assets/b") != "download" {
+					t.Fatal("cancel changed the second pre-existing file")
+				}
+			} else if _, err := os.Stat(filepath.Join(dir, "assets/b")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("cancel kept the installed file: %v", err)
+			}
+			if readFile(t, dir, "assets/a") != "modified" || w.State().Version != "" {
+				t.Fatal("cancel affected the pre-existing file or committed the clone")
+			}
+		})
+	}
+	t.Run("committed before baseline write", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "assets/a", "original")
+		const blocker = ".lode/state.json.next/keep"
+		cloneCtx := progress.WithReporter(ctx, func(e progress.Event) {
+			if e.Phase == "Finishing workspace" {
+				writeFile(t, dir, blocker, "block the baseline write")
+			}
+		})
+		if _, err := Clone(cloneCtx, f.url, f.client, dir, options); err == nil || !strings.Contains(err.Error(), "state.json.next") {
+			t.Fatalf("clone did not stop after commitment: %v", err)
+		}
+		if err := os.Remove(filepath.Join(dir, blocker)); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, dir, "assets/a", "modified")
+		w, err := Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer w.Close()
+		if w.State().Version != "" {
+			t.Fatal("baseline was written before recovery")
+		}
+		if err := w.Cancel(ctx, ""); err != nil || w.State().Version != saved.ID {
+			t.Fatalf("cancel should finish the committed clone: %v", err)
+		}
+		changes, err := w.Status(ctx)
+		if err != nil || len(changes) != 1 || changes[0].Path != "assets/a" || readFile(t, dir, "assets/a") != "modified" {
+			t.Fatalf("recovery did not preserve the later edit: %v %v", changes, err)
+		}
+	})
 }
 
 func TestLegacyGitEntriesStayOnServer(t *testing.T) {
